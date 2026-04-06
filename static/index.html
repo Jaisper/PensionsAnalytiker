@@ -427,6 +427,7 @@
     const status = document.getElementById('upload-status');
     status.textContent = 'Analyserer rapport...';
     status.className = 'busy';
+    setInputLocked(true);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -454,6 +455,8 @@
       status.textContent = '✗ ' + err.message;
       status.className = 'err';
       console.error('Upload fejl:', err);
+    } finally {
+      setInputLocked(false);
     }
   });
 
@@ -982,6 +985,11 @@ Upload derefter PDF'en her øverst til højre.`,
   function setInputLocked(locked) {
     document.getElementById('send-btn').disabled = locked;
     document.getElementById('message-input').disabled = locked;
+    const uploadLabel = document.getElementById('upload-label');
+    const fileInput   = document.getElementById('file-input');
+    uploadLabel.style.opacity      = locked ? '0.4' : '';
+    uploadLabel.style.pointerEvents = locked ? 'none' : '';
+    fileInput.disabled = locked;
     document.querySelectorAll('.quick-btn').forEach(b => {
       b.disabled = locked;
       b.style.opacity = locked ? '0.4' : '';

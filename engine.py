@@ -467,11 +467,11 @@ def format_engine_til_llm(result: dict) -> str:
         L += [f"- {a}" for a in advarsler]
         L.append("")
 
-    # Tabel 1: FV og månedlig udbetaling
+    # Tabel 1: FV og udbetaling
     L += [
         "### TABEL 1 — FREMTIDSVÆRDI OG UDBETALING",
-        "| Ordning | Skat | Saldo nu | FV ved pension | Brutto/mdr | Netto/mdr | Varighed |",
-        "|---|---|---|---|---|---|---|",
+        "| Ordning | Skat | Saldo nu | FV ved pension | Brutto/mdr | Brutto/år | Netto/mdr | Varighed |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for pr in loebende:
         first = next(
@@ -483,7 +483,8 @@ def format_engine_til_llm(result: dict) -> str:
         L.append(
             f"| {pr['selskab']} – {pr['produkttype']} | {pr['skat_type']}"
             f" | {pr['pv']:,.0f} kr. | {pr['fv']:,.0f} kr."
-            f" | {pr['mdr_brutto']:,.0f} kr/mdr | {n_mdr:,.0f} kr/mdr | {varighed} |".replace(",", ".")
+            f" | {pr['mdr_brutto']:,.0f} kr/mdr | {pr['mdr_brutto']*12:,.0f} kr/år"
+            f" | {n_mdr:,.0f} kr/mdr | {varighed} |".replace(",", ".")
         )
     for pr in engang:
         netto_eng = pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
@@ -579,8 +580,9 @@ def format_engine_til_llm(result: dict) -> str:
 
     L += [
         "",
-        "INSTRUKTION: Rekonstruér ALLE rækker med samme kolonnestruktur. "
-        "Produktkolonner = brutto kr/år. Brutto/år = sum af produktkolonner. "
+        "INSTRUKTION: Rekonstruér ALLE rækker med præcis denne kolonnestruktur. "
+        "PRODUKTKOLONNER = BRUTTO KR/ÅR (brug 'Brutto/år'-kolonnen fra Tabel 1, IKKE 'Brutto/mdr'). "
+        "Brutto/år-sumkolonnen = sum af alle produktkolonner. "
         "Netto/mdr = samlet månedlig netto efter skat. "
         "Note: 'Topskat' hvis PI > 588.900 kr; 'Modregning -X kr' hvis pensionstillæg reduceres.",
     ]

@@ -863,11 +863,20 @@ Upload derefter PDF'en her øverst til højre.`,
     }
 
     try {
-      const res = await fetch('/api/chat', {
+      let res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, message: text }),
       });
+      // Server genstartede (Render free-tier) — opret ny session og prøv igen
+      if (res.status === 404) {
+        await init();
+        res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, message: text }),
+        });
+      }
 
       typingEl.remove();
       const assistantBubble = addMessage('assistant', '');
@@ -919,11 +928,20 @@ Upload derefter PDF'en her øverst til højre.`,
     setInputLocked(true);
 
     try {
-      const res = await fetch('/api/chat', {
+      let res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, message: text }),
       });
+      // Server genstartede (Render free-tier) — opret ny session og prøv igen
+      if (res.status === 404) {
+        await init();
+        res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, message: text }),
+        });
+      }
 
       typingEl.remove();
       const assistantBubble = addMessage('assistant', '');

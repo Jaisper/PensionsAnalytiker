@@ -149,7 +149,7 @@ def _filter_relevant_pages(pages: list[str]) -> str:
 
 def _extract_with_llm(text: str) -> dict:
     import anthropic
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.Anthropic()
 
     msg = client.messages.create(
         model="claude-sonnet-4-6",
@@ -385,7 +385,10 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
     # ── Estimér FV og PMT-fordeling for multi-produkt aftaler ──
     _estimer_pmt_fordeling(pensionsprodukter, ordninger, alder, tidligste)
 
-    samlet_aarlig_indbetaling = sum(o["aarlig_indbetaling"] for o in ordninger)
+    samlet_aarlig_indbetaling = sum(
+        o["aarlig_indbetaling"] for o in ordninger
+        if "ATP" not in (o.get("selskab") or "")
+    )
 
     return {
         "person":                     person,

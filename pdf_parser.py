@@ -133,40 +133,32 @@ def parse_pensionsinfo_pdf(pdf_path: str) -> dict:
     return _to_legacy_format(raw, full_text)
 
 
-def _extract_page_text(page) -> str:
-    """Forsøger layout-bevidst udtræk (pdfminer LAParams) — bedre til fler-kolonne sider."""
-    try:
-        text = page.extract_text(layout=True)
-        if text and text.strip():
-            return text
-    except Exception:
-        pass
-    return page.extract_text() or ""
+_MAX_TEXT_CHARS = 400_000  # ~100k tokens — godt inden for Sonnet 4.6's 200k kontekst
 
 
 def _extract_pages(pdf_path: str) -> list[str]:
-    pages = []
+    """Udtrækker tekst fra alle sider. Forsøger layout=True (bedre til fler-kolonner);
+    falder tilbage til standard-udtræk hvis den samlede tekst bliver for stor."""
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            pages.append(_extract_page_text(page))
-    return pages
+        layout_pages = [
+            (page.extract_text(layout=True) or page.extract_text() or "")
+            for page in pdf.pages
+        ]
 
+    total = sum(len(p) for p in layout_pages)
+    if total <= _MAX_TEXT_CHARS:
+        return layout_pages
 
-def _filter_relevant_pages(pages: list[str]) -> str:
-    """Returnerer alle sider — PensionsInfo-rapporter er typisk 15-25 sider og
-    passer inden for token-grænsen. Filtrering var årsag til at aftaler på
-    sider uden sektionsheader blev misset."""
-    return "\n\n".join(
-        f"=== SIDE {i+1} ===\n{page}"
-        for i, page in enumerate(pages)
-        if page.strip()
-    )
+    # layout=True er for ordrig — genudtræk med standard udtræk
+    with pdfplumber.open(pdf_path) as pdf:
+        return [page.extract_text() or "" for page in pdf.pages]
 
 
 def _extract_with_llm(text: str) -> dict:
     import anthropic
     client = anthropic.Anthropic()
 
+    print(f"[pdf_parser] LLM input: {len(text)} tegn", flush=True)
     msg = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=8000,
@@ -175,7 +167,10 @@ def _extract_with_llm(text: str) -> dict:
             "content": f"{EXTRACTION_PROMPT}\n\nREPORT TEXT:\n{text}",
         }],
     )
+    if not msg.content:
+        raise ValueError(f"LLM returnerede tomt svar (stop_reason={msg.stop_reason})")
     raw = msg.content[0].text.strip()
+    print(f"[pdf_parser] LLM output: {len(raw)} tegn, stop={msg.stop_reason}", flush=True)
     raw = re.sub(r"^```(?:json)?\n?", "", raw)
     raw = re.sub(r"\n?```$", "", raw)
     return json.loads(raw)

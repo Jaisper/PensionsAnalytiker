@@ -133,25 +133,12 @@ def parse_pensionsinfo_pdf(pdf_path: str) -> dict:
     return _to_legacy_format(raw, full_text)
 
 
-_MAX_TEXT_CHARS = 400_000  # ~100k tokens — godt inden for Sonnet 4.6's 200k kontekst
-
-
 def _extract_pages(pdf_path: str) -> list[str]:
-    """Udtrækker tekst fra alle sider. Forsøger layout=True (bedre til fler-kolonner);
-    falder tilbage til standard-udtræk hvis den samlede tekst bliver for stor."""
+    pages = []
     with pdfplumber.open(pdf_path) as pdf:
-        layout_pages = [
-            (page.extract_text(layout=True) or page.extract_text() or "")
-            for page in pdf.pages
-        ]
-
-    total = sum(len(p) for p in layout_pages)
-    if total <= _MAX_TEXT_CHARS:
-        return layout_pages
-
-    # layout=True er for ordrig — genudtræk med standard udtræk
-    with pdfplumber.open(pdf_path) as pdf:
-        return [page.extract_text() or "" for page in pdf.pages]
+        for page in pdf.pages:
+            pages.append(page.extract_text() or "")
+    return pages
 
 
 def _extract_with_llm(text: str) -> dict:

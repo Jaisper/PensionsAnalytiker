@@ -143,11 +143,18 @@ def _filter_relevant_pages(pages: list[str]) -> str:
             if earliest_age is None or age < earliest_age:
                 earliest_age = age
 
-    kept = []
+    keep_idx = set()
     for i, page in enumerate(pages):
         if any(kw in page for kw in RELEVANT_KEYWORDS):
-            kept.append(f"=== SIDE {i+1} ===\n{page}")
+            keep_idx.add(i)
+            keep_idx.add(i + 1)   # continuation-side (afsnit kan spænde flere sider)
         elif earliest_age and f"som {earliest_age}-årig" in page:
+            keep_idx.add(i)
+            keep_idx.add(i + 1)
+
+    kept = []
+    for i, page in enumerate(pages):
+        if i in keep_idx and page.strip():
             kept.append(f"=== SIDE {i+1} ===\n{page}")
     return "\n\n".join(kept)
 

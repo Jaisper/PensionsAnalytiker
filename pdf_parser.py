@@ -32,7 +32,7 @@ Return exactly this structure:
     {
       "provider": "company name",
       "number": "agreement number",
-      "type": "product type in Danish (e.g. Ratepension, Kapitalpension, Livsvarig pension, Aldersopsparing)",
+      "type": "product type in Danish (e.g. Ratepension, Kapitalpension, Livsvarig pension, Markedsrente)",
       "balance": null,
       "annual_contribution": null,
       "insurance_only": false
@@ -55,12 +55,6 @@ Return exactly this structure:
 }
 
 FIELD GUIDANCE:
-
-agreements[]
-  CRITICAL: One entry per PRODUCT TYPE, not per agreement number.
-  If a provider has Kapitalpension AND Ratepension, create TWO entries (same number, different type).
-  If a provider has Aldersopsparing + Ratepension + Livsvarig, create THREE entries.
-  Never merge different product types into one entry.
 
 agreements[].balance
   Look in "Nuværende pensionsopsparinger" section — this lists each agreement with its INDIVIDUAL balance.
@@ -99,13 +93,9 @@ earliest_retirement_age
 
 payout_products
   From the EARLIEST retirement age scenario ONLY.
-  CRITICAL: Create ONE entry per PRODUCT TYPE per provider — never merge different product types.
-  Kapitalpension and Ratepension under the same provider MUST be two separate entries even if they
-  share an agreement number. Aldersopsparing, Ratepension, Livsvarig pension, Kapitalpension are
-  always separate entries.
   Each product line with amounts per time period (e.g. "60-67 år", "Fra 67 år", "Fra 68 år", etc.).
   amounts keys = the time band labels exactly as shown.
-  amounts values = ANNUAL amounts (not monthly). Never sum amounts across product types.
+  amounts values = ANNUAL amounts (not monthly).
   Include ATP and Folkepension if shown.
 
   current_balance: the current savings balance for THIS specific product line, if shown separately
@@ -125,23 +115,10 @@ def parse_pensionsinfo_pdf(pdf_path: str) -> dict:
 
 
 def _extract_pages(pdf_path: str) -> list[str]:
-    # Garbling-mønster: mange isolerede enkelt-bogstaver/tal i træk
-    # (opstår når PDF gemmer kolonner i intern kolonne-rækkefølge)
-    _GARBLE = re.compile(r"(\b\S\b[ \t]){5,}")
-
     pages = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            text = page.extract_text() or ""
-            # Kun layout=True på sider der ser garblede ud — sparer RAM
-            if _GARBLE.search(text):
-                try:
-                    layout_text = page.extract_text(layout=True) or ""
-                    if layout_text.strip():
-                        text = layout_text
-                except Exception:
-                    pass
-            pages.append(text)
+            pages.append(page.extract_text() or "")
     return pages
 
 

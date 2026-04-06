@@ -205,6 +205,22 @@
       0%, 60%, 100% { transform: translateY(0); }
       30% { transform: translateY(-6px); }
     }
+    .analysing-indicator {
+      padding: 10px 16px;
+      background: white;
+      border-radius: 12px;
+      border-bottom-left-radius: 3px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      width: fit-content;
+      font-size: 0.85rem;
+      color: #3a5a78;
+      font-weight: 500;
+      animation: pulse-text 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse-text {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
 
     /* ── Interview formular ── */
     .iform-wrap h4 { font-size: 0.9rem; font-weight: 600; color: #1a3a5c; margin-bottom: 12px; }
@@ -907,7 +923,8 @@ PensionsInfo samler alle dine pensionsaftaler ét sted — uanset hvilke selskab
     document.getElementById('welcome').style.display = 'none';
 
     addMessage('user', text);
-    const typingEl = addTyping();
+    const isAnalysis = text.startsWith('Mine svar:');
+    const typingEl = isAnalysis ? addAnalysing() : addTyping();
 
     isStreaming = true;
     document.getElementById('send-btn').disabled = true;
@@ -975,6 +992,16 @@ PensionsInfo samler alle dine pensionsaftaler ét sted — uanset hvilke selskab
     const el = document.createElement('div');
     el.className = 'message assistant';
     el.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+    container.appendChild(el);
+    scrollToBottom();
+    return el;
+  }
+
+  function addAnalysing() {
+    const container = document.getElementById('chat-container');
+    const el = document.createElement('div');
+    el.className = 'message assistant';
+    el.innerHTML = '<div class="analysing-indicator">Analyse igang...</div>';
     container.appendChild(el);
     scrollToBottom();
     return el;

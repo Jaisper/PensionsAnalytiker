@@ -63,11 +63,10 @@ agreements[]
   Never merge different product types into one entry.
 
 agreements[].balance
-  Look in "Nuværende pensionsopsparinger" for a line that names BOTH the provider AND the specific
-  product type (e.g. "Nordea Kapitalpension 836.000 kr."). Use that amount.
-  If the section only shows a provider-level total (e.g. "Nordea 2.045.000 kr.") without per-product
-  breakdown, set null on ALL products for that provider — never split an ambiguous total.
-  Set null if no individual per-product amount is found.
+  Look in "Nuværende pensionsopsparinger" for individual balances per product type.
+  Also check "Dine aftaler" for "Saldo" or "Opsparing pr." per product.
+  If only a combined total is shown for a provider (not split by product), set null on each product entry.
+  Set null if no individual balance found for this specific product type.
 
 agreements[].annual_contribution
   Look under each agreement block in "Dine aftaler" for "Indbetaling i alt", "Bidrag i alt", or "Præmie i alt".
@@ -108,7 +107,11 @@ payout_products
   amounts values = ANNUAL amounts (not monthly). Never sum amounts across product types.
   Include ATP and Folkepension if shown.
 
-  current_balance: null (do not attempt to extract — handled separately)
+  current_balance: the current savings balance for THIS specific product line only.
+  Look in "Nuværende pensionsopsparinger" for individual balances per product.
+  If a provider shows one combined balance for multiple products, set null on each individual product
+  (do NOT assign the combined total to one product).
+  Set null if no individual balance found for this specific product.
 """
 
 
@@ -130,6 +133,9 @@ def _extract_pages(pdf_path: str) -> list[str]:
 
 
 def _filter_relevant_pages(pages: list[str]) -> str:
+    """Returnerer alle sider — PensionsInfo-rapporter er typisk 15-25 sider og
+    passer inden for token-grænsen. Filtrering var årsag til at aftaler på
+    sider uden sektionsheader blev misset."""
     return "\n\n".join(
         f"=== SIDE {i+1} ===\n{page}"
         for i, page in enumerate(pages)
@@ -141,7 +147,6 @@ def _extract_with_llm(text: str) -> dict:
     import anthropic
     client = anthropic.Anthropic()
 
-    print(f"[pdf_parser] LLM input: {len(text)} tegn", flush=True)
     msg = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=8000,
@@ -150,10 +155,7 @@ def _extract_with_llm(text: str) -> dict:
             "content": f"{EXTRACTION_PROMPT}\n\nREPORT TEXT:\n{text}",
         }],
     )
-    if not msg.content:
-        raise ValueError(f"LLM returnerede tomt svar (stop_reason={msg.stop_reason})")
     raw = msg.content[0].text.strip()
-    print(f"[pdf_parser] LLM output: {len(raw)} tegn, stop={msg.stop_reason}", flush=True)
     raw = re.sub(r"^```(?:json)?\n?", "", raw)
     raw = re.sub(r"\n?```$", "", raw)
     return json.loads(raw)

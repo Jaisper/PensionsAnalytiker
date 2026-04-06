@@ -522,6 +522,11 @@ async def chat(req: ChatMessage):
 
         except anthropic.AuthenticationError:
             yield f"data: {json.dumps({'error': 'API-nøgle mangler eller er ugyldig. Sæt ANTHROPIC_API_KEY som miljøvariabel.'})}\n\n"
+        except anthropic.APIStatusError as e:
+            if e.status_code == 529 or "overloaded" in str(e).lower():
+                yield f"data: {json.dumps({'error': 'overloaded'})}\n\n"
+            else:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 

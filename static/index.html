@@ -965,7 +965,9 @@ Upload derefter PDF'en her øverst til højre.`,
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const json = JSON.parse(line.slice(6));
-          if (json.text) {
+          if (json.error) {
+            showStreamError(assistantBubble, json.error, text);
+          } else if (json.text) {
             const bubble = assistantBubble.querySelector('.bubble');
             bubble.dataset.raw = (bubble.dataset.raw || '') + json.text;
             bubble.innerHTML = renderMarkdown(bubble.dataset.raw);
@@ -1034,7 +1036,7 @@ Upload derefter PDF'en her øverst til højre.`,
           if (!line.startsWith('data: ')) continue;
           const json = JSON.parse(line.slice(6));
           if (json.error) {
-            assistantBubble.querySelector('.bubble').innerHTML = `<em style="color:#c44">Fejl: ${json.error}</em>`;
+            showStreamError(assistantBubble, json.error, text);
           } else if (json.text) {
             const bubble = assistantBubble.querySelector('.bubble');
             bubble.dataset.raw = (bubble.dataset.raw || '') + json.text;
@@ -1049,6 +1051,21 @@ Upload derefter PDF'en her øverst til højre.`,
       isStreaming = false;
       setInputLocked(false);
     }
+  }
+
+  function showStreamError(bubbleEl, errorCode, retryText) {
+    const isOverloaded = errorCode === 'overloaded';
+    const msg = isOverloaded
+      ? 'AI-tjenesten er overbelastet lige nu — prøv igen om et øjeblik.'
+      : `Fejl: ${errorCode}`;
+    const retryBtn = isOverloaded
+      ? `<button onclick="this.closest('.message').remove(); document.getElementById('message-input').value=${JSON.stringify(retryText)}; sendMessage();"
+           style="margin-top:8px;padding:5px 14px;background:#2a6fa8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem">
+           Prøv igen
+         </button>`
+      : '';
+    bubbleEl.querySelector('.bubble').innerHTML =
+      `<em style="color:#c97">${msg}</em>${retryBtn}`;
   }
 
   function setInputLocked(locked) {

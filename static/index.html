@@ -374,7 +374,7 @@
 <div id="quick-questions">
   <button class="quick-btn" onclick="askQuick('Giv mig en kort oversigt over det danske pensionssystem — folkepension, ATP og private ordninger.')">Det danske pensionssystem</button>
   <button class="quick-btn" onclick="askQuick('Hvad er forskellen på ratepension, livsvarig pension, aldersopsparing og kapitalpension?')">Danske pensionsprodukter</button>
-  <button class="quick-btn" onclick="askQuick('Hvordan henter jeg min rapport på pensionsinfo.dk, og hvad viser den?')">Hent PensionsInfo-rapport</button>
+  <button class="quick-btn" onclick="showStaticAnswer('pensionsinfo')">Hent PensionsInfo-rapport</button>
 </div>
 
 <div id="chat-container">
@@ -466,6 +466,33 @@
 
   function formatKr(n) {
     return n.toLocaleString('da-DK') + ' kr.';
+  }
+
+  const STATIC_ANSWERS = {
+    pensionsinfo: `**Sådan henter du din PensionsInfo-rapport**
+
+PensionsInfo samler alle dine pensionsaftaler ét sted — uanset hvilke selskaber du er tilknyttet.
+
+**Trin-for-trin:**
+
+1. Gå til **[pensionsinfo.dk](https://www.pensionsinfo.dk)**
+2. Klik **"Log ind med MitID"** og godkend med dit MitID
+3. Du ser nu en oversigt over alle dine pensionsordninger
+4. Klik **"Hent rapport"** øverst til højre
+5. Vælg den ønskede pensionsalder (eller behold standardvalget)
+6. Klik **"Hent rapport"** igen — filen downloades som PDF
+
+**Upload derefter PDF'en her** øverst til højre, så laver jeg en komplet analyse.
+
+*Har du problemer med login eller MitID: [pensionsinfo.dk/Contact](https://www.pensionsinfo.dk/Contact)*`,
+  };
+
+  function showStaticAnswer(key) {
+    const text = STATIC_ANSWERS[key];
+    if (!text) return;
+    const el = addMessage('assistant', '');
+    el.querySelector('.bubble').innerHTML = renderMarkdown(text);
+    document.getElementById('chat-container').scrollTop = document.getElementById('chat-container').scrollHeight;
   }
 
   function updateQuickButtons(profil) {

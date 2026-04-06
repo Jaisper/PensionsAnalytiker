@@ -433,8 +433,21 @@
     formData.append('file', file);
 
     try {
-      const res = await fetch(`/api/upload/${sessionId}`, { method: 'POST', body: formData });
-      const data = await res.json();
+      let res = await fetch(`/api/upload/${sessionId}`, { method: 'POST', body: formData });
+      // Session tabt ved server-genstart — opret ny og prøv igen
+      if (res.status === 404) {
+        await init();
+        res = await fetch(`/api/upload/${sessionId}`, { method: 'POST', body: formData });
+      }
+
+      let data;
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const txt = await res.text();
+        throw new Error(`Server fejl (${res.status}): ${txt.slice(0, 200)}`);
+      }
 
       if (data.success) {
         status.textContent = `✓ ${data.navn || 'Rapport'} indlæst`;

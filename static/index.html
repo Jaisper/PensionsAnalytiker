@@ -306,6 +306,24 @@
     }
     #welcome .icon { font-size: 2.5rem; margin-bottom: 12px; }
     #welcome h2 { color: #3a5a78; margin-bottom: 8px; font-size: 1.1rem; }
+    .privacy-note {
+      font-size: 0.75rem;
+      color: #a0b0c0;
+      margin-top: 16px;
+      padding: 8px 12px;
+      border: 1px solid #dde8f0;
+      border-radius: 6px;
+      background: #f7fafc;
+      line-height: 1.5;
+    }
+    #privacy-footer {
+      text-align: center;
+      font-size: 0.72rem;
+      color: #b0bec5;
+      padding: 10px 16px;
+      border-top: 1px solid #e8edf2;
+      background: #f7fafc;
+    }
   </style>
 </head>
 <body>
@@ -367,6 +385,7 @@
     <div class="icon">&#x1F4CA;</div>
     <h2>Velkommen til PensionsAnalytiker</h2>
     <p>Upload din PensionsInfo-rapport (PDF) øverst til højre for at komme i gang, eller stil et generelt pensionsspørgsmål.</p>
+    <p class="privacy-note">&#x1F512; Din rapport behandles midlertidigt i hukommelsen og sendes til Anthropics API til analyse. Ingen data gemmes permanent på serveren. Brug ikke andres data uden samtykke.</p>
   </div>
 </div>
 
@@ -1011,5 +1030,9 @@
 
   init();
 </script>
+<div id="privacy-footer">
+  &#x1F512; Data behandles midlertidigt i hukommelsen og sendes til Anthropics API. Ingen data gemmes permanent.
+  &nbsp;|&nbsp; Dette er ikke reguleret finansiel rådgivning. Konsultér en certificeret pensionsrådgiver for konkrete beslutninger.
+</div>
 </body>
 </html>

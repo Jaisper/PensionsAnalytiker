@@ -851,7 +851,7 @@ Upload derefter PDF'en her øverst til højre.`,
     document.getElementById('welcome').style.display = 'none';
     const typingEl = addTyping();
     isStreaming = true;
-    document.getElementById('send-btn').disabled = true;
+    setInputLocked(true);
 
     // Injicer den viste tabel i session-historikken FØR chat-kaldet
     if (visttabel) {
@@ -896,7 +896,7 @@ Upload derefter PDF'en her øverst til højre.`,
       scrollToElement(assistantBubble);
     } finally {
       isStreaming = false;
-      document.getElementById('send-btn').disabled = false;
+      setInputLocked(false);
     }
   }
 
@@ -916,7 +916,7 @@ Upload derefter PDF'en her øverst til højre.`,
     const typingEl = isAnalysis ? addAnalysing() : addTyping();
 
     isStreaming = true;
-    document.getElementById('send-btn').disabled = true;
+    setInputLocked(true);
 
     try {
       const res = await fetch('/api/chat', {
@@ -957,8 +957,18 @@ Upload derefter PDF'en her øverst til højre.`,
       scrollToElement(assistantBubble);
     } finally {
       isStreaming = false;
-      document.getElementById('send-btn').disabled = false;
+      setInputLocked(false);
     }
+  }
+
+  function setInputLocked(locked) {
+    document.getElementById('send-btn').disabled = locked;
+    document.getElementById('message-input').disabled = locked;
+    document.querySelectorAll('.quick-btn').forEach(b => {
+      b.disabled = locked;
+      b.style.opacity = locked ? '0.4' : '';
+      b.style.pointerEvents = locked ? 'none' : '';
+    });
   }
 
   function askQuick(text) {

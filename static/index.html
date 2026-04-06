@@ -571,8 +571,11 @@ PensionsInfo samler alle dine pensionsaftaler ét sted — uanset hvilke selskab
     const formSummary = 'Spørgsmål 1–7 er vist i en formular. Afventer brugerens svar.';
     await inject('assistant', formSummary);
 
-    // Scroll til TOP
-    document.getElementById('chat-container').scrollTop = 0;
+    // Scroll til toppen af analysen (første besked)
+    const c = document.getElementById('chat-container');
+    const firstMsg = c.querySelector('.message');
+    if (firstMsg) scrollToElement(firstMsg);
+    else c.scrollTop = 0;
   }
 
   function buildInterviewForm(profil) {

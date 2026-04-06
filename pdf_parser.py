@@ -115,10 +115,23 @@ def parse_pensionsinfo_pdf(pdf_path: str) -> dict:
 
 
 def _extract_pages(pdf_path: str) -> list[str]:
+    # Garbling-mønster: mange isolerede enkelt-bogstaver/tal i træk
+    # (opstår når PDF gemmer kolonner i intern kolonne-rækkefølge)
+    _GARBLE = re.compile(r"(\b\S\b[ \t]){5,}")
+
     pages = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            pages.append(page.extract_text() or "")
+            text = page.extract_text() or ""
+            # Kun layout=True på sider der ser garblede ud — sparer RAM
+            if _GARBLE.search(text):
+                try:
+                    layout_text = page.extract_text(layout=True) or ""
+                    if layout_text.strip():
+                        text = layout_text
+                except Exception:
+                    pass
+            pages.append(text)
     return pages
 
 

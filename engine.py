@@ -517,9 +517,21 @@ def format_engine_til_llm(result: dict) -> str:
 
     header = "| Alder | År | " + " | ".join(col_labels) + " | Folkepension | Tillæg | ATP | /mdr | /år |"
     sep    = "|---|---|" + "|---|" * len(aktive_keys) + "---|---|---|---|---|"
-    L += ["### TABEL 2 — ÅR-FOR-ÅR NETTO (månedlig, alle rækker)", header, sep]
+    # Vis første 5 rækker + folkepensions-overgang + sidste 3 rækker (holder prompten kort)
+    fp_idx   = next((i for i, r in enumerate(tabel) if r["alder"] >= fp_alder), None)
+    vis_idx  = set(range(min(5, len(tabel))))
+    vis_idx |= set(range(max(0, len(tabel) - 3), len(tabel)))
+    if fp_idx is not None:
+        vis_idx |= {max(0, fp_idx - 1), fp_idx, min(fp_idx + 1, len(tabel) - 1)}
+    vis_idx = sorted(vis_idx)
 
-    for row in tabel:
+    L += [f"### TABEL 2 — ÅR-FOR-ÅR NETTO (uddrag; LLM: rekonstruér alle {len(tabel)} rækker fra Tabel 1)", header, sep]
+
+    prev = -1
+    for i in vis_idx:
+        if i > prev + 1:
+            L.append("| … | … | " + " | ".join(["…"] * len(aktive_keys)) + " | … | … | … | … | … |")
+        row  = tabel[i]
         cols = []
         for key in aktive_keys:
             d = row["produkter"].get(key, {})
@@ -533,12 +545,15 @@ def format_engine_til_llm(result: dict) -> str:
             f" | {row['total_netto_mdr']:,.0f}{mark}"
             f" | {row['total_netto_aar']:,.0f} |".replace(",", ".")
         )
+        prev = i
 
     L += [
         "",
         "\\* = bruttoudbetalingen overstiger topskattegrænsen; topskat er medregnet i netto-tallene.",
         "",
-        "INSTRUKTION: Præsenter tabellerne ovenfor direkte. "
+        "INSTRUKTION: Tabel 2 ovenfor er et uddrag. Rekonstruér den KOMPLETTE tabel "
+        f"({len(tabel)} rækker) ud fra Tabel 1's FV og udbetalingsperioder. "
+        "Brug samme beregningslogik: annuitet fra FV, skat per type, folkepension fra fp_alder. "
         "Advar proaktivt om modregning, topskat og lofter.",
     ]
     return "\n".join(L)

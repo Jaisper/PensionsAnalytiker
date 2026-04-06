@@ -177,8 +177,11 @@ Brug tallene fra "BEREGNET PENSIONSANALYSE" nedenfor:
 ## BRUGERENS BEREGNEDE PARAMETRE
 {parametre}
 
-## DANSK PENSIONSLOVGIVNING OG SATSER 2025
-{regler}
+## NØGLESATSER 2025
+- Ratepension loft: 63.100 kr/år | Aldersopsparing: 9.100 kr/år (58.900 kr under 5 år til pension)
+- AM-bidrag: 8% | Bundskat: 12,01% | Topskatgrænse: 588.900 kr PI | Topskat: 15%
+- Folkepension: 7.955 kr/mdr | ATP: ca. 1.825 kr/mdr | PAL-skat: 15,3%
+- Pensionstillæg max (enlig): 8.891 kr/mdr — modregnes 30,9% af S-indkomst over 98.400 kr/år
 
 ## BRUGERENS PENSIONSPROFIL
 {profil}
@@ -231,7 +234,6 @@ def get_system_prompt(session_id: str) -> str:
     engine_tekst = _kør_engine(session_id)
 
     return SYSTEM_PROMPT.format(
-        regler=json.dumps(PENSION_REGLER, ensure_ascii=False, indent=2),
         profil=profil_tekst,
         parametre=parametre_tekst,
         engine_analyse=engine_tekst,

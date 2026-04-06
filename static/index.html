@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PensionsAnalytiker</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f0f2f5;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #1a3a5c;
+      color: white;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    header h1 { font-size: 1.2rem; font-weight: 600; letter-spacing: 0.3px; }
+    header .subtitle { font-size: 0.75rem; opacity: 0.7; margin-top: 2px; }
+
+    #upload-area {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #upload-label {
+      cursor: pointer;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      transition: background 0.2s;
+    }
+    #upload-label:hover { background: rgba(255,255,255,0.25); }
+    #file-input { display: none; }
+    #upload-status { font-size: 0.8rem; opacity: 0.85; max-width: 220px; }
+    #upload-status.ok { color: #7fe07f; }
+    #upload-status.err { color: #ff9494; }
+    #upload-status.busy { color: #a8c8f0; animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 1; }
+    }
+
+    /* ── Profil panel ── */
+    #profil-panel {
+      display: none;
+      background: #e8f0f8;
+      border-bottom: 1px solid #c5d5e8;
+      padding: 10px 24px;
+      font-size: 0.82rem;
+      color: #1a3a5c;
+    }
+    #profil-panel.visible { display: flex; gap: 32px; flex-wrap: wrap; align-items: center; }
+    .profil-item { display: flex; flex-direction: column; gap: 2px; }
+    .profil-item .label { font-size: 0.72rem; color: #5578a0; text-transform: uppercase; letter-spacing: 0.5px; }
+    .profil-item .value { font-weight: 600; font-size: 0.9rem; }
+
+    /* ── Hurtige spørgsmål ── */
+    #quick-questions {
+      padding: 10px 24px;
+      background: #f8fafc;
+      border-bottom: 1px solid #e2e8f0;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .quick-btn {
+      background: white;
+      border: 1px solid #c8d8e8;
+      border-radius: 16px;
+      padding: 5px 12px;
+      font-size: 0.78rem;
+      color: #1a3a5c;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .quick-btn:hover { background: #1a3a5c; color: white; border-color: #1a3a5c; }
+
+    /* ── Chat ── */
+    #chat-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .message {
+      max-width: min(98%, 1400px);
+      line-height: 1.6;
+    }
+    .message.user { align-self: flex-end; max-width: 70%; }
+    .message.assistant { align-self: stretch; }
+
+    .bubble {
+      padding: 12px 16px;
+      border-radius: 12px;
+      font-size: 0.9rem;
+    }
+    .user .bubble {
+      background: #1a3a5c;
+      color: white;
+      border-bottom-right-radius: 3px;
+    }
+    .assistant .bubble {
+      background: white;
+      color: #1a2a3a;
+      border-bottom-left-radius: 3px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+
+    /* Markdown styling i assistant bubbles */
+    .assistant .bubble strong { font-weight: 700; color: #0f2a42; }
+    .assistant .bubble em { color: #5578a0; font-style: italic; font-size: 0.84rem; }
+    .assistant .bubble ul, .assistant .bubble ol { padding-left: 22px; margin: 8px 0; }
+    .assistant .bubble li { margin: 4px 0; line-height: 1.5; }
+    .assistant .bubble p { margin: 7px 0; }
+    .assistant .bubble p:first-child { margin-top: 0; }
+    .assistant .bubble p:last-child { margin-bottom: 0; }
+    .assistant .bubble h3 {
+      font-size: 0.92rem; font-weight: 700;
+      margin: 14px 0 5px; color: #1a3a5c;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #dde8f0;
+    }
+    .assistant .bubble h3:first-child { margin-top: 0; }
+    .assistant .bubble hr {
+      border: none; border-top: 1px solid #dde8f0; margin: 10px 0;
+    }
+
+    /* Tabeller */
+    .assistant .bubble table {
+      width: 100%; border-collapse: collapse;
+      font-size: 0.84rem; margin: 10px 0;
+      border-radius: 6px; overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+      table-layout: auto;
+    }
+    .assistant .bubble th {
+      background: #1a3a5c; color: white;
+      padding: 8px 12px; text-align: left;
+      font-weight: 600; font-size: 0.8rem;
+      letter-spacing: 0.3px;
+    }
+    .assistant .bubble th strong,
+    .assistant .bubble th em { color: white; }
+    .assistant .bubble td {
+      padding: 7px 12px; border-bottom: 1px solid #e8f0f8;
+      vertical-align: top; line-height: 1.4;
+    }
+    .assistant .bubble tr:last-child td { border-bottom: none; }
+    .assistant .bubble tr:nth-child(even) td { background: #f4f8fc; }
+    .assistant .bubble tr:hover td { background: #eaf2fa; }
+
+    /* Kode */
+    .assistant .bubble code {
+      background: #f0f4f8; border-radius: 4px;
+      padding: 1px 5px; font-size: 0.83rem;
+      font-family: 'Consolas', monospace; color: #c53030;
+    }
+
+    /* Highlight-bokse */
+    .assistant .bubble .callout {
+      background: #f0f7ff; border-left: 3px solid #1a3a5c;
+      border-radius: 0 6px 6px 0; padding: 8px 12px;
+      margin: 8px 0; font-size: 0.87rem;
+    }
+    .assistant .bubble .callout.warning {
+      background: #fffbf0; border-color: #c89000;
+    }
+
+    .typing-indicator {
+      display: flex;
+      gap: 4px;
+      padding: 10px 14px;
+      background: white;
+      border-radius: 12px;
+      border-bottom-left-radius: 3px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      width: fit-content;
+    }
+    .typing-indicator span {
+      width: 7px; height: 7px;
+      background: #9ab0c8;
+      border-radius: 50%;
+      animation: bounce 1.2s infinite;
+    }
+    .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%, 60%, 100% { transform: translateY(0); }
+      30% { transform: translateY(-6px); }
+    }
+
+    /* ── Interview formular ── */
+    .iform-wrap h4 { font-size: 0.9rem; font-weight: 600; color: #1a3a5c; margin-bottom: 12px; }
+    .iform-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+    .iform-table tr { border-bottom: 1px solid #edf2f7; }
+    .iform-table tr:last-child { border-bottom: none; }
+    .iform-table td { padding: 9px 6px; vertical-align: middle; line-height: 1.4; }
+    .iform-table td.ql { font-size: 0.87rem; color: #2a3a4a; font-weight: 500; padding-right: 20px; width: 55%; }
+    .iform-table td.qi { white-space: nowrap; }
+    .iform-table .qdesc { font-size: 0.76rem; color: #7a90a4; margin-top: 2px; font-weight: 400; }
+    .iform-table input[type="number"],
+    .iform-table input[type="text"] {
+      border: 1px solid #c8d8e8; border-radius: 6px;
+      padding: 5px 9px; font-size: 0.87rem; font-family: inherit;
+      color: #1a2a3a; background: #f8fbff;
+    }
+    .iform-table input[type="number"] { width: 90px; }
+    .iform-table input[type="text"] { width: 170px; }
+    .iform-table input:focus,
+    .iform-table select:focus { outline: none; border-color: #1a3a5c; background: white; }
+    .iform-table select {
+      border: 1px solid #c8d8e8; border-radius: 6px;
+      padding: 5px 9px; font-size: 0.87rem; font-family: inherit;
+      color: #1a2a3a; background: #f8fbff;
+    }
+    .iform-table .unit { font-size: 0.82rem; color: #5a7a90; margin-left: 5px; }
+    .iform-submit {
+      background: #1a3a5c; color: white; border: none;
+      border-radius: 8px; padding: 10px 26px;
+      font-size: 0.9rem; font-weight: 600; cursor: pointer;
+      font-family: inherit; transition: background 0.2s;
+    }
+    .iform-submit:hover { background: #2a5080; }
+
+    /* ── Input ── */
+    #input-area {
+      background: white;
+      border-top: 1px solid #e2e8f0;
+      padding: 14px 24px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+    #message-input {
+      flex: 1;
+      border: 1px solid #d0dce8;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.9rem;
+      resize: none;
+      outline: none;
+      font-family: inherit;
+      line-height: 1.5;
+      max-height: 120px;
+      transition: border-color 0.2s;
+    }
+    #message-input:focus { border-color: #1a3a5c; }
+    #message-input::placeholder { color: #aab8c8; }
+
+    #send-btn {
+      background: #1a3a5c;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      width: 42px;
+      height: 42px;
+      cursor: pointer;
+      font-size: 1.1rem;
+      transition: background 0.2s;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #send-btn:hover { background: #2a5080; }
+    #send-btn:disabled { background: #9ab0c8; cursor: not-allowed; }
+
+    #clear-btn {
+      background: none;
+      border: 1px solid #d0dce8;
+      border-radius: 10px;
+      padding: 0 12px;
+      height: 42px;
+      font-size: 0.78rem;
+      color: #7890a0;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+    #clear-btn:hover { border-color: #9ab0c8; color: #4a6a80; }
+
+    #welcome {
+      text-align: center;
+      color: #8aa0b8;
+      font-size: 0.9rem;
+      margin: auto;
+      padding: 32px;
+      max-width: 480px;
+    }
+    #welcome .icon { font-size: 2.5rem; margin-bottom: 12px; }
+    #welcome h2 { color: #3a5a78; margin-bottom: 8px; font-size: 1.1rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>PensionsAnalytiker</h1>
+    <div class="subtitle">Baseret på din PensionsInfo-rapport</div>
+  </div>
+  <div id="upload-area">
+    <label id="upload-label" for="file-input">&#x2B06; Upload rapport</label>
+    <input type="file" id="file-input" accept=".pdf">
+    <span id="upload-status">Ingen rapport uploadet</span>
+  </div>
+</header>
+
+<div id="profil-panel">
+  <div class="profil-item">
+    <span class="label">Navn</span>
+    <span class="value" id="profil-navn">—</span>
+  </div>
+  <div class="profil-item">
+    <span class="label">Alder</span>
+    <span class="value" id="profil-alder">—</span>
+  </div>
+  <div class="profil-item">
+    <span class="label">Total opsparing</span>
+    <span class="value" id="profil-opsparing">—</span>
+  </div>
+  <div class="profil-item">
+    <span class="label">Årlig indbetaling</span>
+    <span class="value" id="profil-indbetaling">—</span>
+  </div>
+  <div class="profil-item">
+    <span class="label">Dækning ved død</span>
+    <span class="value" id="profil-liv">—</span>
+  </div>
+  <div class="profil-item">
+    <span class="label">Tabt arbejdsevne</span>
+    <span class="value" id="profil-invalide">—</span>
+  </div>
+  <div class="profil-item">
+    <span class="label">Tidligst pension</span>
+    <span class="value" id="profil-pensionsalder">—</span>
+  </div>
+</div>
+
+<div id="quick-questions">
+  <button class="quick-btn" onclick="askQuick('Lav en samlet analyse af min pensionssituation')">Samlet analyse</button>
+  <button class="quick-btn" onclick="askQuick('Jeg vil gerne gå på pension om 5 år. Hvad mangler jeg?')">Pension om 5 år</button>
+  <button class="quick-btn" onclick="askQuick('Er mine forsikringsdækninger tilstrækkelige?')">Forsikringer</button>
+  <button class="quick-btn" onclick="askQuick('Kan jeg optimere mine pensionsindbetalinger skattemæssigt?')">Skatteoptimering</button>
+  <button class="quick-btn" onclick="askQuick('Hvad er min forventede månedlige pension ved 67 år efter skat?')">Nettopension ved 67</button>
+  <button class="quick-btn" onclick="askQuick('Hvad sker der med min pension hvis jeg dør?')">Ved dødsfald</button>
+</div>
+
+<div id="chat-container">
+  <div id="welcome">
+    <div class="icon">&#x1F4CA;</div>
+    <h2>Velkommen til PensionsAnalytiker</h2>
+    <p>Upload din PensionsInfo-rapport (PDF) øverst til højre for at komme i gang, eller stil et generelt pensionsspørgsmål.</p>
+  </div>
+</div>
+
+<div id="input-area">
+  <textarea id="message-input" rows="1" placeholder="Stil et spørgsmål om din pension..."></textarea>
+  <button id="clear-btn" onclick="clearHistory()" title="Ryd samtale">Ryd</button>
+  <button id="send-btn" onclick="sendMessage()" title="Send (Enter)">&#x27A4;</button>
+</div>
+
+<script>
+  let sessionId = null;
+  let isStreaming = false;
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  async function init() {
+    const res = await fetch('/api/session', { method: 'POST' });
+    const data = await res.json();
+    sessionId = data.session_id;
+  }
+
+  // ── Upload ────────────────────────────────────────────────────────────────
+  document.getElementById('file-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const status = document.getElementById('upload-status');
+    status.textContent = 'Analyserer rapport...';
+    status.className = 'busy';
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`/api/upload/${sessionId}`, { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.success) {
+        status.textContent = `✓ ${data.navn || 'Rapport'} indlæst`;
+        status.className = 'ok';
+        updateProfilPanel(data.profil);
+        document.getElementById('welcome').style.display = 'none';
+
+        // Start interview automatisk
+        if (data.start_interview) {
+          await startInterview(data.navn, data.trin0, data.profil);
+        }
+      } else {
+        status.textContent = '✗ ' + (data.detail || data.error || 'Fejl ved indlæsning');
+        status.className = 'err';
+      }
+    } catch (err) {
+      status.textContent = '✗ ' + err.message;
+      status.className = 'err';
+      console.error('Upload fejl:', err);
+    }
+  });
+
+  function updateProfilPanel(profil) {
+    const panel = document.getElementById('profil-panel');
+    panel.classList.add('visible');
+
+    document.getElementById('profil-navn').textContent = profil?.person?.navn || '—';
+    const alder = profil?.person?.alder;
+    document.getElementById('profil-alder').textContent = alder ? alder + ' år' : '—';
+
+    const opsparing = profil?.opsparing_total || {};
+    const total = Object.values(opsparing).reduce((a, b) => a + b, 0);
+    document.getElementById('profil-opsparing').textContent = total ? formatKr(total) : '—';
+
+    const ordninger = profil?.ordninger || [];
+    const indbetaling = ordninger.reduce((s, o) => s + (o.aarlig_indbetaling || 0), 0);
+    document.getElementById('profil-indbetaling').textContent = indbetaling ? formatKr(indbetaling) + '/år' : '—';
+
+    const f = profil?.forsikringer || {};
+    document.getElementById('profil-liv').textContent = f.liv_ved_doed ? formatKr(f.liv_ved_doed) : '—';
+    document.getElementById('profil-invalide').textContent = f.tabt_arbejdsevne_aarlig ? formatKr(f.tabt_arbejdsevne_aarlig) + '/år' : '—';
+    const tidligst = profil?.tidligste_pensionsalder;
+    document.getElementById('profil-pensionsalder').textContent = tidligst ? tidligst + ' år' : '—';
+  }
+
+  function formatKr(n) {
+    return n.toLocaleString('da-DK') + ' kr.';
+  }
+
+  // ── Interview flow ────────────────────────────────────────────────────────
+  let _currentProfil = null;
+
+  async function startInterview(navn, trin0, profil) {
+    _currentProfil = profil;
+
+    async function inject(role, content) {
+      await fetch(`/api/session/${sessionId}/inject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, content }),
+      });
+    }
+
+    // 1. Vis Trin 0 (oversigt)
+    if (trin0) {
+      const el = addMessage('assistant', '');
+      el.querySelector('.bubble').innerHTML = renderMarkdown(trin0);
+      await inject('assistant', trin0);
+    }
+
+    // 2. Vis spørgeskema-formular (Q1–Q7)
+    const formEl = buildInterviewForm(profil);
+    document.getElementById('chat-container').appendChild(formEl);
+    const formSummary = 'Spørgsmål 1–7 er vist i en formular. Afventer brugerens svar.';
+    await inject('assistant', formSummary);
+
+    // Scroll til TOP
+    document.getElementById('chat-container').scrollTop = 0;
+  }
+
+  function buildInterviewForm(profil) {
+    const tidligst  = profil?.tidligste_pensionsalder ?? 65;
+    const samletPmt = profil?.samlet_aarlig_indbetaling ?? '';
+
+    // Detekter kapitalpension
+    const hasKapital = (profil?.ordninger || []).some(o =>
+      (o.produkttype || '').toLowerCase().includes('kapitalpension'));
+
+    // Detekter multi-produkt aftale (samme aftalenr, flere produkter)
+    const nrCount = {};
+    (profil?.pensionsprodukter || []).forEach(p => {
+      const nr = p.aftalenr || '';
+      if (nr) nrCount[nr] = (nrCount[nr] || 0) + 1;
+    });
+    const multiNrs = Object.keys(nrCount).filter(nr => nrCount[nr] > 1);
+    const multiProds = multiNrs.flatMap(nr =>
+      (profil?.pensionsprodukter || []).filter(p => p.aftalenr === nr));
+
+    // Find selskabsnavn for multi-produkt
+    const multiSelskab = multiProds.length
+      ? (profil?.ordninger || []).find(o => o.aftalenr === multiNrs[0])?.selskab || 'Firmapension'
+      : '';
+
+    // Byg rækker
+    let rows = `
+      <tr>
+        <td class="ql"><strong>1.</strong> Netto indbetaling til pension
+          <div class="qdesc">Det beløb du/din arbejdsgiver samlet indbetaler om året</div>
+        </td>
+        <td class="qi">
+          <input type="number" id="iq1" value="${samletPmt}" min="0" step="1000">
+          <span class="unit">kr/år</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="ql"><strong>2.</strong> Forventet afkast efter PAL-skat
+          <div class="qdesc">Standard 4% — skriv andet hvis du vil bruge en anden sats</div>
+        </td>
+        <td class="qi">
+          <input type="number" id="iq2" value="4" min="0" max="15" step="0.1">
+          <span class="unit">%</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="ql"><strong>3.</strong> Pensionsalder
+          <div class="qdesc">Tidligst muligt: ${tidligst} år</div>
+        </td>
+        <td class="qi">
+          <input type="number" id="iq3" value="${tidligst}" min="55" max="75">
+          <span class="unit">år</span>
+        </td>
+      </tr>
+      <tr>
+        <td class="ql"><strong>4.</strong> Ønsket udbetalingsperiode
+          <div class="qdesc">Standard 30 år — gælder for ratepension og livsvarig</div>
+        </td>
+        <td class="qi">
+          <input type="number" id="iq4" value="30" min="5" max="40">
+          <span class="unit">år</span>
+        </td>
+      </tr>`;
+
+    if (hasKapital) {
+      rows += `
+      <tr>
+        <td class="ql"><strong>5.</strong> Kapitalpension — afgift allerede betalt?
+          <div class="qdesc">Konverteret i 2013 til 37,3% reduceret sats → nu afgiftsfri</div>
+        </td>
+        <td class="qi">
+          <select id="iq5">
+            <option value="nej">Nej — 40% afgift ved udbetaling</option>
+            <option value="ja">Ja — afgiftsfri (konverteret 2013)</option>
+            <option value="ukendt">Ved ikke</option>
+          </select>
+        </td>
+      </tr>`;
+    }
+
+    if (multiProds.length > 1) {
+      // Find forventede totaler for denne aftale
+      const multiOrdning = (profil?.ordninger || []).find(o => o.aftalenr === multiNrs[0]);
+      const expectedPmt = multiOrdning?.aarlig_indbetaling || 0;
+      const expectedSal = multiOrdning?.opsparing || multiProds.reduce((s, p) => s + (p.opsparing || 0), 0);
+
+      const fmtKr  = n => n ? n.toLocaleString('da-DK') : '0';
+      const pmtHint = expectedPmt ? ` (total: ${fmtKr(expectedPmt)} kr/år)` : '';
+      const salHint = expectedSal ? ` (total: ${fmtKr(expectedSal)} kr.)` : '';
+
+      const pmt_rows = multiProds.map((p, i) => {
+        const est = p.estimated_pmt ? Math.round(p.estimated_pmt / 1000) * 1000 : '';
+        const hint = est ? `<span style="font-size:0.75rem;color:#9ab0c8;margin-left:5px">(est. ${est.toLocaleString('da-DK')} kr/år)</span>` : '';
+        return `<tr style="border:none"><td style="padding:3px 2px;font-size:0.82rem;color:#4a6a80;padding-right:10px;min-width:140px">
+          ${p.produkttype}</td><td style="padding:3px 0;white-space:nowrap">
+          <input type="number" id="iq6pmt_${i}" value="${est}" min="0" step="1000" style="width:90px"
+            oninput="updateQ6Sum('pmt',${multiProds.length},${expectedPmt})">
+          <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">kr/år</span>${hint}</td></tr>`;
+      }).join('');
+
+      const sal_rows = multiProds.map((p, i) => {
+        const actual  = p.opsparing          ? Math.round(p.opsparing / 1000) * 1000          : null;
+        const estSal  = p.estimated_saldo    ? Math.round(p.estimated_saldo / 1000) * 1000    : null;
+        const prefill = actual ?? estSal ?? '';
+        const hintVal = estSal ?? null;
+        const hint = hintVal
+          ? `<span style="font-size:0.75rem;color:#9ab0c8;margin-left:5px">(est. ${hintVal.toLocaleString('da-DK')} kr.)</span>`
+          : '';
+        return `<tr style="border:none"><td style="padding:3px 2px;font-size:0.82rem;color:#4a6a80;padding-right:10px;min-width:140px">
+          ${p.produkttype}</td><td style="padding:3px 0;white-space:nowrap">
+          <input type="number" id="iq6sal_${i}" value="${prefill}" min="0" step="10000" style="width:90px"
+            oninput="updateQ6Sum('sal',${multiProds.length},${expectedSal})">
+          <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">kr.</span>${hint}</td></tr>`;
+      }).join('');
+
+      rows += `
+      <tr>
+        <td class="ql"><strong>6.</strong> ${multiSelskab} — fordeling på produkter
+          <div class="qdesc">Angiv indbetalinger eller aktuelle saldi — begge bruges til at estimere fordeling</div>
+        </td>
+        <td class="qi">
+          <div style="margin-bottom:7px">
+            <label style="font-size:0.82rem;cursor:pointer;margin-right:14px">
+              <input type="radio" name="iq6mode" value="pmt" id="iq6mode_pmt" onchange="toggleQ6Mode()" checked>
+              Indbetalinger${pmtHint}
+            </label>
+            <label style="font-size:0.82rem;cursor:pointer">
+              <input type="radio" name="iq6mode" value="sal" id="iq6mode_sal" onchange="toggleQ6Mode()">
+              Nuværende saldi${salHint}
+            </label>
+          </div>
+          <div id="iq6_pmt_block">
+            <table style="border-collapse:collapse">${pmt_rows}</table>
+            <div id="iq6_pmt_sum" style="font-size:0.8rem;margin-top:4px;color:#5a7a90"></div>
+          </div>
+          <div id="iq6_sal_block" style="display:none">
+            <table style="border-collapse:collapse">${sal_rows}</table>
+            <div id="iq6_sal_sum" style="font-size:0.8rem;margin-top:4px;color:#5a7a90"></div>
+          </div>
+        </td>
+      </tr>`;
+    }
+
+    rows += `
+      <tr>
+        <td class="ql"><strong>7.</strong> Bopælskommune
+          <div class="qdesc">Bruges til beregning af kommuneskat og topskatteoptimering</div>
+        </td>
+        <td class="qi">
+          <input type="text" id="iq7" placeholder="fx Aarhus">
+        </td>
+      </tr>`;
+
+    // Q8: Årlig bruttoindtægt — vis hvis pensionsopsparing tyder på topskat-relevans
+    const totalOpsp = Object.values(profil?.opsparing_total || {}).reduce((a,b) => a+b, 0);
+    const showQ8 = totalOpsp > 1500000 || (profil?.samlet_aarlig_indbetaling || 0) > 80000;
+    if (showQ8) {
+      rows += `
+      <tr>
+        <td class="ql"><strong>8.</strong> Årlig bruttoindtægt (løn før skat)
+          <div class="qdesc">Din pensionsopsparing er af en størrelse hvor topskat kan være relevant — bruges til at beregne om du betaler topskat nu og ved pension, samt optimere indbetalinger</div>
+        </td>
+        <td class="qi">
+          <input type="number" id="iq8" placeholder="fx 750000" min="0" step="10000">
+          <span class="unit">kr/år</span>
+        </td>
+      </tr>`;
+    }
+
+    const el = document.createElement('div');
+    el.className = 'message assistant';
+    el.id = 'interview-form-el';
+    el.innerHTML = `<div class="bubble"><div class="iform-wrap">
+      <h4>Udfyld for at starte analysen</h4>
+      <table class="iform-table">${rows}</table>
+      <button class="iform-submit" onclick="submitInterviewForm()">Start analyse &#x2192;</button>
+    </div></div>`;
+    return el;
+  }
+
+  function toggleQ6Mode() {
+    const mode = document.querySelector('input[name="iq6mode"]:checked')?.value;
+    document.getElementById('iq6_pmt_block').style.display = mode === 'pmt' ? '' : 'none';
+    document.getElementById('iq6_sal_block').style.display = mode === 'sal' ? '' : 'none';
+  }
+
+  function updateQ6Sum(mode, count, expected) {
+    let sum = 0;
+    for (let i = 0; i < count; i++) {
+      const v = parseFloat(document.getElementById(`iq6${mode}_${i}`)?.value || 0);
+      if (!isNaN(v)) sum += v;
+    }
+    const el = document.getElementById(`iq6_${mode}_sum`);
+    if (!el) return;
+    const fmt = n => n.toLocaleString('da-DK');
+    const unit = mode === 'pmt' ? 'kr/år' : 'kr.';
+    const diff = expected ? sum - expected : null;
+    let color = '#5a7a90';
+    let note = '';
+    if (diff !== null && expected) {
+      if (Math.abs(diff) < expected * 0.01) { color = '#2a8a40'; note = ' ✓'; }
+      else if (diff > 0) { color = '#c44'; note = ` (${fmt(diff)} for meget)`; }
+      else { color = '#c44'; note = ` (${fmt(-diff)} mangler)`; }
+    }
+    el.style.color = color;
+    el.textContent = `Sum: ${fmt(sum)} ${unit}${note}`;
+  }
+
+  async function submitInterviewForm() {
+    const profil = _currentProfil;
+    const tidligst = profil?.tidligste_pensionsalder ?? 65;
+
+    const v = id => document.getElementById(id)?.value?.trim() ?? '';
+    const parts = [
+      `1. Netto indbetaling: ${v('iq1')} kr/år`,
+      `2. Forventet afkast: ${v('iq2')}%`,
+      `3. Pensionsalder: ${v('iq3')} år`,
+      `4. Udbetalingsperiode: ${v('iq4')} år`,
+    ];
+
+    const hasKapital = (profil?.ordninger || []).some(o =>
+      (o.produkttype || '').toLowerCase().includes('kapitalpension'));
+    if (hasKapital) {
+      const k = v('iq5');
+      parts.push(`5. Kapitalpension afgiftsfri: ${k === 'ja' ? 'Ja (konverteret 2013 — brug F)' : k === 'ukendt' ? 'Ved ikke (antag A, 40% afgift)' : 'Nej (brug A, 40% afgift)'}`);
+    }
+
+    const nrCount = {};
+    (profil?.pensionsprodukter || []).forEach(p => {
+      const nr = p.aftalenr || '';
+      if (nr) nrCount[nr] = (nrCount[nr] || 0) + 1;
+    });
+    const multiNrs = Object.keys(nrCount).filter(nr => nrCount[nr] > 1);
+    const multiProds = multiNrs.flatMap(nr =>
+      (profil?.pensionsprodukter || []).filter(p => p.aftalenr === nr));
+    if (multiProds.length > 1) {
+      const multiSelskab = (profil?.ordninger || []).find(o => o.aftalenr === multiNrs[0])?.selskab || 'Firmapension';
+      const mode = document.querySelector('input[name="iq6mode"]:checked')?.value ?? 'sal';
+      if (mode === 'pmt') {
+        const fordeling = multiProds.map((p, i) => `${p.produkttype}: ${v('iq6pmt_' + i)} kr/år`).join(', ');
+        parts.push(`6. ${multiSelskab} indbetaling fordeling: ${fordeling}`);
+      } else {
+        const fordeling = multiProds.map((p, i) => `${p.produkttype}: ${v('iq6sal_' + i)} kr. saldo`).join(', ');
+        parts.push(`6. ${multiSelskab} saldi (brug til proportional fordeling af indbetalinger): ${fordeling}`);
+      }
+    }
+
+    const kommune = v('iq7');
+    parts.push(`7. Kommune: ${kommune || 'ikke oplyst (brug landsgennemsnit 25%)'}`);
+
+    const bruttoindtaegt = v('iq8');
+    if (bruttoindtaegt) {
+      parts.push(`8. Årlig bruttoindtægt (løn): ${bruttoindtaegt} kr/år`);
+    }
+
+    const msg = 'Mine svar:\n' + parts.join('\n');
+
+    // Fjern formular fra UI
+    const formEl = document.getElementById('interview-form-el');
+    if (formEl) formEl.remove();
+
+    // Send som brugerbesked → LLM laver fuld analyse
+    document.getElementById('message-input').value = msg;
+    sendMessage();
+  }
+
+  async function sendSystemTrigger(text, visttabel) {
+    document.getElementById('welcome').style.display = 'none';
+    const typingEl = addTyping();
+    isStreaming = true;
+    document.getElementById('send-btn').disabled = true;
+
+    // Injicer den viste tabel i session-historikken FØR chat-kaldet
+    if (visttabel) {
+      await fetch(`/api/session/${sessionId}/inject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'assistant', content: visttabel }),
+      });
+    }
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, message: text }),
+      });
+
+      typingEl.remove();
+      const assistantBubble = addMessage('assistant', '');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const json = JSON.parse(line.slice(6));
+          if (json.text) {
+            const bubble = assistantBubble.querySelector('.bubble');
+            bubble.dataset.raw = (bubble.dataset.raw || '') + json.text;
+            bubble.innerHTML = renderMarkdown(bubble.dataset.raw);
+            scrollToBottom();
+          }
+        }
+      }
+      // Scroll til TOP af svaret når det er færdigt
+      scrollToElement(assistantBubble);
+    } finally {
+      isStreaming = false;
+      document.getElementById('send-btn').disabled = false;
+    }
+  }
+
+  // ── Chat ──────────────────────────────────────────────────────────────────
+  async function sendMessage() {
+    if (isStreaming) return;
+    const input = document.getElementById('message-input');
+    const text = input.value.trim();
+    if (!text) return;
+
+    input.value = '';
+    input.style.height = 'auto';
+    document.getElementById('welcome').style.display = 'none';
+
+    addMessage('user', text);
+    const typingEl = addTyping();
+
+    isStreaming = true;
+    document.getElementById('send-btn').disabled = true;
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, message: text }),
+      });
+
+      typingEl.remove();
+      const assistantBubble = addMessage('assistant', '');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const json = JSON.parse(line.slice(6));
+          if (json.error) {
+            assistantBubble.querySelector('.bubble').innerHTML = `<em style="color:#c44">Fejl: ${json.error}</em>`;
+          } else if (json.text) {
+            const bubble = assistantBubble.querySelector('.bubble');
+            bubble.dataset.raw = (bubble.dataset.raw || '') + json.text;
+            bubble.innerHTML = renderMarkdown(bubble.dataset.raw);
+            scrollToBottom();
+          }
+        }
+      }
+      // Scroll til TOP af svaret når det er færdigt
+      scrollToElement(assistantBubble);
+    } finally {
+      isStreaming = false;
+      document.getElementById('send-btn').disabled = false;
+    }
+  }
+
+  function askQuick(text) {
+    document.getElementById('message-input').value = text;
+    sendMessage();
+  }
+
+  function addMessage(role, text) {
+    const container = document.getElementById('chat-container');
+    const el = document.createElement('div');
+    el.className = `message ${role}`;
+    el.innerHTML = `<div class="bubble" data-raw="${escapeHtml(text)}">${role === 'assistant' ? renderMarkdown(text) : escapeHtml(text)}</div>`;
+    container.appendChild(el);
+    scrollToBottom();
+    return el;
+  }
+
+  function addTyping() {
+    const container = document.getElementById('chat-container');
+    const el = document.createElement('div');
+    el.className = 'message assistant';
+    el.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+    container.appendChild(el);
+    scrollToBottom();
+    return el;
+  }
+
+  function scrollToBottom() {
+    const c = document.getElementById('chat-container');
+    c.scrollTop = c.scrollHeight;
+  }
+
+  function scrollToElement(el) {
+    const c = document.getElementById('chat-container');
+    c.scrollTop = el.offsetTop - c.offsetTop - 12;
+  }
+
+  async function clearHistory() {
+    if (!sessionId) return;
+    await fetch(`/api/session/${sessionId}/history`, { method: 'DELETE' });
+    document.getElementById('chat-container').innerHTML = '<div id="welcome" style="text-align:center;color:#8aa0b8;font-size:.9rem;margin:auto;padding:32px;max-width:480px"><div class="icon" style="font-size:2.5rem;margin-bottom:12px">&#x1F4CA;</div><h2 style="color:#3a5a78;margin-bottom:8px;font-size:1.1rem">Samtale ryddet</h2><p>Stil et nyt spørgsmål om din pension.</p></div>';
+  }
+
+  // ── Markdown renderer ────────────────────────────────────────────────────
+  function renderMarkdown(text) {
+    const lines = text.split('\n');
+    let html = '';
+    let i = 0;
+
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // Tabel
+      if (line.includes('|') && i + 1 < lines.length && lines[i+1].match(/^\s*\|?[-| :]+\|?\s*$/)) {
+        const tableLines = [];
+        tableLines.push(line);
+        i++; // separator
+        i++;
+        while (i < lines.length && lines[i].includes('|')) {
+          tableLines.push(lines[i]);
+          i++;
+        }
+        html += renderTable(tableLines);
+        continue;
+      }
+
+      // Overskrifter
+      if (line.match(/^### /)) { html += `<h3>${inline(line.slice(4))}</h3>`; i++; continue; }
+      if (line.match(/^#### /)) { html += `<h3>${inline(line.slice(5))}</h3>`; i++; continue; }
+      if (line.match(/^## /)) { html += `<h3>${inline(line.slice(3))}</h3>`; i++; continue; }
+
+      // Vandret linje
+      if (line.match(/^---+$/)) { html += '<hr>'; i++; continue; }
+
+      // Uordnet liste
+      if (line.match(/^[-*] /)) {
+        html += '<ul>';
+        while (i < lines.length && lines[i].match(/^[-*] /)) {
+          html += `<li>${inline(lines[i].slice(2))}</li>`;
+          i++;
+        }
+        html += '</ul>';
+        continue;
+      }
+
+      // Nummereret liste
+      if (line.match(/^\d+\. /)) {
+        html += '<ol>';
+        while (i < lines.length && lines[i].match(/^\d+\. /)) {
+          html += `<li>${inline(lines[i].replace(/^\d+\. /, ''))}</li>`;
+          i++;
+        }
+        html += '</ol>';
+        continue;
+      }
+
+      // Fremhævet blok (> prefix)
+      if (line.startsWith('> ')) {
+        html += `<div class="callout">${inline(line.slice(2))}</div>`;
+        i++; continue;
+      }
+
+      // Tom linje
+      if (line.trim() === '') { html += '<br>'; i++; continue; }
+
+      // Normal paragraf
+      html += `<p>${inline(line)}</p>`;
+      i++;
+    }
+
+    return html;
+  }
+
+  function renderTable(rows) {
+    const cells = r => r.split('|').map(c => c.trim()).filter((c, i, a) => i > 0 || c !== '').filter((c, i, a) => i < a.length - 1 || c !== '');
+    const headers = cells(rows[0]);
+    let t = '<table><thead><tr>';
+    headers.forEach(h => { t += `<th>${inline(h)}</th>`; });
+    t += '</tr></thead><tbody>';
+    rows.slice(1).forEach(row => {
+      t += '<tr>';
+      cells(row).forEach(c => { t += `<td>${inline(c)}</td>`; });
+      t += '</tr>';
+    });
+    return t + '</tbody></table>';
+  }
+
+  function inline(text) {
+    return text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`(.+?)`/g, '<code>$1</code>');
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ── Textarea auto-resize + Enter to send ──────────────────────────────────
+  const textarea = document.getElementById('message-input');
+  textarea.addEventListener('input', () => {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+  });
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  init();
+</script>
+</body>
+</html>

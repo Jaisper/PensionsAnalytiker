@@ -704,19 +704,19 @@ Upload derefter PDF'en her øverst til højre.`,
         <td class="qi">
           <div style="margin-bottom:7px">
             <label style="font-size:0.82rem;cursor:pointer;margin-right:14px">
-              <input type="radio" name="iq6mode" value="pmt" id="iq6mode_pmt" onchange="toggleQ6Mode()" checked>
+              <input type="radio" name="iq6mode" value="pmt" id="iq6mode_pmt" onchange="toggleQ6Mode()">
               Indbetalinger${pmtHint}
             </label>
             <label style="font-size:0.82rem;cursor:pointer">
-              <input type="radio" name="iq6mode" value="sal" id="iq6mode_sal" onchange="toggleQ6Mode()">
+              <input type="radio" name="iq6mode" value="sal" id="iq6mode_sal" onchange="toggleQ6Mode()" checked>
               Nuværende saldi${salHint}
             </label>
           </div>
-          <div id="iq6_pmt_block">
+          <div id="iq6_pmt_block" style="display:none">
             <table style="border-collapse:collapse">${pmt_rows}</table>
             <div id="iq6_pmt_sum" style="font-size:0.8rem;margin-top:4px;color:#5a7a90"></div>
           </div>
-          <div id="iq6_sal_block" style="display:none">
+          <div id="iq6_sal_block">
             <table style="border-collapse:collapse">${sal_rows}</table>
             <div id="iq6_sal_sum" style="font-size:0.8rem;margin-top:4px;color:#5a7a90"></div>
           </div>

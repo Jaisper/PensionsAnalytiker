@@ -406,9 +406,11 @@ def generer_udbetalingstabel(
             "alder":           alder,
             "aar_nr":          alder - pensionsalder + 1,
             "produkter":       produkt_data,
+            "fp_mdr_brutto":   float(FOLKEPENSION_MDR) if har_fp else 0.0,
             "fp_mdr_netto":    fp_mdr_netto,
-            "tillaeg_mdr":     tillaeg_mdr,
+            "atp_mdr_brutto":  float(atp_mdr) if har_fp else 0.0,
             "atp_mdr_netto":   atp_mdr_netto,
+            "tillaeg_mdr":     tillaeg_mdr,
             "total_netto_mdr": total_netto_mdr,
             "total_netto_aar": total_netto_mdr * 12,
             "over_topskat":    over_topskat,
@@ -508,52 +510,78 @@ def format_engine_til_llm(result: dict) -> str:
                 "",
             ]
 
-    # Tabel 2: år-for-år
-    aktive_keys = [pr["key"] for pr in loebende]
-    col_labels  = []
+    # ── Tabel 2: fast kolonnestruktur ────────────────────────────────────────
+    # Kolonner: Alder | [produkt brutto/mdr] x N | FP brutto/mdr | ATP brutto/mdr | Brutto/år | Netto/mdr | Note
+    prod_labels = []
     for pr in loebende:
-        label = f"{pr['selskab']} {pr['produkttype']}"
-        col_labels.append(label[:22])   # afkort lange navne
+        kort = pr["produkttype"].replace("pension", "").replace("Pension", "").strip()
+        prod_labels.append(f"{pr['selskab']} {kort}".strip()[:18])
 
-    header = "| Alder | År | " + " | ".join(col_labels) + " | Folkepension | Tillæg | ATP | /mdr | /år |"
-    sep    = "|---|---|" + "|---|" * len(aktive_keys) + "---|---|---|---|---|"
-    # Vis første 5 rækker + folkepensions-overgang + sidste 3 rækker (holder prompten kort)
-    fp_idx   = next((i for i, r in enumerate(tabel) if r["alder"] >= fp_alder), None)
-    vis_idx  = set(range(min(5, len(tabel))))
+    alle_labels = prod_labels + ["Folkepension", "ATP"]
+    n_prod_cols = len(alle_labels)
+
+    header = "| Alder | " + " | ".join(alle_labels) + " | Brutto/år | Netto/mdr | Note |"
+    sep    = "|---|" + "|---|" * n_prod_cols + "---|---|---|"
+
+    # Uddrag: første 5 + folkepensions-overgang + sidste 3
+    fp_idx  = next((i for i, r in enumerate(tabel) if r["alder"] >= fp_alder), None)
+    vis_idx = set(range(min(5, len(tabel))))
     vis_idx |= set(range(max(0, len(tabel) - 3), len(tabel)))
     if fp_idx is not None:
         vis_idx |= {max(0, fp_idx - 1), fp_idx, min(fp_idx + 1, len(tabel) - 1)}
     vis_idx = sorted(vis_idx)
 
-    L += [f"### TABEL 2 — ÅR-FOR-ÅR NETTO (uddrag; LLM: rekonstruér alle {len(tabel)} rækker fra Tabel 1)", header, sep]
+    L += [
+        f"### TABEL 2 — ÅR-FOR-ÅR BRUTTO/NETTO (uddrag — LLM rekonstruerer alle {len(tabel)} rækker)",
+        f"Kolonner: Alder | {' | '.join(alle_labels)} | Brutto/år | Netto/mdr | Note",
+        header, sep,
+    ]
 
     prev = -1
     for i in vis_idx:
         if i > prev + 1:
-            L.append("| … | … | " + " | ".join(["…"] * len(aktive_keys)) + " | … | … | … | … | … |")
-        row  = tabel[i]
-        cols = []
-        for key in aktive_keys:
-            d = row["produkter"].get(key, {})
-            v = d.get("mdr_netto", 0.0)
-            cols.append(f"{v:,.0f}".replace(",", ".") if v else "—")
-        mark = " *" if row["over_topskat"] else ""
+            L.append("| … | " + " | ".join(["…"] * n_prod_cols) + " | … | … | … |")
+        row = tabel[i]
+        har_fp = row["alder"] >= fp_alder
+
+        # Brutto/mdr per produkt
+        prod_cols = []
+        brutto_aar = 0.0
+        for pr in loebende:
+            aktiv = pr["stopper_ved_alder"] is None or row["alder"] < pr["stopper_ved_alder"]
+            b = pr["mdr_brutto"] if aktiv else 0.0
+            prod_cols.append(f"{b:,.0f}".replace(",", ".") if b else "—")
+            brutto_aar += b * 12
+
+        fp_b  = row.get("fp_mdr_brutto", 0.0)
+        atp_b = row.get("atp_mdr_brutto", 0.0)
+
+        prod_cols.append(f"{fp_b:,.0f}".replace(",", ".") if fp_b else "—")
+        prod_cols.append(f"{atp_b:,.0f}".replace(",", ".") if atp_b else "—")
+
+        brutto_aar += (fp_b + atp_b) * 12
+
+        # Note
+        note_parts = []
+        if row["over_topskat"]:
+            note_parts.append("Topskat")
+        tillaeg_max = PENSIONSTILLAEG_MAX_ENLIG_AAR / 12
+        if har_fp and row["tillaeg_mdr"] < tillaeg_max * 0.95:
+            tabt = round(tillaeg_max - row["tillaeg_mdr"])
+            note_parts.append(f"Modregning -{tabt:,.0f}".replace(",", "."))
+        note = " | ".join(note_parts) if note_parts else "—"
+
         L.append(
-            f"| {row['alder']} | {row['aar_nr']} | " + " | ".join(cols)
-            + f" | {row['fp_mdr_netto']:,.0f} | {row['tillaeg_mdr']:,.0f}"
-            f" | {row['atp_mdr_netto']:,.0f}"
-            f" | {row['total_netto_mdr']:,.0f}{mark}"
-            f" | {row['total_netto_aar']:,.0f} |".replace(",", ".")
+            f"| {row['alder']} | " + " | ".join(prod_cols)
+            + f" | {brutto_aar:,.0f} | {row['total_netto_mdr']:,.0f} | {note} |".replace(",", ".")
         )
         prev = i
 
     L += [
         "",
-        "\\* = bruttoudbetalingen overstiger topskattegrænsen; topskat er medregnet i netto-tallene.",
-        "",
-        "INSTRUKTION: Tabel 2 ovenfor er et uddrag. Rekonstruér den KOMPLETTE tabel "
-        f"({len(tabel)} rækker) ud fra Tabel 1's FV og udbetalingsperioder. "
-        "Brug samme beregningslogik: annuitet fra FV, skat per type, folkepension fra fp_alder. "
-        "Advar proaktivt om modregning, topskat og lofter.",
+        "INSTRUKTION: Rekonstruér ALLE rækker med samme kolonnestruktur. "
+        "Brutto/år = sum af alle produkters månedlige brutto × 12. "
+        "Netto/mdr = efter AM-bidrag, indkomstskat og topskat. "
+        "Note: 'Topskat' hvis PI > 588.900 kr; 'Modregning -X kr' hvis pensionstillæg reduceres.",
     ]
     return "\n".join(L)

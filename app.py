@@ -164,13 +164,17 @@ Når brugeren spørger om skatteoptimering, skal du altid:
 *Bemærk: Dette er informationsbaseret vejledning — konkret skatterådgivning kræver en certificeret rådgiver.*
 
 ## UDBETALINGSTABEL
-Brug tallene fra "BEREGNET PENSIONSANALYSE" nedenfor:
-- **Tabel 1**: vis FV og netto-udbetaling per produkt (fra engine Tabel 1)
-- **Tabel 2**: vis ALLE rækker fra engine Tabel 2 (år-for-år netto)
-- Folkepension, tillæg og ATP vises som "—" INDEN folkepensionsalderen
-- Rækker markeret med * skyldes topskat — forklar kort
-- Engangsbeløb (kapitalpension/aldersopsparing) vises i Tabel 1, ikke Tabel 2
-- Pensionstillæg er allerede modregnet i tallene
+Brug tallene fra "BEREGNET PENSIONSANALYSE" nedenfor.
+
+**Tabel 1**: FV og månedlig udbetaling per produkt — vis som angivet.
+
+**Tabel 2** — fast kolonnestruktur (rekonstruér ALLE rækker):
+| Alder | [produkt brutto/mdr pr. kolonne] | Folkepension | ATP | Brutto/år | Netto/mdr | Note |
+- Brutto/år = sum af alle kolonners månedlige brutto × 12
+- Netto/mdr = efter AM-bidrag, indkomstskat og topskat
+- Note: "Topskat" hvis samlet PI > 588.900 kr; "Modregning -X kr" hvis pensionstillæg reduceres; ellers "—"
+- Folkepension og ATP vises som "—" inden folkepensionsalderen
+- Engangsbeløb vises kun i Tabel 1
 
 {engine_analyse}
 

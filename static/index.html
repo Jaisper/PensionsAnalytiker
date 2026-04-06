@@ -372,12 +372,8 @@
 </div>
 
 <div id="quick-questions">
-  <button class="quick-btn" onclick="askQuick('Lav en samlet analyse af min pensionssituation')">Samlet analyse</button>
-  <button class="quick-btn" onclick="askQuick('Jeg vil gerne gå på pension om 5 år. Hvad mangler jeg?')">Pension om 5 år</button>
-  <button class="quick-btn" onclick="askQuick('Er mine forsikringsdækninger tilstrækkelige?')">Forsikringer</button>
-  <button class="quick-btn" onclick="askQuick('Kan jeg optimere mine pensionsindbetalinger skattemæssigt?')">Skatteoptimering</button>
-  <button class="quick-btn" onclick="askQuick('Hvad er min forventede månedlige pension ved 67 år efter skat?')">Nettopension ved 67</button>
-  <button class="quick-btn" onclick="askQuick('Hvad sker der med min pension hvis jeg dør?')">Ved dødsfald</button>
+  <button class="quick-btn" onclick="askQuick('Hvad sker der med min pension og udbetaling hvis jeg dør?')">Udbetaling ved død</button>
+  <button class="quick-btn" onclick="askQuick('Hvad dækker min forsikring ved tab af erhvervsevne, og er dækningen tilstrækkelig?')">Tab af erhvervsevne</button>
 </div>
 
 <div id="chat-container">
@@ -426,6 +422,7 @@
         status.textContent = `✓ ${data.navn || 'Rapport'} indlæst`;
         status.className = 'ok';
         updateProfilPanel(data.profil);
+        updateQuickButtons(data.profil);
         document.getElementById('welcome').style.display = 'none';
 
         // Start interview automatisk
@@ -468,6 +465,53 @@
 
   function formatKr(n) {
     return n.toLocaleString('da-DK') + ' kr.';
+  }
+
+  function updateQuickButtons(profil) {
+    const container = document.getElementById('quick-questions');
+    // Fjern tidligere dynamiske knapper (behold de to faste)
+    container.querySelectorAll('.quick-btn-dynamic').forEach(b => b.remove());
+
+    const ordninger  = profil?.ordninger || [];
+    const prod       = profil?.pensionsprodukter || [];
+    const f          = profil?.forsikringer || {};
+    const totalOps   = Object.values(profil?.opsparing_total || {}).reduce((a,b) => a+b, 0);
+    const tidligst   = profil?.tidligste_pensionsalder;
+    const alder      = profil?.person?.alder || 0;
+    const typer      = [...ordninger, ...prod].map(p => (p.produkttype || '').toLowerCase());
+
+    const dynamic = [];
+
+    // Altid: komplet analyse
+    dynamic.push(['Komplet pensionsanalyse', 'Lav en komplet analyse af min pensionssituation med udbetalingstabel og anbefalinger.']);
+
+    // Kapitalpension — afgiftsvalg
+    if (typer.some(t => t.includes('kapital')))
+      dynamic.push(['Kapitalpension — afgift?', 'Er afgiften på min kapitalpension allerede betalt (konverteret i 2013), eller er den stadig 40%?']);
+
+    // Topskat-risiko ved høj opsparing
+    if (totalOps > 1_500_000)
+      dynamic.push(['Topskat ved udbetaling?', 'Vil mine pensionsudbetalinger overstige topskattegrænsen, og hvordan optimerer jeg rækkefølgen?']);
+
+    // Modregning i pensionstillæg (livsvarig)
+    if (typer.some(t => t.includes('livsvarig') || t.includes('livrente')))
+      dynamic.push(['Modregning i pensionstillæg', 'Hvordan påvirker min livsvarige pension folkepensionens pensionstillæg via modregning?']);
+
+    // Nær pension
+    if (tidligst && alder && (tidligst - alder) <= 10)
+      dynamic.push([`Pension om ${tidligst - alder} år?`, `Jeg er ${alder} år og kan tidligst gå på pension som ${tidligst}-årig. Er jeg godt nok forberedt?`]);
+
+    // Skatteoptimering af indbetalinger
+    dynamic.push(['Optimer indbetalinger', 'Kan jeg optimere mine pensionsindbetalinger skattemæssigt — fx reducere topskat eller udnytte lofter bedre?']);
+
+    // Tilføj maks 4 dynamiske knapper
+    dynamic.slice(0, 4).forEach(([label, prompt]) => {
+      const btn = document.createElement('button');
+      btn.className = 'quick-btn quick-btn-dynamic';
+      btn.textContent = label;
+      btn.onclick = () => askQuick(prompt);
+      container.appendChild(btn);
+    });
   }
 
   // ── Interview flow ────────────────────────────────────────────────────────

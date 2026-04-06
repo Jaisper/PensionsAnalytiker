@@ -141,6 +141,14 @@ def _extract_pages(pdf_path: str) -> list[str]:
     return pages
 
 
+def _filter_relevant_pages(pages: list[str]) -> str:
+    return "\n\n".join(
+        f"=== SIDE {i+1} ===\n{page}"
+        for i, page in enumerate(pages)
+        if page.strip()
+    )
+
+
 def _extract_with_llm(text: str) -> dict:
     import anthropic
     client = anthropic.Anthropic()

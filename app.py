@@ -648,6 +648,25 @@ async def get_raw_extraction(session_id: str):
     return JSONResponse(profil.get("raw", {}))
 
 
+@app.get("/api/session/{session_id}/text")
+async def get_pdf_text(session_id: str, q: str = ""):
+    """Returnerer rå PDF-tekst til debugging. Brug ?q=nordea til filtrering."""
+    if session_id not in sessions:
+        raise HTTPException(404, "Session ikke fundet")
+    profil = sessions[session_id].get("profil") or {}
+    tekst = profil.get("raa_tekst", "")
+    if q:
+        lines = tekst.split("\n")
+        match_idx = [i for i, l in enumerate(lines) if q.lower() in l.lower()]
+        result = []
+        for i in match_idx:
+            result.append(f"--- linje {i} ---")
+            result.append("\n".join(lines[max(0, i-3):i+4]))
+        tekst = "\n".join(result) if result else f"(ingen match for '{q}')"
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(tekst)
+
+
 class InjectMessage(BaseModel):
     role: str
     content: str

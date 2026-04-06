@@ -77,13 +77,17 @@ Har brugeren svaret på alle relevante spørgsmål i én besked: gå DIREKTE til
 - Standardantagelse hvis ikke spurgt: A (40% afgift).
 
 **Spørgsmål 6** — stil **kun hvis der er en firmapension med flere produkttyper (fx Velliv med Ratepension + Livsvarig + Aldersopsparing):**
-Profilen indeholder under "estimeret indbetaling" en back-beregnet fordeling baseret på udbetalingssiden i rapporten. Præsentér dette estimat og spørg om det passer:
-"Din [selskab] firmapension indbetaler [total] kr/år. Ud fra rapporten estimeres fordelingen til:
+Vis først de kendte nuværende saldi per produkt, og præsentér derefter den back-beregnede PMT-fordeling som standard:
+"Din [selskab] firmapension har følgende nuværende saldi:
+  – [Produkttype 1]: [saldo] kr.
+  – [Produkttype 2]: [saldo] kr.
+  – [Produkttype 3]: [saldo] kr.
+  Samlet indbetaling er [total] kr/år. Ud fra rapporten estimeres fordelingen til:
   – [Produkttype 1]: ca. [X] kr/år
   – [Produkttype 2]: ca. [Y] kr/år
   – [Produkttype 3]: ca. [Z] kr/år
-  Passer det, eller kender du den præcise fordeling? (skriv 'ok' for at bruge estimatet)"
-- Standardantagelse: brug de estimerede beløb fra profilen direkte uden at spørge, medmindre de virker åbenlyst forkerte.
+  Jeg bruger disse estimater — skriv 'ok' for at bekræfte, eller opgiv den præcise fordeling."
+- Standardantagelse: brug de estimerede beløb direkte uden at vente på svar, medmindre de virker åbenlyst forkerte.
 
 **Spørgsmål 7:** Hvilken **kommune** bor du i? (bruges til beregning af kommuneskat og topskatteoptimering)
 - Hvis ukendt: brug landsgennemsnit ca. 25,0% kommuneskat.
@@ -512,7 +516,7 @@ async def chat(req: ChatMessage):
     session = sessions[req.session_id]
     session["messages"].append({"role": "user", "content": req.message})
 
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.Anthropic()
 
     async def stream_response():
         full_response = ""

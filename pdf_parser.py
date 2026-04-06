@@ -32,7 +32,7 @@ Return exactly this structure:
     {
       "provider": "company name",
       "number": "agreement number",
-      "type": "product type in Danish (e.g. Ratepension, Kapitalpension, Livsvarig pension, Markedsrente)",
+      "type": "product type in Danish (e.g. Ratepension, Kapitalpension, Livsvarig pension, Aldersopsparing)",
       "balance": null,
       "annual_contribution": null,
       "insurance_only": false
@@ -56,17 +56,22 @@ Return exactly this structure:
 
 FIELD GUIDANCE:
 
+agreements[]
+  CRITICAL: One entry per PRODUCT TYPE, not per agreement number.
+  If a provider has Kapitalpension AND Ratepension, create TWO entries (same number, different type).
+  If a provider has Aldersopsparing + Ratepension + Livsvarig, create THREE entries.
+  Never merge different product types into one entry.
+
 agreements[].balance
-  Look in "Nuværende pensionsopsparinger" section — this lists each agreement with its INDIVIDUAL balance.
-  Also check under each agreement block in "Dine aftaler" for "Saldo" or "Opsparing pr.".
-  If the report shows "Del af X kr" (part of total) under "Dine aftaler", that is the TOTAL, not the individual balance —
-  instead use the value from "Nuværende pensionsopsparinger" for that specific agreement/provider.
-  Set null if no individual balance found.
+  Look in "Nuværende pensionsopsparinger" for individual balances per product type.
+  Also check "Dine aftaler" for "Saldo" or "Opsparing pr." per product.
+  If only a combined total is shown for a provider (not split by product), set null on each product entry.
+  Set null if no individual balance found for this specific product type.
 
 agreements[].annual_contribution
   Look under each agreement block in "Dine aftaler" for "Indbetaling i alt", "Bidrag i alt", or "Præmie i alt".
-  This is the TOTAL annual amount paid to this specific agreement.
-  If shown monthly, multiply by 12. Set null if not stated for this agreement.
+  This is the TOTAL for the whole agreement — use it on the main/parent agreement entry.
+  If shown monthly, multiply by 12. Set null if not stated.
 
 agreements[].insurance_only
   Set true if the agreement says "Kun forsikring" or has no savings.
@@ -93,15 +98,20 @@ earliest_retirement_age
 
 payout_products
   From the EARLIEST retirement age scenario ONLY.
+  CRITICAL: Create ONE entry per PRODUCT TYPE per provider — never merge different product types.
+  Kapitalpension and Ratepension under the same provider MUST be two separate entries even if they
+  share an agreement number. Aldersopsparing, Ratepension, Livsvarig pension, Kapitalpension are
+  always separate entries.
   Each product line with amounts per time period (e.g. "60-67 år", "Fra 67 år", "Fra 68 år", etc.).
   amounts keys = the time band labels exactly as shown.
-  amounts values = ANNUAL amounts (not monthly).
+  amounts values = ANNUAL amounts (not monthly). Never sum amounts across product types.
   Include ATP and Folkepension if shown.
 
-  current_balance: the current savings balance for THIS specific product line, if shown separately
-  in "Nuværende pensionsopsparinger" or "Dine aftaler". Set null if not individually stated.
-  When a provider has multiple products (e.g. Aldersopsparing + Ratepension + Livsvarig pension),
-  each may have its own balance listed — extract each separately.
+  current_balance: the current savings balance for THIS specific product line only.
+  Look in "Nuværende pensionsopsparinger" for individual balances per product.
+  If a provider shows one combined balance for multiple products, set null on each individual product
+  (do NOT assign the combined total to one product).
+  Set null if no individual balance found for this specific product.
 """
 
 

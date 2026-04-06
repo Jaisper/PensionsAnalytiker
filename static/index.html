@@ -845,7 +845,59 @@ Upload derefter PDF'en her øverst til højre.`,
     const formEl = document.getElementById('interview-form-el');
     if (formEl) formEl.remove();
 
-    // Send som brugerbesked → LLM laver fuld analyse
+    // ── Gem parametre i session så engine kan køre ────────────────────────────
+    // Kommuneskat-lookup (2025-satser, ca.-værdier)
+    const KOMMUNESKAT = {
+      'københavn': 23.5, 'kobenhavn': 23.5,
+      'frederiksberg': 22.8,
+      'gentofte': 22.0,
+      'lyngby': 22.9, 'lyngbytaarbæk': 22.9, 'lyngbytaarbaek': 22.9,
+      'gladsaxe': 23.8, 'gladsakse': 23.8,
+      'rudersdal': 21.9,
+      'hørsholm': 22.5, 'horsholm': 22.5,
+      'aarhus': 24.5, 'århus': 24.5,
+      'odense': 25.3,
+      'aalborg': 25.4,
+      'esbjerg': 25.6,
+      'randers': 26.0,
+      'kolding': 25.3,
+      'horsens': 25.5,
+      'vejle': 25.5,
+      'roskilde': 26.3,
+      'helsingør': 25.7, 'helsingor': 25.7,
+      'næstved': 26.4, 'naestved': 26.4,
+      'silkeborg': 24.7,
+      'viborg': 24.9,
+      'herning': 25.3,
+      'svendborg': 26.0,
+      'hillerød': 25.8, 'hillerod': 25.8,
+      'holbæk': 26.2, 'holbaek': 26.2,
+      'slagelse': 26.5,
+      'køge': 25.7, 'koge': 25.7,
+      'ringsted': 26.4,
+      'ikast': 25.5,
+      'skanderborg': 24.7,
+      'hedensted': 25.3,
+    };
+    const kommuneKey = (kommune || '').toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')  // fjern accenter
+      .replace(/[^a-z]/g, '');
+    const kommuneskatPct = KOMMUNESKAT[kommuneKey] ?? 25.0;
+
+    await fetch('/api/parametre', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        netto_indbetaling: parseFloat(v('iq1')) || 0,
+        afkast_pct:        parseFloat(v('iq2')) || 4.0,
+        pensionsalder:     parseInt(v('iq3'))   || tidligst,
+        udbetaling_aar:    parseInt(v('iq4'))   || 30,
+        kommuneskat_pct:   kommuneskatPct,
+      }),
+    });
+
+    // Send som brugerbesked → LLM præsenterer engine-analyse
     document.getElementById('message-input').value = msg;
     sendMessage();
   }

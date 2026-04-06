@@ -109,9 +109,11 @@ Dette gælder uanset om brugeren beder om det, og uanset om du tror du ved svare
 Du har IKKE adgang til korrekte skatteberegninger — engine'en har. Brug KUN engine-tal.
 
 **Hvis "BEREGNET PENSIONSANALYSE" er tilgængelig:**
+- Tallene i engine-output ER beregnet med brugerens valgte parametre — de er korrekte. Præsentér dem direkte.
+- MÅ IKKE kommentere på om parametrene "passer" eller "afviger" — de er hvad brugeren valgte.
 - Kopiér Tabel 1 og Tabel 2 direkte fra engine-output — ret ingen tal
 - Forklar tallene med ord — men indsæt IKKE egne udregninger eller approksimationer
-- Advar hvis engine-output indeholder advarsler (topskat, modregning)
+- Advar KUN hvis engine-output eksplicit indeholder advarsler (topskat, modregning)
 - Hvis brugeren spørger om et tal du ikke finder i engine-output: sig "det kan jeg ikke beregne — kontakt en pensionsrådgiver"
 
 **Hvis "BEREGNET PENSIONSANALYSE" IKKE er tilgængelig endnu:**
@@ -538,6 +540,7 @@ class Parametre(BaseModel):
     udbetaling_aar: int | None = None
     kommuneskat_pct: float | None = None
     enlig: bool | None = None
+    saldi_overrides: list | None = None  # [{aftalenr, produkttype, saldo}]
 
 
 @app.post("/api/parametre")
@@ -551,6 +554,26 @@ async def gem_parametre(req: Parametre):
     if req.udbetaling_aar is not None:    p["udbetaling_aar"] = req.udbetaling_aar
     if req.kommuneskat_pct is not None:   p["kommuneskat_pct"] = req.kommuneskat_pct
     if req.enlig is not None:             p["enlig"] = req.enlig
+
+    # Opdatér saldi i profilen så engine regner på aktuelle værdier (ikke PDF-saldi)
+    if req.saldi_overrides:
+        profil = sessions[req.session_id].get("profil")
+        if profil:
+            for ov in req.saldi_overrides:
+                nr    = str(ov.get("aftalenr") or "")
+                ptype = (ov.get("produkttype") or "").lower()
+                saldo = float(ov.get("saldo") or 0)
+                for pp in profil.get("pensionsprodukter", []):
+                    if (str(pp.get("aftalenr") or "") == nr and
+                            (pp.get("produkttype") or "").lower() == ptype):
+                        pp["opsparing"] = saldo
+                for o in profil.get("ordninger", []):
+                    if (str(o.get("aftalenr") or "") == nr and
+                            (o.get("produkttype") or "").lower() == ptype):
+                        o["opsparing"] = saldo
+            # Regenerér profil_tekst med opdaterede saldi
+            sessions[req.session_id]["profil_tekst"] = format_profil_til_tekst(profil)
+
     return {"success": True, "parametre": p}
 
 

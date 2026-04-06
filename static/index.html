@@ -884,6 +884,22 @@ Upload derefter PDF'en her øverst til højre.`,
       .replace(/[^a-z]/g, '');
     const kommuneskatPct = KOMMUNESKAT[kommuneKey] ?? 25.0;
 
+    // Saml Q6-saldi til override (aktuelle saldi overskriver PDF-saldi)
+    const saldiOverrides = [];
+    if (multiProds.length > 1) {
+      const mode = document.querySelector('input[name="iq6mode"]:checked')?.value ?? 'sal';
+      if (mode === 'sal') {
+        multiProds.forEach((p, i) => {
+          const saldo = parseFloat(document.getElementById(`iq6sal_${i}`)?.value || '0');
+          if (saldo > 0) saldiOverrides.push({
+            aftalenr: p.aftalenr,
+            produkttype: p.produkttype,
+            saldo,
+          });
+        });
+      }
+    }
+
     await fetch('/api/parametre', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -894,6 +910,7 @@ Upload derefter PDF'en her øverst til højre.`,
         pensionsalder:     parseInt(v('iq3'))   || tidligst,
         udbetaling_aar:    parseInt(v('iq4'))   || 30,
         kommuneskat_pct:   kommuneskatPct,
+        saldi_overrides:   saldiOverrides.length ? saldiOverrides : undefined,
       }),
     });
 

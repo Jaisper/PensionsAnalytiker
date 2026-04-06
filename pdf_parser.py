@@ -32,7 +32,7 @@ Return exactly this structure:
     {
       "provider": "company name",
       "number": "agreement number",
-      "type": "product type in Danish (e.g. Ratepension, Kapitalpension, Livsvarig pension, Aldersopsparing)",
+      "type": "product type in Danish (e.g. Ratepension, Kapitalpension, Livsvarig pension, Markedsrente)",
       "balance": null,
       "annual_contribution": null,
       "insurance_only": false
@@ -56,22 +56,17 @@ Return exactly this structure:
 
 FIELD GUIDANCE:
 
-agreements[]
-  CRITICAL: One entry per PRODUCT TYPE, not per agreement number.
-  If a provider has Kapitalpension AND Ratepension, create TWO entries (same number, different type).
-  If a provider has Aldersopsparing + Ratepension + Livsvarig, create THREE entries.
-  Never merge different product types into one entry.
-
 agreements[].balance
-  Look in "Nuværende pensionsopsparinger" for individual balances per product type.
-  Also check "Dine aftaler" for "Saldo" or "Opsparing pr." per product.
-  If only a combined total is shown for a provider (not split by product), set null on each product entry.
-  Set null if no individual balance found for this specific product type.
+  Look in "Nuværende pensionsopsparinger" section — this lists each agreement with its INDIVIDUAL balance.
+  Also check under each agreement block in "Dine aftaler" for "Saldo" or "Opsparing pr.".
+  If the report shows "Del af X kr" (part of total) under "Dine aftaler", that is the TOTAL, not the individual balance —
+  instead use the value from "Nuværende pensionsopsparinger" for that specific agreement/provider.
+  Set null if no individual balance found.
 
 agreements[].annual_contribution
   Look under each agreement block in "Dine aftaler" for "Indbetaling i alt", "Bidrag i alt", or "Præmie i alt".
-  This is the TOTAL for the whole agreement — use it on the main/parent agreement entry.
-  If shown monthly, multiply by 12. Set null if not stated.
+  This is the TOTAL annual amount paid to this specific agreement.
+  If shown monthly, multiply by 12. Set null if not stated for this agreement.
 
 agreements[].insurance_only
   Set true if the agreement says "Kun forsikring" or has no savings.
@@ -98,20 +93,15 @@ earliest_retirement_age
 
 payout_products
   From the EARLIEST retirement age scenario ONLY.
-  CRITICAL: Create ONE entry per PRODUCT TYPE per provider — never merge different product types.
-  Kapitalpension and Ratepension under the same provider MUST be two separate entries even if they
-  share an agreement number. Aldersopsparing, Ratepension, Livsvarig pension, Kapitalpension are
-  always separate entries.
   Each product line with amounts per time period (e.g. "60-67 år", "Fra 67 år", "Fra 68 år", etc.).
   amounts keys = the time band labels exactly as shown.
-  amounts values = ANNUAL amounts (not monthly). Never sum amounts across product types.
+  amounts values = ANNUAL amounts (not monthly).
   Include ATP and Folkepension if shown.
 
-  current_balance: the current savings balance for THIS specific product line only.
-  Look in "Nuværende pensionsopsparinger" for individual balances per product.
-  If a provider shows one combined balance for multiple products, set null on each individual product
-  (do NOT assign the combined total to one product).
-  Set null if no individual balance found for this specific product.
+  current_balance: the current savings balance for THIS specific product line, if shown separately
+  in "Nuværende pensionsopsparinger" or "Dine aftaler". Set null if not individually stated.
+  When a provider has multiple products (e.g. Aldersopsparing + Ratepension + Livsvarig pension),
+  each may have its own balance listed — extract each separately.
 """
 
 
@@ -133,14 +123,33 @@ def _extract_pages(pdf_path: str) -> list[str]:
 
 
 def _filter_relevant_pages(pages: list[str]) -> str:
-    """Returnerer alle sider — PensionsInfo-rapporter er typisk 15-25 sider og
-    passer inden for token-grænsen. Filtrering var årsag til at aftaler på
-    sider uden sektionsheader blev misset."""
-    return "\n\n".join(
-        f"=== SIDE {i+1} ===\n{page}"
-        for i, page in enumerate(pages)
-        if page.strip()
-    )
+    """Beholder kun relevante sider — reducerer token-forbrug markant."""
+    RELEVANT_KEYWORDS = [
+        "Pensionsoplysninger for",
+        "Nuværende pensionsopsparinger",
+        "Dine aftaler",
+        "Liv og erstatning",
+        "Tab af erhvervsevne",
+        "Kritisk sygdom",
+        "Sundhedsforsikring",
+        "Øvrige forsikringer",
+    ]
+    # Find tidligste pensionsalder
+    earliest_age = None
+    for page in pages:
+        m = re.search(r"Hvis du går på pension som (\d+)-årig", page)
+        if m:
+            age = int(m.group(1))
+            if earliest_age is None or age < earliest_age:
+                earliest_age = age
+
+    kept = []
+    for i, page in enumerate(pages):
+        if any(kw in page for kw in RELEVANT_KEYWORDS):
+            kept.append(f"=== SIDE {i+1} ===\n{page}")
+        elif earliest_age and f"som {earliest_age}-årig" in page:
+            kept.append(f"=== SIDE {i+1} ===\n{page}")
+    return "\n\n".join(kept)
 
 
 def _extract_with_llm(text: str) -> dict:

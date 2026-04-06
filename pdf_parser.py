@@ -32,7 +32,7 @@ Return exactly this structure:
     {
       "provider": "company name",
       "number": "agreement number",
-      "type": "product type in Danish (e.g. Ratepension, Kapitalpension, Livsvarig pension, Markedsrente)",
+      "type": "product type in Danish (e.g. Ratepension, Kapitalpension, Livsvarig pension, Aldersopsparing)",
       "balance": null,
       "annual_contribution": null,
       "insurance_only": false
@@ -55,6 +55,12 @@ Return exactly this structure:
 }
 
 FIELD GUIDANCE:
+
+agreements[]
+  CRITICAL: One entry per PRODUCT TYPE, not per agreement number.
+  If a provider has Kapitalpension AND Ratepension, create TWO entries (same number, different type).
+  If a provider has Aldersopsparing + Ratepension + Livsvarig, create THREE entries.
+  Never merge different product types into one entry.
 
 agreements[].balance
   Look in "Nuværende pensionsopsparinger" section — this lists each agreement with its INDIVIDUAL balance.
@@ -93,9 +99,13 @@ earliest_retirement_age
 
 payout_products
   From the EARLIEST retirement age scenario ONLY.
+  CRITICAL: Create ONE entry per PRODUCT TYPE per provider — never merge different product types.
+  Kapitalpension and Ratepension under the same provider MUST be two separate entries even if they
+  share an agreement number. Aldersopsparing, Ratepension, Livsvarig pension, Kapitalpension are
+  always separate entries.
   Each product line with amounts per time period (e.g. "60-67 år", "Fra 67 år", "Fra 68 år", etc.).
   amounts keys = the time band labels exactly as shown.
-  amounts values = ANNUAL amounts (not monthly).
+  amounts values = ANNUAL amounts (not monthly). Never sum amounts across product types.
   Include ATP and Folkepension if shown.
 
   current_balance: the current savings balance for THIS specific product line, if shown separately

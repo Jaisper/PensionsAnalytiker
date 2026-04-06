@@ -78,7 +78,12 @@ disability_annual
   Total annual disability/loss-of-earning-capacity from "Tab af erhvervsevne" section.
 
 critical_illness
-  Total critical illness lump sum from "Kritisk sygdom" section.
+  Critical illness lump sum — take the SINGLE total from the "Kritisk sygdom" header in the
+  "Liv og erstatning" summary section only. This is one number (e.g. 260000).
+  Do NOT sum across multiple agreements, scenarios or retirement-age blocks.
+  Do NOT pick up amounts from individual agreement blocks — only the top-level summary.
+  If the same amount appears multiple times (in different scenarios), use it ONCE.
+  If no "Kritisk sygdom" section exists, set null.
 
 has_health_insurance
   true if any health insurance policy is mentioned.
@@ -488,10 +493,11 @@ def format_profil_til_tekst(profil: dict) -> str:
             pmt_s = f", estimeret indbetaling: {est_pmt:,.0f} kr/år".replace(",", ".") if est_pmt else ""
             linjer.append(f"  {selskab} – {ptype}: skat={skat}{extra}{pmt_s}")
 
-    linjer += ["", "=== FORSIKRINGER ==="]
+    linjer += ["", "=== FORSIKRINGER (summeret fra rapport — ikke per selskab) ==="]
     linjer.append(f"  Liv ved død: {f.get('liv_ved_doed', 0):,.0f} kr.".replace(",", "."))
     linjer.append(f"  Tabt arbejdsevne: {f.get('tabt_arbejdsevne_aarlig', 0):,.0f} kr/år".replace(",", "."))
-    linjer.append(f"  Kritisk sygdom: {f.get('kritisk_sygdom', 0):,.0f} kr.".replace(",", "."))
+    ks = f.get("kritisk_sygdom", 0)
+    linjer.append(f"  Kritisk sygdom: {ks:,.0f} kr. (NÆVN IKKE SPECIFIKT SELSKAB — fremgår ikke af data)".replace(",", ".") if ks else "  Kritisk sygdom: Ingen")
     linjer.append(f"  Sundhedsforsikring: {'Ja' if f.get('sundhedsforsikring') else 'Nej'}")
 
     return "\n".join(linjer)

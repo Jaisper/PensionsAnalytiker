@@ -520,7 +520,7 @@ def format_engine_til_llm(result: dict) -> str:
     alle_labels = prod_labels + ["Folkepension", "ATP"]
     n_prod_cols = len(alle_labels)
 
-    header = "| Alder | " + " | ".join(alle_labels) + " | Brutto/år | Netto/mdr | Note |"
+    header = "| Alder | " + " | ".join(f"{l} kr/år" for l in alle_labels) + " | Brutto/år | Netto/mdr | Note |"
     sep    = "|---|" + "|---|" * n_prod_cols + "---|---|---|"
 
     # Uddrag: første 5 + folkepensions-overgang + sidste 3
@@ -544,22 +544,22 @@ def format_engine_til_llm(result: dict) -> str:
         row = tabel[i]
         har_fp = row["alder"] >= fp_alder
 
-        # Brutto/mdr per produkt
+        # Brutto/år per produkt
         prod_cols = []
         brutto_aar = 0.0
         for pr in loebende:
             aktiv = pr["stopper_ved_alder"] is None or row["alder"] < pr["stopper_ved_alder"]
-            b = pr["mdr_brutto"] if aktiv else 0.0
-            prod_cols.append(f"{b:,.0f}".replace(",", ".") if b else "—")
-            brutto_aar += b * 12
+            b_aar = pr["mdr_brutto"] * 12 if aktiv else 0.0
+            prod_cols.append(f"{b_aar:,.0f}".replace(",", ".") if b_aar else "—")
+            brutto_aar += b_aar
 
-        fp_b  = row.get("fp_mdr_brutto", 0.0)
-        atp_b = row.get("atp_mdr_brutto", 0.0)
+        fp_b_aar  = row.get("fp_mdr_brutto", 0.0) * 12
+        atp_b_aar = row.get("atp_mdr_brutto", 0.0) * 12
 
-        prod_cols.append(f"{fp_b:,.0f}".replace(",", ".") if fp_b else "—")
-        prod_cols.append(f"{atp_b:,.0f}".replace(",", ".") if atp_b else "—")
+        prod_cols.append(f"{fp_b_aar:,.0f}".replace(",", ".") if fp_b_aar else "—")
+        prod_cols.append(f"{atp_b_aar:,.0f}".replace(",", ".") if atp_b_aar else "—")
 
-        brutto_aar += (fp_b + atp_b) * 12
+        brutto_aar += fp_b_aar + atp_b_aar
 
         # Note
         note_parts = []
@@ -580,8 +580,8 @@ def format_engine_til_llm(result: dict) -> str:
     L += [
         "",
         "INSTRUKTION: Rekonstruér ALLE rækker med samme kolonnestruktur. "
-        "Brutto/år = sum af alle produkters månedlige brutto × 12. "
-        "Netto/mdr = efter AM-bidrag, indkomstskat og topskat. "
+        "Produktkolonner = brutto kr/år. Brutto/år = sum af produktkolonner. "
+        "Netto/mdr = samlet månedlig netto efter skat. "
         "Note: 'Topskat' hvis PI > 588.900 kr; 'Modregning -X kr' hvis pensionstillæg reduceres.",
     ]
     return "\n".join(L)

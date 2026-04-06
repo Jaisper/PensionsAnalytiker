@@ -169,9 +169,10 @@ Brug tallene fra "BEREGNET PENSIONSANALYSE" nedenfor.
 **Tabel 1**: FV og månedlig udbetaling per produkt — vis som angivet.
 
 **Tabel 2** — fast kolonnestruktur (rekonstruér ALLE rækker):
-| Alder | [produkt brutto/mdr pr. kolonne] | Folkepension | ATP | Brutto/år | Netto/mdr | Note |
-- Brutto/år = sum af alle kolonners månedlige brutto × 12
-- Netto/mdr = efter AM-bidrag, indkomstskat og topskat
+| Alder | [produkt kr/år] | Folkepension kr/år | ATP kr/år | Brutto/år | Netto/mdr | Note |
+- Alle produktkolonner viser brutto kr/år
+- Brutto/år = sum af alle produktkolonner
+- Netto/mdr = samlet netto månedligt efter AM-bidrag, indkomstskat og topskat
 - Note: "Topskat" hvis samlet PI > 588.900 kr; "Modregning -X kr" hvis pensionstillæg reduceres; ellers "—"
 - Folkepension og ATP vises som "—" inden folkepensionsalderen
 - Engangsbeløb vises kun i Tabel 1

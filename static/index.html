@@ -372,8 +372,9 @@
 </div>
 
 <div id="quick-questions">
-  <button class="quick-btn" onclick="askQuick('Hvad sker der med min pension og udbetaling hvis jeg dør?')">Udbetaling ved død</button>
-  <button class="quick-btn" onclick="askQuick('Hvad dækker min forsikring ved tab af erhvervsevne, og er dækningen tilstrækkelig?')">Tab af erhvervsevne</button>
+  <button class="quick-btn" onclick="askQuick('Giv mig en kort oversigt over det danske pensionssystem — folkepension, ATP og private ordninger.')">Det danske pensionssystem</button>
+  <button class="quick-btn" onclick="askQuick('Hvad er forskellen på ratepension, livsvarig pension, aldersopsparing og kapitalpension?')">Danske pensionsprodukter</button>
+  <button class="quick-btn" onclick="askQuick('Hvordan henter jeg min rapport på pensionsinfo.dk, og hvad viser den?')">Hent PensionsInfo-rapport</button>
 </div>
 
 <div id="chat-container">
@@ -469,8 +470,8 @@
 
   function updateQuickButtons(profil) {
     const container = document.getElementById('quick-questions');
-    // Fjern tidligere dynamiske knapper (behold de to faste)
-    container.querySelectorAll('.quick-btn-dynamic').forEach(b => b.remove());
+    // Erstat alle knapper efter upload
+    container.innerHTML = '';
 
     const ordninger  = profil?.ordninger || [];
     const prod       = profil?.pensionsprodukter || [];
@@ -482,8 +483,10 @@
 
     const dynamic = [];
 
-    // Altid: komplet analyse
+    // Altid efter upload
     dynamic.push(['Komplet pensionsanalyse', 'Lav en komplet analyse af min pensionssituation med udbetalingstabel og anbefalinger.']);
+    dynamic.push(['Udbetaling ved død', 'Hvad sker der med min pension og udbetaling hvis jeg dør?']);
+    dynamic.push(['Tab af erhvervsevne', 'Hvad dækker min forsikring ved tab af erhvervsevne, og er dækningen tilstrækkelig?']);
 
     // Kapitalpension — afgiftsvalg
     if (typer.some(t => t.includes('kapital')))
@@ -504,8 +507,8 @@
     // Skatteoptimering af indbetalinger
     dynamic.push(['Optimer indbetalinger', 'Kan jeg optimere mine pensionsindbetalinger skattemæssigt — fx reducere topskat eller udnytte lofter bedre?']);
 
-    // Tilføj maks 4 dynamiske knapper
-    dynamic.slice(0, 4).forEach(([label, prompt]) => {
+    // Tilføj maks 6 knapper
+    dynamic.slice(0, 6).forEach(([label, prompt]) => {
       const btn = document.createElement('button');
       btn.className = 'quick-btn quick-btn-dynamic';
       btn.textContent = label;

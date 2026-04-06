@@ -494,6 +494,53 @@ class ChatMessage(BaseModel):
     message: str
 
 
+def _parse_mine_svar(message: str, session: dict) -> None:
+    """Udtræk parametre direkte fra 'Mine svar:'-besked og gem i session.
+    Bruges som sikkerhedsnet hvis /api/parametre fejlede stille."""
+    if not message.startswith("Mine svar:"):
+        return
+    p = session["beregningsparametre"]
+
+    def _num(pattern, text, cast=float):
+        m = re.search(pattern, text)
+        if m:
+            try:
+                return cast(m.group(1).replace(".", "").replace(",", "."))
+            except ValueError:
+                pass
+        return None
+
+    v = _num(r"1\.\s*Netto indbetaling:\s*([\d.,]+)", message)
+    if v is not None: p["netto_indbetaling"] = v
+
+    v = _num(r"2\.\s*Forventet afkast:\s*([\d.,]+)", message)
+    if v is not None: p["afkast_pct"] = v
+
+    v = _num(r"3\.\s*Pensionsalder:\s*(\d+)", message, int)
+    if v is not None: p["pensionsalder"] = v
+
+    v = _num(r"4\.\s*Udbetalingsperiode:\s*(\d+)", message, int)
+    if v is not None: p["udbetaling_aar"] = v
+
+    # Kommune → kommuneskat fra samme lookup som frontend
+    m = re.search(r"7\.\s*Kommune:\s*([^\n]+)", message)
+    if m and "kommuneskat_pct" not in p:
+        kommune = m.group(1).strip().lower()
+        KOMMUNESKAT = {
+            "københavn": 23.5, "kobenhavn": 23.5, "frederiksberg": 22.8,
+            "gentofte": 22.0, "lyngby": 22.9, "gladsaxe": 23.8, "rudersdal": 21.9,
+            "hørsholm": 22.5, "horsholm": 22.5, "aarhus": 24.5, "århus": 24.5,
+            "odense": 25.3, "aalborg": 25.4, "esbjerg": 25.6, "randers": 26.0,
+            "kolding": 25.3, "horsens": 25.5, "vejle": 25.5, "roskilde": 26.3,
+            "helsingør": 25.7, "helsingor": 25.7, "næstved": 26.4, "naestved": 26.4,
+            "silkeborg": 24.7, "viborg": 24.9, "herning": 25.3, "svendborg": 26.0,
+        }
+        import unicodedata
+        key = "".join(c for c in unicodedata.normalize("NFD", kommune)
+                      if unicodedata.category(c) != "Mn").replace(" ", "")
+        p["kommuneskat_pct"] = KOMMUNESKAT.get(key, 25.0)
+
+
 @app.post("/api/chat")
 async def chat(req: ChatMessage):
     if req.session_id not in sessions:
@@ -501,6 +548,9 @@ async def chat(req: ChatMessage):
 
     session = sessions[req.session_id]
     session["messages"].append({"role": "user", "content": req.message})
+
+    # Sikkerhedsnet: udtræk parametre fra "Mine svar:"-besked selv hvis /api/parametre fejlede
+    _parse_mine_svar(req.message, session)
 
     client = anthropic.Anthropic()
 

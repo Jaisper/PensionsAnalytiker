@@ -123,40 +123,14 @@ def _extract_pages(pdf_path: str) -> list[str]:
 
 
 def _filter_relevant_pages(pages: list[str]) -> str:
-    """Beholder kun relevante sider — reducerer token-forbrug markant."""
-    RELEVANT_KEYWORDS = [
-        "Pensionsoplysninger for",
-        "Nuværende pensionsopsparinger",
-        "Dine aftaler",
-        "Liv og erstatning",
-        "Tab af erhvervsevne",
-        "Kritisk sygdom",
-        "Sundhedsforsikring",
-        "Øvrige forsikringer",
-    ]
-    # Find tidligste pensionsalder
-    earliest_age = None
-    for page in pages:
-        m = re.search(r"Hvis du går på pension som (\d+)-årig", page)
-        if m:
-            age = int(m.group(1))
-            if earliest_age is None or age < earliest_age:
-                earliest_age = age
-
-    keep_idx = set()
-    for i, page in enumerate(pages):
-        if any(kw in page for kw in RELEVANT_KEYWORDS):
-            keep_idx.add(i)
-            keep_idx.add(i + 1)   # continuation-side (afsnit kan spænde flere sider)
-        elif earliest_age and f"som {earliest_age}-årig" in page:
-            keep_idx.add(i)
-            keep_idx.add(i + 1)
-
-    kept = []
-    for i, page in enumerate(pages):
-        if i in keep_idx and page.strip():
-            kept.append(f"=== SIDE {i+1} ===\n{page}")
-    return "\n\n".join(kept)
+    """Returnerer alle sider — PensionsInfo-rapporter er typisk 15-25 sider og
+    passer inden for token-grænsen. Filtrering var årsag til at aftaler på
+    sider uden sektionsheader blev misset."""
+    return "\n\n".join(
+        f"=== SIDE {i+1} ===\n{page}"
+        for i, page in enumerate(pages)
+        if page.strip()
+    )
 
 
 def _extract_with_llm(text: str) -> dict:

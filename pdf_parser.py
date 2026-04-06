@@ -49,6 +49,7 @@ Return exactly this structure:
       "number": "agreement number",
       "type": "product label",
       "tax": "A or S or F",
+      "current_balance": null,
       "amounts": {"period label": integer_annual_amount}
     }
   ]
@@ -63,10 +64,22 @@ agreements[]
   Never merge different product types into one entry.
 
 agreements[].balance
-  Look in "Nuværende pensionsopsparinger" for individual balances per product type.
-  Also check "Dine aftaler" for "Saldo" or "Opsparing pr." per product.
-  If only a combined total is shown for a provider (not split by product), set null on each product entry.
-  Set null if no individual balance found for this specific product type.
+  Priority order for finding the balance for a specific product:
+
+  1. "Dine aftaler" section — for each agreement block (identified by agreement number), SUM all
+     lines of the form "Pr. [dato] er X kr. placeret [på en kontantkonto / i et værdipapirdepot]".
+     There may be 1–4 such lines per product. Sum them ALL — this total IS the current balance.
+     The text may have wide spacing (layout columns) — still sum all "Pr. … er X kr. placeret" lines
+     that appear between this product's agreement number and the NEXT product's agreement number.
+
+  2. "Nuværende pensionsopsparinger" section: only use this if it shows a line naming BOTH the
+     provider AND product type (e.g. "Nordea Kapitalpension 836.000 kr.").
+     Do NOT use a provider-level total (e.g. "Nordea 2.045.000 kr.") when the provider has multiple
+     products — that would be ambiguous. Set null on each product in that case.
+
+  3. If neither source has a usable per-product amount → set null.
+
+  Never assign a combined provider total to one product when multiple products share that provider.
 
 agreements[].annual_contribution
   Look under each agreement block in "Dine aftaler" for "Indbetaling i alt", "Bidrag i alt", or "Præmie i alt".
@@ -107,11 +120,7 @@ payout_products
   amounts values = ANNUAL amounts (not monthly). Never sum amounts across product types.
   Include ATP and Folkepension if shown.
 
-  current_balance: the current savings balance for THIS specific product line only.
-  Look in "Nuværende pensionsopsparinger" for individual balances per product.
-  If a provider shows one combined balance for multiple products, set null on each individual product
-  (do NOT assign the combined total to one product).
-  Set null if no individual balance found for this specific product.
+  current_balance: same lookup logic as agreements[].balance above — use the same found value.
 """
 
 
@@ -124,11 +133,22 @@ def parse_pensionsinfo_pdf(pdf_path: str) -> dict:
     return _to_legacy_format(raw, full_text)
 
 
+def _extract_page_text(page) -> str:
+    """Forsøger layout-bevidst udtræk (pdfminer LAParams) — bedre til fler-kolonne sider."""
+    try:
+        text = page.extract_text(layout=True)
+        if text and text.strip():
+            return text
+    except Exception:
+        pass
+    return page.extract_text() or ""
+
+
 def _extract_pages(pdf_path: str) -> list[str]:
     pages = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            pages.append(page.extract_text() or "")
+            pages.append(_extract_page_text(page))
     return pages
 
 

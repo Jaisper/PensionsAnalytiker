@@ -614,8 +614,16 @@ Upload derefter PDF'en her øverst til højre.`,
       if (nr) nrCount[nr] = (nrCount[nr] || 0) + 1;
     });
     const multiNrs = Object.keys(nrCount).filter(nr => nrCount[nr] > 1);
+    const sortProdtype = pt => {
+      const s = (pt || '').toLowerCase();
+      if (s.includes('rate'))          return 0;
+      if (s.includes('livsvarig') || s.includes('livrente')) return 1;
+      if (s.includes('aldersopsparing')) return 2;
+      return 3;
+    };
     const multiProds = multiNrs.flatMap(nr =>
-      (profil?.pensionsprodukter || []).filter(p => p.aftalenr === nr));
+      (profil?.pensionsprodukter || []).filter(p => p.aftalenr === nr))
+      .sort((a, b) => sortProdtype(a.produkttype) - sortProdtype(b.produkttype));
 
     // Find selskabsnavn for multi-produkt
     const multiSelskab = multiProds.length
@@ -688,13 +696,12 @@ Upload derefter PDF'en her øverst til højre.`,
       const salHint = expectedSal ? ` (total: ${fmtKr(expectedSal)} kr.)` : '';
 
       const pmt_rows = multiProds.map((p, i) => {
-        const est = p.estimated_pmt ? Math.round(p.estimated_pmt / 1000) * 1000 : '';
-        const hint = est ? `<span style="font-size:0.75rem;color:#9ab0c8;margin-left:5px">(est. ${est.toLocaleString('da-DK')} kr/år)</span>` : '';
+        const def = p.default_pmt != null ? p.default_pmt : (p.estimated_pmt ? Math.round(p.estimated_pmt / 1000) * 1000 : '');
         return `<tr style="border:none"><td style="padding:3px 2px;font-size:0.82rem;color:#4a6a80;padding-right:10px;min-width:140px">
           ${p.produkttype}</td><td style="padding:3px 0;white-space:nowrap">
-          <input type="number" id="iq6pmt_${i}" value="${est}" min="0" step="1000" style="width:90px"
+          <input type="number" id="iq6pmt_${i}" value="${def}" min="0" step="1000" style="width:90px"
             oninput="updateQ6Sum('pmt',${multiProds.length},${expectedPmt})">
-          <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">kr/år</span>${hint}</td></tr>`;
+          <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">kr/år</span></td></tr>`;
       }).join('');
 
       const sal_rows = multiProds.map((p, i) => {
@@ -720,19 +727,19 @@ Upload derefter PDF'en her øverst til højre.`,
         <td class="qi">
           <div style="margin-bottom:7px">
             <label style="font-size:0.82rem;cursor:pointer;margin-right:14px">
-              <input type="radio" name="iq6mode" value="pmt" id="iq6mode_pmt" onchange="toggleQ6Mode()">
+              <input type="radio" name="iq6mode" value="pmt" id="iq6mode_pmt" onchange="toggleQ6Mode()" checked>
               Indbetalinger${pmtHint}
             </label>
             <label style="font-size:0.82rem;cursor:pointer">
-              <input type="radio" name="iq6mode" value="sal" id="iq6mode_sal" onchange="toggleQ6Mode()" checked>
+              <input type="radio" name="iq6mode" value="sal" id="iq6mode_sal" onchange="toggleQ6Mode()">
               Nuværende saldi${salHint}
             </label>
           </div>
-          <div id="iq6_pmt_block" style="display:none">
+          <div id="iq6_pmt_block">
             <table style="border-collapse:collapse">${pmt_rows}</table>
             <div id="iq6_pmt_sum" style="font-size:0.8rem;margin-top:4px;color:#5a7a90"></div>
           </div>
-          <div id="iq6_sal_block">
+          <div id="iq6_sal_block" style="display:none">
             <table style="border-collapse:collapse">${sal_rows}</table>
             <div id="iq6_sal_sum" style="font-size:0.8rem;margin-top:4px;color:#5a7a90"></div>
           </div>
@@ -830,8 +837,10 @@ Upload derefter PDF'en her øverst til højre.`,
       if (nr) nrCount[nr] = (nrCount[nr] || 0) + 1;
     });
     const multiNrs = Object.keys(nrCount).filter(nr => nrCount[nr] > 1);
+    const sortPT = pt => { const s=(pt||'').toLowerCase(); return s.includes('rate')?0:s.includes('livsvarig')||s.includes('livrente')?1:s.includes('aldersopsparing')?2:3; };
     const multiProds = multiNrs.flatMap(nr =>
-      (profil?.pensionsprodukter || []).filter(p => p.aftalenr === nr));
+      (profil?.pensionsprodukter || []).filter(p => p.aftalenr === nr))
+      .sort((a,b) => sortPT(a.produkttype) - sortPT(b.produkttype));
     if (multiProds.length > 1) {
       const multiSelskab = (profil?.ordninger || []).find(o => o.aftalenr === multiNrs[0])?.selskab || 'Firmapension';
       const mode = document.querySelector('input[name="iq6mode"]:checked')?.value ?? 'sal';

@@ -474,6 +474,15 @@ async def upload_rapport(session_id: str, file: UploadFile = File(...)):
         # Fjern rå tekst fra response (for stor)
         profil_response = {k: v for k, v in profil.items() if k != "raa_tekst"}
 
+        # Injicér default_pmt (rate-loft-regel) i hvert produkt
+        samlet_ind = float(profil.get("samlet_aarlig_indbetaling") or 0)
+        fordeling  = fordel_pmt_default(profil, samlet_ind)
+        ford_lookup = {(f["aftalenr"], f["produkttype"]): f["default_pmt"] for f in fordeling}
+        for prod in profil_response.get("pensionsprodukter", []):
+            key = (str(prod.get("aftalenr") or ""), prod.get("produkttype") or "")
+            if key in ford_lookup:
+                prod["default_pmt"] = ford_lookup[key]
+
         # Byg hele Trin 0 i Python (tabel + forklaringer)
         trin0 = build_trin0(profil)
         sporgsmaal1 = build_sporgsmaal1(profil)

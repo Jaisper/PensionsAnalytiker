@@ -22,12 +22,12 @@ RULES:
 - Amounts: integers in DKK, no separators (e.g. 771000 not "771.000 kr.")
 - Missing value: null (never 0 unless explicitly stated as 0)
 - Do not invent numbers
+- Do NOT extract CPR number
 
 Return exactly this structure:
 
 {
   "name": "full name of the insured person",
-  "cpr": "CPR-number as shown on the front page, e.g. '010165-1234' or '0101651234' — digits 5+6 are birth year",
   "agreements": [
     {
       "provider": "company name",
@@ -279,6 +279,24 @@ def _estimer_pmt_fordeling(
                         prod["estimated_saldo"] = int(pv_raw * scale)
 
 
+def _extract_foedselsdato_fra_tekst(text: str) -> tuple[str, "int | None"]:
+    """Udtrækker fødselsdato og alder fra CPR-nummer i rå PDF-tekst uden at gemme CPR."""
+    from datetime import date as _date
+    # CPR-format: DDMMYY-XXXX eller DDMMYYXXXX
+    m = re.search(r'\b(\d{2})(\d{2})(\d{2})[-–]?\d{4}\b', text)
+    if not m:
+        return "", None
+    dd, mm_s, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    yyyy = 1900 + yy
+    try:
+        foedselsdato = f"{dd:02d}.{mm_s:02d}.{yyyy}"
+        today = _date.today()
+        alder = today.year - yyyy - ((today.month, today.day) < (mm_s, dd))
+        return foedselsdato, alder
+    except ValueError:
+        return "", None
+
+
 def _to_legacy_format(raw: dict, full_text: str) -> dict:
     """Konverterer nyt JSON til det format resten af appen forventer."""
 
@@ -287,31 +305,13 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
             return int(v)
         return None
 
-    # ── Person — udled fødselsdato og alder fra CPR ──
-    import re as _re
-    from datetime import date as _date
-
-    foedselsdato = ""
-    alder = None
-    cpr_raw = str(raw.get("cpr") or "")
-    cpr_digits = _re.sub(r"\D", "", cpr_raw)  # fjern bindestreg etc.
-    if len(cpr_digits) >= 6:
-        dd  = int(cpr_digits[0:2])
-        mm  = int(cpr_digits[2:4])
-        yy  = int(cpr_digits[4:6])
-        # Århundrede: pensionskunder er altid født i 1900-tallet
-        yyyy = 1900 + yy
-        try:
-            foedselsdato = f"{dd:02d}.{mm:02d}.{yyyy}"
-            today = _date.today()
-            alder = today.year - yyyy - ((today.month, today.day) < (mm, dd))
-        except ValueError:
-            pass
+    # ── Person — udled fødselsdato og alder fra rå tekst (ikke via LLM) ──
+    foedselsdato, alder = _extract_foedselsdato_fra_tekst(full_text)
 
     person = {
-        "navn":         raw.get("name", ""),
-        "foedselsdato": foedselsdato,
-        "alder":        alder,
+        "navn":         raw.get("name", ""),   # kun til lokal skærmvisning — sendes ikke til LLM
+        "foedselsdato": foedselsdato,           # kun til lokal skærmvisning
+        "alder":        alder,                  # afledt værdi — må sendes til LLM
         "rapport_dato": "",
     }
 
@@ -420,13 +420,8 @@ def format_profil_til_tekst(profil: dict) -> str:
     total_ops = sum(profil.get("opsparing_total", {}).values())
 
     alder     = p.get("alder")
-    foedsels  = p.get("foedselsdato", "")
 
-    linjer = [
-        f"PENSIONSPROFIL FOR: {p.get('navn', 'Ukendt')}",
-    ]
-    if foedsels:
-        linjer.append(f"Født: {foedsels}")
+    linjer = ["PENSIONSPROFIL"]
     if alder:
         linjer.append(f"Nuværende alder: {alder} år")
     if tid_alder:

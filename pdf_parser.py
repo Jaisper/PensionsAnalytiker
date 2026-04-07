@@ -22,12 +22,12 @@ RULES:
 - Amounts: integers in DKK, no separators (e.g. 771000 not "771.000 kr.")
 - Missing value: null (never 0 unless explicitly stated as 0)
 - Do not invent numbers
-- Do NOT extract CPR number
 
 Return exactly this structure:
 
 {
   "name": "full name of the insured person",
+  "cpr": "CPR-number as shown on the front page, e.g. '010165-1234' or '0101651234' — digits 5+6 are birth year",
   "agreements": [
     {
       "provider": "company name",
@@ -279,66 +279,6 @@ def _estimer_pmt_fordeling(
                         prod["estimated_saldo"] = int(pv_raw * scale)
 
 
-def _extract_foedselsdato_fra_tekst(text: str) -> tuple[str, "int | None"]:
-    """Udtrækker fødselsdato og alder fra CPR i rå PDF-tekst.
-    Søger primært på første side (CPR vises på forsiden af PensionsInfo-rapporter).
-
-    Strategi (i prioriteret rækkefølge):
-      1. CPR med synlige ciffer 5-6 (DDMMYY-...) — vinster over maskeret form
-      2. Direkte aldersangivelse i teksten: "55-årig", "du er 55 år", "pension som 63-årig"
-    """
-    from datetime import date as _date
-
-    def _cpr_forsøg(haystack: str) -> tuple[str, "int | None"]:
-        # Matcher DDMMYY efterfulgt af bindestreg og mindst 4 tegn (cifre ELLER maskerede)
-        # Eksempler: 270354-1234  270354-****  270354-XXXX
-        for m in re.finditer(r'\b(\d{2})(\d{2})(\d{2})-[\dXx*]{4}\b', haystack):
-            dd, mm_s, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            yyyy = 1900 + yy   # korrekt for alle pensionskunder (født 1940–1999)
-            try:
-                _date(yyyy, mm_s, dd)
-                today = _date.today()
-                alder = today.year - yyyy - ((today.month, today.day) < (mm_s, dd))
-                if 25 <= alder <= 85:
-                    return f"{dd:02d}.{mm_s:02d}.{yyyy}", alder
-            except ValueError:
-                continue
-        return "", None
-
-    def _alder_fra_tekst(haystack: str) -> tuple[str, "int | None"]:
-        """Udled alder direkte fra tekst-mønstre — bruges hvis CPR er fuldt maskeret."""
-        patterns = [
-            r'pension som (\d{2})-årig',   # "Hvis du går på pension som 63-årig"
-            r'\bdu er (\d{2}) år\b',        # "Du er 54 år"
-            r'\b(\d{2})-årig\b',            # generisk X-årig
-        ]
-        for pat in patterns:
-            for m in re.finditer(pat, haystack, re.IGNORECASE):
-                try:
-                    alder = int(m.group(1))
-                    if 25 <= alder <= 85:
-                        from datetime import date
-                        foedselsaar = date.today().year - alder
-                        return f"01.01.{foedselsaar}", alder   # approksimeret dato
-                except ValueError:
-                    continue
-        return "", None
-
-    # 1. forsøg: kun første side (~3000 tegn)
-    result = _cpr_forsøg(text[:3000])
-    if result[1] is not None:
-        return result
-    # 2. forsøg: hele teksten
-    result = _cpr_forsøg(text)
-    if result[1] is not None:
-        return result
-    # 3. fallback: læs alder direkte fra tekst (første side, så hele)
-    result = _alder_fra_tekst(text[:3000])
-    if result[1] is not None:
-        return result
-    return _alder_fra_tekst(text)
-
-
 def _to_legacy_format(raw: dict, full_text: str) -> dict:
     """Konverterer nyt JSON til det format resten af appen forventer."""
 
@@ -347,13 +287,31 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
             return int(v)
         return None
 
-    # ── Person — udled fødselsdato og alder fra rå tekst (ikke via LLM) ──
-    foedselsdato, alder = _extract_foedselsdato_fra_tekst(full_text)
+    # ── Person — udled fødselsdato og alder fra CPR ──
+    import re as _re
+    from datetime import date as _date
+
+    foedselsdato = ""
+    alder = None
+    cpr_raw = str(raw.get("cpr") or "")
+    cpr_digits = _re.sub(r"\D", "", cpr_raw)  # fjern bindestreg etc.
+    if len(cpr_digits) >= 6:
+        dd  = int(cpr_digits[0:2])
+        mm  = int(cpr_digits[2:4])
+        yy  = int(cpr_digits[4:6])
+        # Århundrede: pensionskunder er altid født i 1900-tallet
+        yyyy = 1900 + yy
+        try:
+            foedselsdato = f"{dd:02d}.{mm:02d}.{yyyy}"
+            today = _date.today()
+            alder = today.year - yyyy - ((today.month, today.day) < (mm, dd))
+        except ValueError:
+            pass
 
     person = {
-        "navn":         raw.get("name", ""),   # kun til lokal skærmvisning — sendes ikke til LLM
-        "foedselsdato": foedselsdato,           # kun til lokal skærmvisning
-        "alder":        alder,                  # afledt værdi — må sendes til LLM
+        "navn":         raw.get("name", ""),
+        "foedselsdato": foedselsdato,
+        "alder":        alder,
         "rapport_dato": "",
     }
 
@@ -462,8 +420,13 @@ def format_profil_til_tekst(profil: dict) -> str:
     total_ops = sum(profil.get("opsparing_total", {}).values())
 
     alder     = p.get("alder")
+    foedsels  = p.get("foedselsdato", "")
 
-    linjer = ["PENSIONSPROFIL"]
+    linjer = [
+        f"PENSIONSPROFIL FOR: {p.get('navn', 'Ukendt')}",
+    ]
+    if foedsels:
+        linjer.append(f"Født: {foedsels}")
     if alder:
         linjer.append(f"Nuværende alder: {alder} år")
     if tid_alder:

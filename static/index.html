@@ -630,14 +630,19 @@ Upload derefter PDF'en her øverst til højre.`,
       ? (profil?.ordninger || []).find(o => o.aftalenr === multiNrs[0])?.selskab || 'Firmapension'
       : '';
 
+    // Rapport-beløb som reference-hint (inkl. forsikringer — må ikke bruges som default)
+    const iq1Hint = samletPmt
+      ? `<br><span style="font-size:0.75rem;color:#9ab0c8">(Rapporten viser ${Number(samletPmt).toLocaleString('da-DK')} kr/år inkl. forsikringer og ATP)</span>`
+      : '';
+
     // Byg rækker
     let rows = `
       <tr>
         <td class="ql"><strong>1.</strong> Netto indbetaling til pension
-          <div class="qdesc">Det beløb du/din arbejdsgiver samlet indbetaler om året</div>
+          <div class="qdesc">Det beløb du/din arbejdsgiver indbetaler netto til selve opsparingen om året${iq1Hint}</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq1" value="${samletPmt}" min="0" step="1000">
+          <input type="number" id="iq1" value="" min="0" step="1000" oninput="autoFillQ6Pmt()">
           <span class="unit">kr/år</span>
         </td>
       </tr>
@@ -696,10 +701,11 @@ Upload derefter PDF'en her øverst til højre.`,
       const salHint = expectedSal ? ` (total: ${fmtKr(expectedSal)} kr.)` : '';
 
       const pmt_rows = multiProds.map((p, i) => {
-        const def = p.default_pmt != null ? p.default_pmt : (p.estimated_pmt ? Math.round(p.estimated_pmt / 1000) * 1000 : '');
+        const ptypeLower = (p.produkttype || '').toLowerCase();
         return `<tr style="border:none"><td style="padding:3px 2px;font-size:0.82rem;color:#4a6a80;padding-right:10px;min-width:140px">
           ${p.produkttype}</td><td style="padding:3px 0;white-space:nowrap">
-          <input type="number" id="iq6pmt_${i}" value="${def}" min="0" step="1000" style="width:90px"
+          <input type="number" id="iq6pmt_${i}" value="" min="0" step="1000" style="width:90px"
+            data-ptype="${ptypeLower}"
             oninput="updateQ6Sum('pmt',${multiProds.length},${expectedPmt})">
           <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">kr/år</span></td></tr>`;
       }).join('');
@@ -810,6 +816,28 @@ Upload derefter PDF'en her øverst til højre.`,
     }
     el.style.color = color;
     el.textContent = `Sum: ${fmt(sum)} ${unit}${note}`;
+  }
+
+  function autoFillQ6Pmt() {
+    const iq1Val = parseFloat(document.getElementById('iq1')?.value) || 0;
+    const inputs = document.querySelectorAll('[id^="iq6pmt_"]');
+    if (!inputs.length) return;
+    const RATE_LOFT = 63100;
+    let resterende = iq1Val;
+    inputs.forEach(input => {
+      const pt = (input.dataset.ptype || '');
+      let alloc;
+      if (pt.includes('rate')) {
+        alloc = Math.min(resterende, RATE_LOFT);
+      } else if (pt.includes('livsvarig') || pt.includes('livrente')) {
+        alloc = resterende;
+      } else {
+        alloc = 0;
+      }
+      resterende = Math.max(0, resterende - alloc);
+      input.value = iq1Val > 0 ? alloc : '';
+    });
+    if (iq1Val > 0) updateQ6Sum('pmt', inputs.length, 0);
   }
 
   async function submitInterviewForm() {

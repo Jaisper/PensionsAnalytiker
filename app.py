@@ -61,6 +61,11 @@ Brugeren har ALLEREDE set:
 Du skal ALDRIG vise en oversigtstabel eller forklare ordningstyper — det er allerede gjort.
 Du skal ALDRIG gentage Spørgsmål 1 — det er allerede stillet.
 
+**Spørgsmål 1 kræver et eksplicit tal fra brugeren** — det kan IKKE besvares med "ok" eller bekræftes med rappportens beløb.
+Rapporten viser et samlet beløb inkl. forsikringspræmier og ATP — det er kun vist som reference.
+Brugeren skal selv oplyse det beløb de forventer at indbetale netto til selve opsparingen.
+Har brugeren ikke svaret på spm 1 endnu: afvent svaret inden du stiller spm 6.
+
 **Brugeren kan svare på ét eller alle spørgsmål på én gang.**
 Udled alle svar der er givet — stil KUN de spørgsmål der mangler svar.
 Har brugeren svaret på alle relevante spørgsmål i én besked: gå DIREKTE til den komplette analyse.
@@ -478,16 +483,8 @@ async def upload_rapport(session_id: str, file: UploadFile = File(...)):
         sessions[session_id]["profil_tekst"] = profil_tekst
 
         # Fjern rå tekst fra response (for stor)
+        # default_pmt beregnes IKKE her — afventer brugerens svar på spm 1
         profil_response = {k: v for k, v in profil.items() if k != "raa_tekst"}
-
-        # Injicér default_pmt (rate-loft-regel) i hvert produkt
-        samlet_ind = float(profil.get("samlet_aarlig_indbetaling") or 0)
-        fordeling  = fordel_pmt_default(profil, samlet_ind)
-        ford_lookup = {(f["aftalenr"], f["produkttype"]): f["default_pmt"] for f in fordeling}
-        for prod in profil_response.get("pensionsprodukter", []):
-            key = (str(prod.get("aftalenr") or ""), prod.get("produkttype") or "")
-            if key in ford_lookup:
-                prod["default_pmt"] = ford_lookup[key]
 
         # Byg hele Trin 0 i Python (tabel + forklaringer)
         trin0 = build_trin0(profil)

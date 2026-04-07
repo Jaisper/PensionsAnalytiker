@@ -698,7 +698,7 @@ Upload derefter PDF'en her øverst til højre.`,
       const expectedSal = multiOrdning?.opsparing || multiProds.reduce((s, p) => s + (p.opsparing || 0), 0);
 
       const fmtKr  = n => n ? n.toLocaleString('da-DK') : '0';
-      const pmtHint = expectedPmt ? ` (total: ${fmtKr(expectedPmt)} kr/år)` : '';
+      const pmtHint = '';
       const salHint = expectedSal ? ` (total: ${fmtKr(expectedSal)} kr.)` : '';
 
       const pmt_rows = multiProds.map((p, i) => {

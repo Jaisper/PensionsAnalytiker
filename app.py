@@ -219,11 +219,17 @@ def get_system_prompt(session_id: str) -> str:
 
     engine_tekst = _kør_engine(session_id)
 
-    # Beregn default PMT-fordeling til Spørgsmål 6
-    netto_indbetaling = float(params.get("netto_indbetaling") or 0)
-    fordeling = fordel_pmt_default(profil, netto_indbetaling) if profil else []
-    spm6_fordeling = format_fordeling_til_llm(fordeling) if fordeling else \
-        "*(Ingen multi-produkt firmapension fundet — Spørgsmål 6 ikke relevant)*"
+    # Beregn default PMT-fordeling til Spørgsmål 6 — kun når spm 1 er besvaret
+    netto_indbetaling = params.get("netto_indbetaling")
+    if not profil:
+        spm6_fordeling = "*(Ingen rapport uploadet — Spørgsmål 6 ikke relevant)*"
+    elif netto_indbetaling is None:
+        spm6_fordeling = "*(Afventer spm 1: stil Spørgsmål 6 FØRST når brugerens samlede netto-indbetaling er oplyst)*"
+    else:
+        fordeling = fordel_pmt_default(profil, float(netto_indbetaling))
+        spm6_fordeling = format_fordeling_til_llm(fordeling) if fordeling else \
+            "*(Ingen multi-produkt firmapension fundet — Spørgsmål 6 ikke relevant)*"
+    netto_indbetaling = float(netto_indbetaling or 0)
 
     return SYSTEM_PROMPT.format(
         profil=profil_tekst,

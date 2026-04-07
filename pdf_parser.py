@@ -282,31 +282,61 @@ def _estimer_pmt_fordeling(
 def _extract_foedselsdato_fra_tekst(text: str) -> tuple[str, "int | None"]:
     """Udtrækker fødselsdato og alder fra CPR i rå PDF-tekst.
     Søger primært på første side (CPR vises på forsiden af PensionsInfo-rapporter).
-    Kræver bindestreg og validerer dato + rimelig pensionsalder (25–85 år).
+
+    Strategi (i prioriteret rækkefølge):
+      1. CPR med synlige ciffer 5-6 (DDMMYY-...) — vinster over maskeret form
+      2. Direkte aldersangivelse i teksten: "55-årig", "du er 55 år", "pension som 63-årig"
     """
     from datetime import date as _date
 
-    def _forsøg(haystack: str) -> tuple[str, "int | None"]:
-        # CPR kræver bindestreg: DDMMYY-XXXX
-        for m in re.finditer(r'\b(\d{2})(\d{2})(\d{2})-\d{4}\b', haystack):
+    def _cpr_forsøg(haystack: str) -> tuple[str, "int | None"]:
+        # Matcher DDMMYY efterfulgt af bindestreg og mindst 4 tegn (cifre ELLER maskerede)
+        # Eksempler: 270354-1234  270354-****  270354-XXXX
+        for m in re.finditer(r'\b(\d{2})(\d{2})(\d{2})-[\dXx*]{4}\b', haystack):
             dd, mm_s, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            yyyy = 1900 + yy
+            yyyy = 1900 + yy   # korrekt for alle pensionskunder (født 1940–1999)
             try:
-                _date(yyyy, mm_s, dd)          # valider dato
+                _date(yyyy, mm_s, dd)
                 today = _date.today()
                 alder = today.year - yyyy - ((today.month, today.day) < (mm_s, dd))
-                if 25 <= alder <= 85:          # sanity-check for pensionskunde
+                if 25 <= alder <= 85:
                     return f"{dd:02d}.{mm_s:02d}.{yyyy}", alder
             except ValueError:
                 continue
         return "", None
 
-    # 1. forsøg: kun første side (~3000 tegn) — CPR er altid på forsiden
-    result = _forsøg(text[:3000])
+    def _alder_fra_tekst(haystack: str) -> tuple[str, "int | None"]:
+        """Udled alder direkte fra tekst-mønstre — bruges hvis CPR er fuldt maskeret."""
+        patterns = [
+            r'pension som (\d{2})-årig',   # "Hvis du går på pension som 63-årig"
+            r'\bdu er (\d{2}) år\b',        # "Du er 54 år"
+            r'\b(\d{2})-årig\b',            # generisk X-årig
+        ]
+        for pat in patterns:
+            for m in re.finditer(pat, haystack, re.IGNORECASE):
+                try:
+                    alder = int(m.group(1))
+                    if 25 <= alder <= 85:
+                        from datetime import date
+                        foedselsaar = date.today().year - alder
+                        return f"01.01.{foedselsaar}", alder   # approksimeret dato
+                except ValueError:
+                    continue
+        return "", None
+
+    # 1. forsøg: kun første side (~3000 tegn)
+    result = _cpr_forsøg(text[:3000])
     if result[1] is not None:
         return result
-    # 2. fallback: hele teksten
-    return _forsøg(text)
+    # 2. forsøg: hele teksten
+    result = _cpr_forsøg(text)
+    if result[1] is not None:
+        return result
+    # 3. fallback: læs alder direkte fra tekst (første side, så hele)
+    result = _alder_fra_tekst(text[:3000])
+    if result[1] is not None:
+        return result
+    return _alder_fra_tekst(text)
 
 
 def _to_legacy_format(raw: dict, full_text: str) -> dict:

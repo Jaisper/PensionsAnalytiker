@@ -454,7 +454,12 @@ def fordel_pmt_default(profil: dict, netto_indbetaling: float) -> list[dict]:
     Fordelingsregel:
       1. Ratepension fyldes op til loftet (63.100 kr/år)
       2. Rest → Livsvarig pension
-      3. Aldersopsparing: 0 (har eget separat loft — indberettes særskilt)
+      3. Aldersopsparing: 0 (indberettes særskilt med eget loft)
+
+    Prioritering af samlet beløb per aftale:
+      A. Brugerens netto_indbetaling fra spm 1 (eksplicit angivet) — primær kilde.
+         Ved flere multi-produkt aftaler fordeles beløbet proportionalt efter saldo.
+      B. PDF-parsede aarlig_indbetaling per aftale — bruges kun hvis A ikke er angivet.
 
     Returnerer kun aftaler med 2+ produkter, sorteret Rate → Liv → Aldersopsparing.
     """
@@ -472,17 +477,45 @@ def fordel_pmt_default(profil: dict, netto_indbetaling: float) -> list[dict]:
             continue
         by_nr[nr].append(prod)
 
+    # Kun aftaler med 2+ produkter
+    multi_aftaler = {nr: prods for nr, prods in by_nr.items() if len(prods) >= 2}
+    if not multi_aftaler:
+        return []
+
+    # Bestem samlet PMT per aftale
+    bruger_beloeb = float(netto_indbetaling or 0)
+    if bruger_beloeb > 0:
+        # Brugerens tal fra spm 1 er primærkilden
+        if len(multi_aftaler) == 1:
+            nr = next(iter(multi_aftaler))
+            pmt_by_nr = {nr: bruger_beloeb}
+        else:
+            # Flere multi-produkt aftaler: fordel proportionalt efter samlet saldo
+            saldo_by_nr = {
+                nr: sum(float(p.get("opsparing") or p.get("estimated_saldo") or 0) for p in prods)
+                for nr, prods in multi_aftaler.items()
+            }
+            total_saldo = sum(saldo_by_nr.values())
+            pmt_by_nr = {
+                nr: bruger_beloeb * (saldo_by_nr[nr] / total_saldo) if total_saldo > 0
+                    else bruger_beloeb / len(multi_aftaler)
+                for nr in multi_aftaler
+            }
+    else:
+        # Fallback: brug PDF-parsede aarlig_indbetaling per aftale
+        pmt_by_nr = {
+            nr: next(
+                (float(o["aarlig_indbetaling"]) for o in ordninger
+                 if str(o.get("aftalenr") or "") == nr and o.get("aarlig_indbetaling")),
+                0.0,
+            )
+            for nr in multi_aftaler
+        }
+
     resultater = []
-    for nr, prods in by_nr.items():
-        if len(prods) < 2:
-            continue
-
-        samlet_pmt = next(
-            (float(o["aarlig_indbetaling"]) for o in ordninger
-             if str(o.get("aftalenr") or "") == nr and o.get("aarlig_indbetaling")),
-            float(netto_indbetaling or 0),
-        )
-
+    for nr, prods in multi_aftaler.items():
+        samlet_pmt = pmt_by_nr.get(nr, 0.0)
+        # Rate → Livsvarig/Livrente → Aldersopsparing
         sorted_prods = sorted(prods, key=lambda p: _sort_produkttype(p.get("produkttype", "")))
         resterende = samlet_pmt
         for prod in sorted_prods:
@@ -521,7 +554,7 @@ def format_fordeling_til_llm(fordeling: list[dict]) -> str:
         selskab = items[0]["selskab"]
         samlet  = sum(i["default_pmt"] for i in items)
         linjer.append(f"**{selskab}** (aftale {nr}) — samlet indbetaling: {samlet:,.0f} kr/år".replace(",", "."))
-        for item in items:
+        for item in sorted(items, key=lambda i: _sort_produkttype(i.get("produkttype", ""))):
             opsp_s = f"{item['opsparing']:,.0f} kr.".replace(",", ".") if item["opsparing"] else "ukendt"
             linjer.append(
                 f"  – {item['produkttype']}: saldo {opsp_s} | "

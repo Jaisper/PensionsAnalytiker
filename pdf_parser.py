@@ -280,21 +280,33 @@ def _estimer_pmt_fordeling(
 
 
 def _extract_foedselsdato_fra_tekst(text: str) -> tuple[str, "int | None"]:
-    """Udtrækker fødselsdato og alder fra CPR-nummer i rå PDF-tekst uden at gemme CPR."""
+    """Udtrækker fødselsdato og alder fra CPR i rå PDF-tekst.
+    Søger primært på første side (CPR vises på forsiden af PensionsInfo-rapporter).
+    Kræver bindestreg og validerer dato + rimelig pensionsalder (25–85 år).
+    """
     from datetime import date as _date
-    # CPR-format: DDMMYY-XXXX eller DDMMYYXXXX
-    m = re.search(r'\b(\d{2})(\d{2})(\d{2})[-–]?\d{4}\b', text)
-    if not m:
+
+    def _forsøg(haystack: str) -> tuple[str, "int | None"]:
+        # CPR kræver bindestreg: DDMMYY-XXXX
+        for m in re.finditer(r'\b(\d{2})(\d{2})(\d{2})-\d{4}\b', haystack):
+            dd, mm_s, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            yyyy = 1900 + yy
+            try:
+                _date(yyyy, mm_s, dd)          # valider dato
+                today = _date.today()
+                alder = today.year - yyyy - ((today.month, today.day) < (mm_s, dd))
+                if 25 <= alder <= 85:          # sanity-check for pensionskunde
+                    return f"{dd:02d}.{mm_s:02d}.{yyyy}", alder
+            except ValueError:
+                continue
         return "", None
-    dd, mm_s, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
-    yyyy = 1900 + yy
-    try:
-        foedselsdato = f"{dd:02d}.{mm_s:02d}.{yyyy}"
-        today = _date.today()
-        alder = today.year - yyyy - ((today.month, today.day) < (mm_s, dd))
-        return foedselsdato, alder
-    except ValueError:
-        return "", None
+
+    # 1. forsøg: kun første side (~3000 tegn) — CPR er altid på forsiden
+    result = _forsøg(text[:3000])
+    if result[1] is not None:
+        return result
+    # 2. fallback: hele teksten
+    return _forsøg(text)
 
 
 def _to_legacy_format(raw: dict, full_text: str) -> dict:

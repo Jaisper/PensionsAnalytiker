@@ -28,7 +28,7 @@ import anthropic
 
 from pdf_parser import parse_pensionsinfo_pdf, format_profil_til_tekst
 from pension_rules import PENSION_REGLER
-from engine import generer_udbetalingstabel, format_engine_til_llm, SkatParametre
+from engine import generer_udbetalingstabel, format_engine_til_llm, SkatParametre, fordel_pmt_default, format_fordeling_til_llm
 
 app = FastAPI(title="PensionsAnalytiker")
 
@@ -78,17 +78,18 @@ Har brugeren svaret på alle relevante spørgsmål i én besked: gå DIREKTE til
 - Standardantagelse hvis ikke spurgt: A (40% afgift).
 
 **Spørgsmål 6** — stil **kun hvis der er en firmapension med flere produkttyper (fx Velliv med Ratepension + Livsvarig + Aldersopsparing):**
-Vis først de kendte nuværende saldi per produkt, og præsentér derefter den back-beregnede PMT-fordeling som standard:
-"Din [selskab] firmapension har følgende nuværende saldi:
-  – [Produkttype 1]: [saldo] kr.
-  – [Produkttype 2]: [saldo] kr.
-  – [Produkttype 3]: [saldo] kr.
-  Samlet indbetaling er [total] kr/år. Ud fra rapporten estimeres fordelingen til:
-  – [Produkttype 1]: ca. [X] kr/år
-  – [Produkttype 2]: ca. [Y] kr/år
-  – [Produkttype 3]: ca. [Z] kr/år
-  Jeg bruger disse estimater — skriv 'ok' for at bekræfte, eller opgiv den præcise fordeling."
-- Standardantagelse: brug de estimerede beløb direkte uden at vente på svar, medmindre de virker åbenlyst forkerte.
+Præsentér altid produkterne i denne faste rækkefølge: **Ratepension → Livsvarig pension → Aldersopsparing**.
+Brug den BEREGNEDE standardfordeling herunder (Rate fyldes op til 63.100 kr/år-loftet, resten til Livsvarig):
+
+{spm6_fordeling}
+
+Vis standardindbetalingsfordeling (primær) og nuværende saldi (sekundær kontekst):
+"Din [selskab] firmapension — samlet indbetaling [total] kr/år fordeles som standard:
+  – Ratepension: [X] kr/år  (nuværende saldo: [saldo] kr.)
+  – Livsvarig pension: [Y] kr/år  (nuværende saldo: [saldo] kr.)
+  – Aldersopsparing: 0 kr/år  (nuværende saldo: [saldo] kr.)
+  Skriv 'ok' for at bekræfte, eller opgiv din præcise fordeling."
+- Standardantagelse: brug de beregnede beløb direkte uden at vente på svar.
 
 **Spørgsmål 7:** Hvilken **kommune** bor du i? (bruges til beregning af kommuneskat og topskatteoptimering)
 - Hvis ukendt: brug landsgennemsnit ca. 25,0% kommuneskat.
@@ -218,11 +219,18 @@ def get_system_prompt(session_id: str) -> str:
 
     engine_tekst = _kør_engine(session_id)
 
+    # Beregn default PMT-fordeling til Spørgsmål 6
+    netto_indbetaling = float(params.get("netto_indbetaling") or 0)
+    fordeling = fordel_pmt_default(profil, netto_indbetaling) if profil else []
+    spm6_fordeling = format_fordeling_til_llm(fordeling) if fordeling else \
+        "*(Ingen multi-produkt firmapension fundet — Spørgsmål 6 ikke relevant)*"
+
     return SYSTEM_PROMPT.format(
         profil=profil_tekst,
         parametre=parametre_tekst,
         engine_analyse=engine_tekst,
         tidligste_pensionsalder=tidligste,
+        spm6_fordeling=spm6_fordeling,
     )
 
 

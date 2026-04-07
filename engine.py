@@ -435,6 +435,102 @@ def generer_udbetalingstabel(
     }
 
 
+# ── Indbetalingsfordeling ─────────────────────────────────────────────────────
+
+_PRODUKTTYPE_SORT = [("rate", 0), ("livsvarig", 1), ("livrente", 1), ("aldersopsparing", 2)]
+
+def _sort_produkttype(ptype: str) -> int:
+    pt = (ptype or "").lower()
+    for key, order in _PRODUKTTYPE_SORT:
+        if key in pt:
+            return order
+    return 99
+
+
+def fordel_pmt_default(profil: dict, netto_indbetaling: float) -> list[dict]:
+    """
+    Beregner default PMT-fordeling for multi-produkt firmapensioner.
+
+    Fordelingsregel:
+      1. Ratepension fyldes op til loftet (63.100 kr/år)
+      2. Rest → Livsvarig pension
+      3. Aldersopsparing: 0 (har eget separat loft — indberettes særskilt)
+
+    Returnerer kun aftaler med 2+ produkter, sorteret Rate → Liv → Aldersopsparing.
+    """
+    from collections import defaultdict
+
+    ordninger         = profil.get("ordninger", [])
+    pensionsprodukter = profil.get("pensionsprodukter", [])
+
+    by_nr: dict[str, list] = defaultdict(list)
+    for prod in pensionsprodukter:
+        nr  = str(prod.get("aftalenr") or "")
+        sel = (prod.get("selskab") or "").lower()
+        pt  = (prod.get("produkttype") or "").lower()
+        if not nr or "atp" in sel or "folkepension" in pt:
+            continue
+        by_nr[nr].append(prod)
+
+    resultater = []
+    for nr, prods in by_nr.items():
+        if len(prods) < 2:
+            continue
+
+        samlet_pmt = next(
+            (float(o["aarlig_indbetaling"]) for o in ordninger
+             if str(o.get("aftalenr") or "") == nr and o.get("aarlig_indbetaling")),
+            float(netto_indbetaling or 0),
+        )
+
+        sorted_prods = sorted(prods, key=lambda p: _sort_produkttype(p.get("produkttype", "")))
+        resterende = samlet_pmt
+        for prod in sorted_prods:
+            pt = (prod.get("produkttype") or "").lower()
+            if "rate" in pt:
+                allokeret = min(resterende, float(RATEPENSION_LOFT))
+            elif "livsvarig" in pt or "livrente" in pt:
+                allokeret = resterende
+            else:                          # aldersopsparing, kapitalpension etc.
+                allokeret = 0.0
+            resterende = max(0.0, resterende - allokeret)
+            resultater.append({
+                "selskab":     prod.get("selskab", ""),
+                "aftalenr":    nr,
+                "produkttype": prod.get("produkttype", ""),
+                "default_pmt": int(round(allokeret)),
+                "opsparing":   prod.get("opsparing") or prod.get("estimated_saldo"),
+            })
+
+    return resultater
+
+
+def format_fordeling_til_llm(fordeling: list[dict]) -> str:
+    """Formaterer PMT-fordeling til injektion i Spørgsmål 6."""
+    if not fordeling:
+        return ""
+
+    # Grupper per aftalenr
+    from collections import defaultdict
+    by_nr: dict[str, list] = defaultdict(list)
+    for item in fordeling:
+        by_nr[item["aftalenr"]].append(item)
+
+    linjer = []
+    for nr, items in by_nr.items():
+        selskab = items[0]["selskab"]
+        samlet  = sum(i["default_pmt"] for i in items)
+        linjer.append(f"**{selskab}** (aftale {nr}) — samlet indbetaling: {samlet:,.0f} kr/år".replace(",", "."))
+        for item in items:
+            opsp_s = f"{item['opsparing']:,.0f} kr.".replace(",", ".") if item["opsparing"] else "ukendt"
+            linjer.append(
+                f"  – {item['produkttype']}: saldo {opsp_s} | "
+                f"default indbetaling {item['default_pmt']:,.0f} kr/år".replace(",", ".")
+            )
+        linjer.append("")
+    return "\n".join(linjer)
+
+
 # ── Formatering til LLM-kontekst ─────────────────────────────────────────────
 
 def format_engine_til_llm(result: dict) -> str:

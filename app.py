@@ -163,6 +163,8 @@ Brug tallene fra "BEREGNET PENSIONSANALYSE" nedenfor.
 - Folkepension og ATP vises som "—" inden folkepensionsalderen
 - Engangsbeløb vises kun i Tabel 1
 
+**Skatteeksempel år 1** — vis ALTID afsnittet "SKATTEBEREGNING — EKSEMPEL ÅR 1" direkte efter Tabel 2, ord for ord som det står i engine-outputtet. Ingen udeladelser.
+
 {engine_analyse}
 
 ## BRUGERENS BEREGNEDE PARAMETRE

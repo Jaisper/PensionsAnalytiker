@@ -653,12 +653,18 @@ def format_engine_til_llm(result: dict) -> str:
     header = "| Alder | " + " | ".join(f"{l} kr/år" for l in alle_labels) + " | Brutto/år | Netto/mdr | Note |"
     sep    = "|---|" + "|---|" * n_prod_cols + "---|---|---|"
 
-    # Uddrag: første 5 + folkepensions-overgang + sidste 3
+    # Uddrag: første 5 + folkepensions-overgang + produktstop-overgange + sidste 3
     fp_idx  = next((i for i, r in enumerate(tabel) if r["alder"] >= fp_alder), None)
     vis_idx = set(range(min(5, len(tabel))))
     vis_idx |= set(range(max(0, len(tabel) - 3), len(tabel)))
     if fp_idx is not None:
         vis_idx |= {max(0, fp_idx - 1), fp_idx, min(fp_idx + 1, len(tabel) - 1)}
+    # Inkludér rækker hvor rate-produkter stopper (netto ændrer sig markant)
+    start_alder = tabel[0]["alder"] if tabel else 0
+    for pr in loebende:
+        if pr["stopper_ved_alder"] is not None:
+            stop_i = pr["stopper_ved_alder"] - start_alder
+            vis_idx |= {max(0, stop_i - 1), min(stop_i, len(tabel) - 1)}
     vis_idx = sorted(vis_idx)
 
     L += [

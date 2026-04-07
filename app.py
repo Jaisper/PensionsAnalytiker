@@ -62,8 +62,9 @@ Du skal ALDRIG vise en oversigtstabel eller forklare ordningstyper — det er al
 Du skal ALDRIG gentage Spørgsmål 1 — det er allerede stillet.
 
 **Spørgsmål 1 kræver et eksplicit tal fra brugeren** — det kan IKKE besvares med "ok" eller bekræftes med rappportens beløb.
+Brugeren angiver månedlig netto-indbetaling (kr/mdr) — systemet omregner selv til kr/år (×12).
 Rapporten viser et samlet beløb inkl. forsikringspræmier og ATP — det er kun vist som reference.
-Brugeren skal selv oplyse det beløb de forventer at indbetale netto til selve opsparingen.
+Brugeren skal selv oplyse det beløb de forventer at indbetale netto til selve opsparingen per måned.
 Har brugeren ikke svaret på spm 1 endnu: afvent svaret inden du stiller spm 6.
 
 **Brugeren kan svare på ét eller alle spørgsmål på én gang.**
@@ -336,14 +337,15 @@ def build_sporgsmaal1(profil: dict) -> str:
     """Bygger Spørgsmål 1 i Python — ingen LLM."""
     samlet = profil.get("samlet_aarlig_indbetaling", 0)
     if samlet:
+        mdr = round(samlet / 12)
         hint = (
-            f"*(Rapporten viser {samlet:,.0f} kr/år i indbetalinger fordelt på alle aftaler "
-            "inkl. forsikringspræmier og ATP. En del heraf går til forsikringsdækning — "
-            "hvad forventer du at indbetale **netto til selve opsparingen** fremover?)*"
+            f"*(Rapporten viser ca. {mdr:,.0f} kr/mdr i indbetalinger inkl. forsikringspræmier og ATP. "
+            "En del heraf går til forsikringsdækning — "
+            "hvad forventer du at indbetale **netto til selve opsparingen** per måned?)*"
         ).replace(",", ".")
     else:
-        hint = "*(Hvad forventer du at indbetale netto til selve pensionsopsparingen fremover?)*"
-    return f"**Spørgsmål 1:** Hvad er din forventede **netto årlige indbetaling** til pensionsopsparing?\n\n{hint}"
+        hint = "*(Hvad forventer du at indbetale netto til selve pensionsopsparingen per måned?)*"
+    return f"**Spørgsmål 1:** Hvad er din forventede **månedlige netto-indbetaling** til pensionsopsparing?\n\n{hint}"
 
 
 def build_oversigt_tabel(profil: dict) -> str:

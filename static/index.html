@@ -632,19 +632,20 @@ Upload derefter PDF'en her øverst til højre.`,
 
     // Rapport-beløb som reference-hint — brug sum af alle ordninger (inkl. ATP) som vist i toppen
     const allIndbetaling = (profil?.ordninger || []).reduce((s, o) => s + (o.aarlig_indbetaling || 0), 0);
-    const iq1Hint = allIndbetaling
-      ? `<br><span style="font-size:0.75rem;color:#9ab0c8">(Rapporten viser ${allIndbetaling.toLocaleString('da-DK')} kr/år inkl. forsikringer og ATP)</span>`
+    const allMdr = allIndbetaling ? Math.round(allIndbetaling / 12) : 0;
+    const iq1Hint = allMdr
+      ? `<br><span style="font-size:0.75rem;color:#9ab0c8">(Rapporten viser ca. ${allMdr.toLocaleString('da-DK')} kr/mdr inkl. forsikringer og ATP)</span>`
       : '';
 
     // Byg rækker
     let rows = `
       <tr>
-        <td class="ql"><strong>1.</strong> Netto indbetaling til pension
-          <div class="qdesc">Det beløb du/din arbejdsgiver indbetaler netto til selve opsparingen om året${iq1Hint}</div>
+        <td class="ql"><strong>1.</strong> Netto månedlig indbetaling til pension
+          <div class="qdesc">Det beløb du/din arbejdsgiver indbetaler netto til selve opsparingen per måned${iq1Hint}</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq1" value="" min="0" step="1000" oninput="autoFillQ6Pmt()">
-          <span class="unit">kr/år</span>
+          <input type="number" id="iq1" value="" min="0" step="100" oninput="autoFillQ6Pmt()">
+          <span class="unit">kr/mdr</span>
         </td>
       </tr>
       <tr>
@@ -821,10 +822,11 @@ Upload derefter PDF'en her øverst til højre.`,
 
   function autoFillQ6Pmt() {
     const iq1Val = parseFloat(document.getElementById('iq1')?.value) || 0;
+    const aarligVal = iq1Val * 12;  // konverter månedlig → årlig til fordeling
     const inputs = document.querySelectorAll('[id^="iq6pmt_"]');
     if (!inputs.length) return;
     const RATE_LOFT = 63100;
-    let resterende = iq1Val;
+    let resterende = aarligVal;
     inputs.forEach(input => {
       const pt = (input.dataset.ptype || '');
       let alloc;
@@ -836,9 +838,9 @@ Upload derefter PDF'en her øverst til højre.`,
         alloc = 0;
       }
       resterende = Math.max(0, resterende - alloc);
-      input.value = iq1Val > 0 ? alloc : '';
+      input.value = aarligVal > 0 ? alloc : '';
     });
-    if (iq1Val > 0) updateQ6Sum('pmt', inputs.length, 0);
+    if (aarligVal > 0) updateQ6Sum('pmt', inputs.length, 0);
   }
 
   async function submitInterviewForm() {
@@ -846,8 +848,10 @@ Upload derefter PDF'en her øverst til højre.`,
     const tidligst = profil?.tidligste_pensionsalder ?? 65;
 
     const v = id => document.getElementById(id)?.value?.trim() ?? '';
+    const iq1Mdr = parseFloat(v('iq1')) || 0;
+    const iq1Aar = Math.round(iq1Mdr * 12);
     const parts = [
-      `1. Netto indbetaling: ${v('iq1')} kr/år`,
+      `1. Netto indbetaling: ${iq1Aar} kr/år (${iq1Mdr} kr/mdr)`,
       `2. Forventet afkast: ${v('iq2')}%`,
       `3. Pensionsalder: ${v('iq3')} år`,
       `4. Udbetalingsperiode: ${v('iq4')} år`,
@@ -956,7 +960,7 @@ Upload derefter PDF'en her øverst til højre.`,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: sessionId,
-        netto_indbetaling: parseFloat(v('iq1')) || 0,
+        netto_indbetaling: iq1Aar,
         afkast_pct:        parseFloat(v('iq2')) || 4.0,
         pensionsalder:     parseInt(v('iq3'))   || tidligst,
         udbetaling_aar:    parseInt(v('iq4'))   || 30,

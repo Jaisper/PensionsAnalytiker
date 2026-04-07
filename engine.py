@@ -568,20 +568,20 @@ def format_fordeling_til_llm(fordeling: list[dict]) -> str:
 
 def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder: int) -> str:
     """
-    Genererer trin-for-trin skatteberegning for ét år (typisk år 1).
-    Viser AM-bidrag, bundskat, kommuneskat, topskat og netto/mdr per produkt.
+    Genererer trin-for-trin skatteberegning for år 1 som markdown-tabel.
+    Koloner: Post | Beregning | kr/år
     """
-    alder      = row["alder"]
-    har_fp     = alder >= fp_alder
-    kom_pct    = parametre.get("kommuneskat_pct", 25.0)
-    basis_pct  = (BUNDSKAT + kom_pct / 100 + KIRKESKAT_DEFAULT) * 100  # i pct
+    alder     = row["alder"]
+    har_fp    = alder >= fp_alder
+    kom_pct   = parametre.get("kommuneskat_pct", 25.0)
+    basis_pct = (BUNDSKAT + kom_pct / 100 + KIRKESKAT_DEFAULT) * 100
 
-    L = [f"### SKATTEBEREGNING — EKSEMPEL ÅR 1 (ALDER {alder})"]
-    L.append("")
+    def kr(v: float) -> str:
+        return f"{v:,.0f}".replace(",", ".")
 
-    # ── Trin 1: Brutto per produkt ──
-    L.append("**Trin 1 — Brutto indkomst per produkt (kr/år):**")
-    s_produkter = []
+    # Saml produkter
+    s_produkter = []   # (label, brutto_aar) — S med AM-bidrag
+    f_produkter = []   # (label, brutto_aar) — F skattefri
     samlet_brutto = 0.0
     for pr in loebende:
         aktiv = pr["stopper_ved_alder"] is None or alder < pr["stopper_ved_alder"]
@@ -590,72 +590,73 @@ def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder:
         b_aar = pr["mdr_brutto"] * 12
         samlet_brutto += b_aar
         label = f"{pr['selskab']} – {pr['produkttype']}"
-        skat_label = "S (AM-bidrag)" if pr["skat_type"] == "S" else pr["skat_type"]
-        L.append(f"  {label}: {b_aar:,.0f} kr/år [{skat_label}]".replace(",", "."))
         if pr["skat_type"] == "S":
             s_produkter.append((label, b_aar))
+        elif pr["skat_type"] == "F":
+            f_produkter.append((label, b_aar))
 
+    fp_b  = row.get("fp_mdr_brutto", 0.0) * 12 if har_fp else 0.0
+    atp_b = row.get("atp_mdr_brutto", 0.0) * 12 if har_fp else 0.0
     if har_fp:
-        fp_b = row.get("fp_mdr_brutto", 0.0) * 12
-        atp_b = row.get("atp_mdr_brutto", 0.0) * 12
-        if fp_b:
-            L.append(f"  Folkepension: {fp_b:,.0f} kr/år [S, ingen AM-bidrag]".replace(",", "."))
-            samlet_brutto += fp_b
-        if atp_b:
-            L.append(f"  ATP: {atp_b:,.0f} kr/år [S, ingen AM-bidrag]".replace(",", "."))
-            samlet_brutto += atp_b
+        samlet_brutto += fp_b + atp_b
 
-    L.append(f"  → Samlet brutto: {samlet_brutto:,.0f} kr/år".replace(",", "."))
-    L.append("")
-
-    # ── Trin 2: AM-bidrag (kun S med AM) ──
     s_brutto_med_am = sum(b for _, b in s_produkter)
-    am_bidrag = s_brutto_med_am * AM_BIDRAG
-    pi_med_am = s_brutto_med_am * (1 - AM_BIDRAG)
-    pi_uden_am = (row.get("fp_mdr_brutto", 0.0) * 12 + row.get("atp_mdr_brutto", 0.0) * 12) if har_fp else 0.0
-    total_pi = pi_med_am + pi_uden_am
+    am_bidrag       = s_brutto_med_am * AM_BIDRAG
+    pi_med_am       = s_brutto_med_am * (1 - AM_BIDRAG)
+    pi_uden_am      = fp_b + atp_b
+    total_pi        = pi_med_am + pi_uden_am
+    basis_skat      = total_pi * (BUNDSKAT + kom_pct / 100 + KIRKESKAT_DEFAULT)
 
-    L.append(f"**Trin 2 — AM-bidrag 8% (kun private S-ordninger):**")
-    L.append(f"  Brutto private S: {s_brutto_med_am:,.0f} kr/år".replace(",", "."))
-    L.append(f"  AM-bidrag (8%): −{am_bidrag:,.0f} kr/år".replace(",", "."))
-    L.append(f"  PI fra private S: {pi_med_am:,.0f} kr/år".replace(",", "."))
-    if pi_uden_am:
-        L.append(f"  PI fra FP + ATP (ingen AM): {pi_uden_am:,.0f} kr/år".replace(",", "."))
-    L.append(f"  → Samlet personlig indkomst (PI): {total_pi:,.0f} kr/år".replace(",", "."))
-    L.append("")
-
-    # ── Trin 3: Bundskat + kommuneskat ──
-    basis_skat = total_pi * (BUNDSKAT + kom_pct / 100 + KIRKESKAT_DEFAULT)
-    L.append(f"**Trin 3 — Bundskat + kommuneskat + kirkeskat ({basis_pct:.2f}% af PI):**")
-    L.append(f"  {total_pi:,.0f} × {basis_pct:.2f}% = −{basis_skat:,.0f} kr/år".replace(",", "."))
-    L.append("")
-
-    # ── Trin 4: Topskat ──
     topskat = 0.0
-    if total_pi > TOPSKAT_GRAENSE_PI:
-        over = total_pi - TOPSKAT_GRAENSE_PI
-        topskat = over * TOPSKAT
-        L.append(f"**Trin 4 — Topskat 15% (PI over {TOPSKAT_GRAENSE_PI:,.0f} kr):**".replace(",", "."))
-        L.append(f"  {total_pi:,.0f} − {TOPSKAT_GRAENSE_PI:,.0f} = {over:,.0f} kr over grænsen".replace(",", "."))
-        L.append(f"  Topskat: {over:,.0f} × 15% = −{topskat:,.0f} kr/år".replace(",", "."))
-        L.append("")
-    else:
-        L.append(f"**Trin 4 — Topskat:** Ikke relevant (PI {total_pi:,.0f} < grænse {TOPSKAT_GRAENSE_PI:,.0f} kr)".replace(",", "."))
-        L.append("")
+    over_top = max(0.0, total_pi - TOPSKAT_GRAENSE_PI)
+    if over_top:
+        topskat = over_top * TOPSKAT
 
-    # ── Resultat ──
-    netto_aar = samlet_brutto - am_bidrag - basis_skat - topskat
-    netto_mdr = row["total_netto_mdr"]  # brug engine-beregnet værdi
-    L.append(f"**Resultat:**")
-    L.append(f"  Brutto/år:          {samlet_brutto:,.0f} kr".replace(",", "."))
-    L.append(f"  − AM-bidrag:        {am_bidrag:,.0f} kr".replace(",", "."))
-    L.append(f"  − Bundskat+kom+kir: {basis_skat:,.0f} kr".replace(",", "."))
+    netto_mdr = row["total_netto_mdr"]
+
+    # ── Byg tabel ────────────────────────────────────────────────────────────
+    rows = [
+        f"### SKATTEBEREGNING — EKSEMPEL ÅR 1 (ALDER {alder})",
+        "",
+        "| Post | Beregning | kr/år |",
+        "|---|---|---:|",
+    ]
+
+    def add(post, beregning, beloeb, prefix=""):
+        rows.append(f"| {prefix}{post} | {beregning} | {prefix}{kr(beloeb)} |")
+
+    # Brutto per produkt
+    for label, b in s_produkter:
+        add(label, "S-indkomst med AM-bidrag", b)
+    for label, b in f_produkter:
+        add(label, "Skattefri (F)", b)
+    if fp_b:
+        add("Folkepension", "S-indkomst, ingen AM-bidrag", fp_b)
+    if atp_b:
+        add("ATP", "S-indkomst, ingen AM-bidrag", atp_b)
+    rows.append(f"| **Brutto i alt** | | **{kr(samlet_brutto)}** |")
+    rows.append("|---|---|---:|")
+
+    # AM-bidrag
+    add("AM-bidrag 8%", f"{kr(s_brutto_med_am)} × 8%", am_bidrag, "− ")
+    rows.append(f"| **Personlig indkomst (PI)** | | **{kr(total_pi)}** |")
+    rows.append("|---|---|---:|")
+
+    # Indkomstskat
+    add(f"Bundskat + kommuneskat + kirkeskat", f"{kr(total_pi)} × {basis_pct:.2f}%", basis_skat, "− ")
     if topskat:
-        L.append(f"  − Topskat:          {topskat:,.0f} kr".replace(",", "."))
-    L.append(f"  = Netto/år:         {netto_mdr * 12:,.0f} kr  →  Netto/mdr: {netto_mdr:,.0f} kr/mdr".replace(",", "."))
-    L.append("*(Mindre afvigelse mulig pga. forholdsmæssig topskat-fordeling per produkt i engine)*")
+        add(f"Topskat 15% (PI over {kr(TOPSKAT_GRAENSE_PI)} kr)", f"{kr(over_top)} × 15%", topskat, "− ")
+    else:
+        rows.append(f"| Topskat | PI under grænsen ({kr(TOPSKAT_GRAENSE_PI)} kr) | — |")
+    rows.append("|---|---|---:|")
 
-    return "\n".join(L)
+    # Netto
+    rows.append(f"| **Netto/år** | | **{kr(netto_mdr * 12)}** |")
+    rows.append(f"| **Netto/mdr** | | **{kr(netto_mdr)}** |")
+    rows.append("")
+    rows.append("*(Lille afvigelse mulig: engine fordeler topskat forholdsmæssigt per produkt)*")
+
+    return "\n".join(rows)
 
 
 def format_engine_til_llm(result: dict) -> str:

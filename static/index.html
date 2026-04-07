@@ -630,9 +630,10 @@ Upload derefter PDF'en her øverst til højre.`,
       ? (profil?.ordninger || []).find(o => o.aftalenr === multiNrs[0])?.selskab || 'Firmapension'
       : '';
 
-    // Rapport-beløb som reference-hint (inkl. forsikringer — må ikke bruges som default)
-    const iq1Hint = samletPmt
-      ? `<br><span style="font-size:0.75rem;color:#9ab0c8">(Rapporten viser ${Number(samletPmt).toLocaleString('da-DK')} kr/år inkl. forsikringer og ATP)</span>`
+    // Rapport-beløb som reference-hint — brug sum af alle ordninger (inkl. ATP) som vist i toppen
+    const allIndbetaling = (profil?.ordninger || []).reduce((s, o) => s + (o.aarlig_indbetaling || 0), 0);
+    const iq1Hint = allIndbetaling
+      ? `<br><span style="font-size:0.75rem;color:#9ab0c8">(Rapporten viser ${allIndbetaling.toLocaleString('da-DK')} kr/år inkl. forsikringer og ATP)</span>`
       : '';
 
     // Byg rækker

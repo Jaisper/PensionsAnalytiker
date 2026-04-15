@@ -938,7 +938,7 @@ def format_engine_til_llm(result: dict) -> str:
     if tabel:
         L += ["", _format_skatteeksempel(tabel[0], loebende, result["parametre"], fp_alder)]
 
-    # ── Tabel 3 — Jævn fordeling ──────────────────────────────────────────────
+    # ── Tabel 3 — Jævn fordeling (ALLE rækker — LLM må IKKE rekonstruere) ──────
     jaevn_mdr = result.get("jaevn_netto_mdr", 0)
     engangs_total = sum(pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"] for pr in engang)
     L += [
@@ -949,22 +949,8 @@ def format_engine_til_llm(result: dict) -> str:
         "| Alder | Normal netto/mdr | Jævn netto/mdr | Fra buffer/mdr | Buffer rest |",
         "|---|---|---|---|---|",
     ]
-    # Uddrag: samme logik som Tabel 2A
-    jaevn_vis_idx = set(range(min(5, len(jaevn_tabel))))
-    jaevn_vis_idx |= set(range(max(0, len(jaevn_tabel) - 3), len(jaevn_tabel)))
-    if fp_idx is not None:
-        jaevn_vis_idx |= {max(0, fp_idx - 1), fp_idx, min(fp_idx + 1, len(jaevn_tabel) - 1)}
-    for pr in loebende:
-        if pr["stopper_ved_alder"] is not None:
-            stop_i = pr["stopper_ved_alder"] - start_alder
-            jaevn_vis_idx |= {max(0, stop_i - 1), min(stop_i, len(jaevn_tabel) - 1)}
-    jaevn_vis_idx = sorted(jaevn_vis_idx)
-
-    prev_j = -1
-    for i in jaevn_vis_idx:
-        if i > prev_j + 1:
-            L.append("| … | … | … | … | … |")
-        row = jaevn_tabel[i]
+    # Send ALLE rækker — buffer-beregningen er kompleks (rentes-rente), LLM rekonstruerer forkert
+    for row in jaevn_tabel:
         fra_b = row["fra_buffer"]
         L.append(
             f"| {row['alder']} "
@@ -973,13 +959,15 @@ def format_engine_til_llm(result: dict) -> str:
             f"| {fra_b:+,.0f} "
             f"| {row['buffer_rest']:,.0f} |".replace(",", ".")
         )
-        prev_j = i
 
     L += [
         "",
-        "INSTRUKTION: Rekonstruér ALLE rækker i Tabel 3. "
-        "Fra buffer/mdr: positivt = trækker på buffer, negativt = buffer vokser. "
-        "Jævn netto/mdr er konstant for alle år.",
+        "INSTRUKTION: Kopiér Tabel 3 direkte — MÅ IKKE rekonstruere eller beregne buffer selv. "
+        "Fra buffer/mdr: positivt = trækker på buffer (normal < jævn), negativt = buffer vokser (normal > jævn). "
+        "Buffer forrentes med pensionsafkastet og udtømmes ved periodens slutning.",
+        "OBS: Buffer-afkast (renter/udbytte) er IKKE fratrukket skat i modellen — i praksis beskattes "
+        "kapitalindkomst fra fri opsparing med ca. 37-42% (kapitalindkomst) eller 27-42% (aktieindkomst). "
+        "Præsentér dette som en forbehold ved Tabel 3.",
     ]
 
     return "\n".join(L)

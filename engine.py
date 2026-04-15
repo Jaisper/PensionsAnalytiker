@@ -306,19 +306,29 @@ def generer_udbetalingstabel(
                     return o
         return None
 
-    # Per selskab: sum af kendte saldi og antal produkter uden saldo
-    _kendte_saldi:   dict[str, float] = defaultdict(float)
-    _mangler_saldo:  dict[str, int]   = defaultdict(int)
+    # Per (aftalenr, selskab): sum af kendte saldi og antal produkter uden saldo
+    # Bruges til ligelig fordeling af ordningens saldo på tværs af dens produkter
+    _kendte_saldi:    dict[tuple, float] = defaultdict(float)
+    _mangler_saldo:   dict[tuple, int]   = defaultdict(int)
+    # Fallback per selskab (bruges kun når aftalenr ikke kendes)
+    _kendte_saldi_s:  dict[str, float]   = defaultdict(float)
+    _mangler_saldo_s: dict[str, int]     = defaultdict(int)
     for _p in pensionsprodukter:
         _sel = (_p.get("selskab") or "").lower()
+        _nr  = str(_p.get("aftalenr") or "")
         _pt  = (_p.get("produkttype") or "").lower()
         if "atp" in _sel or "folkepension" in _pt:
             continue
         _pv = float(_p.get("opsparing") or _p.get("estimated_saldo") or 0)
+        _key = (_nr, _sel) if _nr else None
         if _pv:
-            _kendte_saldi[_sel] += _pv
+            if _key:
+                _kendte_saldi[_key] += _pv
+            _kendte_saldi_s[_sel] += _pv
         else:
-            _mangler_saldo[_sel] += 1
+            if _key:
+                _mangler_saldo[_key] += 1
+            _mangler_saldo_s[_sel] += 1
 
     # ── Byg produktliste ──────────────────────────────────────────────────────
     produkter = []
@@ -340,11 +350,20 @@ def generer_udbetalingstabel(
             nr      = str(prod.get("aftalenr") or "")
             ordning = _find_ordning(selskab.lower(), nr, ptype)
             if ordning:
-                total    = float(ordning.get("opsparing") or 0)
-                kendte   = _kendte_saldi.get(selskab.lower(), 0.0)
-                rest     = max(0.0, total - kendte)
-                count    = max(1, _mangler_saldo.get(selskab.lower(), 1))
-                pv = rest / count
+                total   = float(ordning.get("opsparing") or 0)
+                ord_nr  = str(ordning.get("aftalenr") or "")
+                ord_sel = (ordning.get("selskab") or "").lower()
+                nr_key  = (ord_nr, ord_sel) if ord_nr else None
+                if nr_key and nr_key in _mangler_saldo:
+                    # Præcis match: fordel ordningens saldo på dens egne produkter
+                    kendte = _kendte_saldi.get(nr_key, 0.0)
+                    count  = max(1, _mangler_saldo[nr_key])
+                else:
+                    # Fallback: selskab-bred fordeling
+                    kendte = _kendte_saldi_s.get(ord_sel, 0.0)
+                    count  = max(1, _mangler_saldo_s.get(ord_sel, 1))
+                rest = max(0.0, total - kendte)
+                pv   = rest / count
 
         # PMT — kapitalpension er lukket for nye indbetalinger siden 2013
         pmt = float(prod.get("estimated_pmt") or 0)

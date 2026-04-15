@@ -111,6 +111,13 @@ Vis standardindbetalingsfordeling (primær) og nuværende saldi (sekundær konte
 
 Når alle relevante svar er indsamlet: lav **komplet pensionsanalyse** inkl. udbetalingstabel.
 
+**Fordel engangsudbetalinger over 10 år** — hvis brugeren skriver denne sætning:
+- Brug formlen: mdr_tillæg = netto_engangs × (r/12) / (1 − (1+r/12)^(−120))
+  hvor r = valgt afkast (fx 0,04), netto_engangs = samlet netto engangsbeløb fra Tabel 1
+- Vis det som: "Engangsbeløb X kr netto fordelt over 10 år = Y kr/mdr ekstra i år 1-10"
+- Tilføj Y til Netto/mdr for de første 10 år i en ny version af Tabel 2
+- Dette er den ENESTE situation hvor du må lave en simpel renteberegning med ovenstående formel
+
 ## BEREGNINGSREGLER — ABSOLUT FORBUD MOD EGNE BEREGNINGER
 
 ⚠️ KRITISK: Du må ALDRIG præsentere et beregnet tal der ikke er hentet direkte fra "BEREGNET PENSIONSANALYSE" nedenfor.

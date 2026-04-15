@@ -397,6 +397,12 @@ def generer_udbetalingstabel(
     else:
         atp_mdr = ATP_MDR_STANDARD
 
+    # Samlet engangsbeloeb netto — udbetales i pensionsår 1
+    engangs_netto_total = sum(
+        pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
+        for pr in engangsbeloeb
+    )
+
     # ── År-for-år tabel ───────────────────────────────────────────────────────
     tabel = []
     for alder in range(pensionsalder, pensionsalder + udbetaling_aar + 1):
@@ -465,6 +471,9 @@ def generer_udbetalingstabel(
             if msg not in advarsler:
                 advarsler.append(msg)
 
+        # Engangsbeloeb udbetales i år 1 (pensionsalder)
+        engangs_dette_aar = engangs_netto_total if alder == pensionsalder else 0.0
+
         tabel.append({
             "alder":           alder,
             "aar_nr":          alder - pensionsalder + 1,
@@ -476,6 +485,7 @@ def generer_udbetalingstabel(
             "tillaeg_mdr":     tillaeg_mdr,
             "total_netto_mdr": total_netto_mdr,
             "total_netto_aar": total_netto_mdr * 12,
+            "engangs_netto":   engangs_dette_aar,
             "over_topskat":    over_topskat,
         })
 
@@ -856,6 +866,9 @@ def format_engine_til_llm(result: dict) -> str:
 
         # Note
         note_parts = []
+        engangs_dette = row.get("engangs_netto", 0.0)
+        if engangs_dette:
+            note_parts.append(f"Engangsbeløb: +{engangs_dette:,.0f} kr (engangs)".replace(",", "."))
         if row["over_topskat"]:
             note_parts.append("Topskat")
         tillaeg_max = PENSIONSTILLAEG_MAX_ENLIG_AAR / 12
@@ -882,5 +895,15 @@ def format_engine_til_llm(result: dict) -> str:
     # ── Skatteeksempel for år 1 ───────────────────────────────────────────────
     if tabel:
         L += ["", _format_skatteeksempel(tabel[0], loebende, result["parametre"], fp_alder)]
+
+    # ── Fordel engangsbeloeb prompt ───────────────────────────────────────────
+    engangs_total = sum(pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"] for pr in engang)
+    if engangs_total > 0:
+        L += [
+            "",
+            "INSTRUKTION: Vis følgende forslag til brugeren efter analysen:",
+            f"> **Engangsudbetalinger ({engangs_total:,.0f} kr netto) sker i pensionsår 1.**".replace(",", "."),
+            "> Skriv **\"Fordel engangsudbetalinger over 10 år\"** for at se alternativ beregning.",
+        ]
 
     return "\n".join(L)

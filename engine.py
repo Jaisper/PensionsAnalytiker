@@ -879,7 +879,7 @@ def format_engine_til_llm(result: dict) -> str:
     vis_idx = sorted(vis_idx)
 
     L += [
-        f"### TABEL 2A — ÅR-FOR-ÅR BRUTTO/NETTO (uddrag — baggrundsinformation)",
+        f"### TABEL 2 — ÅR-FOR-ÅR BRUTTO/NETTO (uddrag — LLM rekonstruerer alle {len(tabel)} rækker)",
         f"Kolonner: Alder | {' | '.join(alle_labels)} | Brutto/år | Netto/mdr | Note",
         header, sep,
     ]
@@ -927,13 +927,16 @@ def format_engine_til_llm(result: dict) -> str:
         )
         prev = i
 
-    L.append("")
+    # ── Skatteeksempel for år 1 ───────────────────────────────────────────────
+    if tabel:
+        L += ["", _format_skatteeksempel(tabel[0], loebende, result["parametre"], fp_alder)]
 
-    # ── Tabel 2 — Jævn fordeling (PRIMÆR TABEL — vis denne til brugeren) ──────
+    # ── Tabel 3 — Jævn fordeling ──────────────────────────────────────────────
     jaevn_mdr = result.get("jaevn_netto_mdr", 0)
     engangs_total = sum(pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"] for pr in engang)
     L += [
-        f"### TABEL 2 — JÆVN FORDELING NETTO (PRIMÆR — vis denne)",
+        "",
+        f"### TABEL 3 — JÆVN FORDELING NETTO",
         f"Jævn netto/mdr over hele perioden: **{jaevn_mdr:,.0f} kr/mdr**".replace(",", "."),
         f"Engangsbeløb netto ({engangs_total:,.0f} kr) bruges som buffer fra år 1.".replace(",", ".") if engangs_total else "",
         "| Alder | Normal netto/mdr | Jævn netto/mdr | Fra buffer/mdr | Buffer rest |",
@@ -967,14 +970,9 @@ def format_engine_til_llm(result: dict) -> str:
 
     L += [
         "",
-        "INSTRUKTION: Rekonstruér ALLE rækker i Tabel 2 (jævn fordeling) og præsentér den som primær tabel til brugeren. "
-        "Tabel 2A (variabel) er baggrundsinformation — vis den kun hvis brugeren spørger. "
+        "INSTRUKTION: Rekonstruér ALLE rækker i Tabel 3. "
         "Fra buffer/mdr: positivt = trækker på buffer, negativt = buffer vokser. "
         "Jævn netto/mdr er konstant for alle år.",
     ]
-
-    # ── Skatteeksempel for år 1 ───────────────────────────────────────────────
-    if tabel:
-        L += ["", _format_skatteeksempel(tabel[0], loebende, result["parametre"], fp_alder)]
 
     return "\n".join(L)

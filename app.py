@@ -369,12 +369,28 @@ def build_oversigt_tabel(profil: dict) -> str:
     prods = profil.get("pensionsprodukter", [])
 
     # Byg index: (aftalenr, selskab) → liste af payout-produkter
+    # Også nr_alone som fallback når payout_products ikke har provider sat
     prod_by_nr: dict[tuple, list] = {}
+    prod_by_nr_alone: dict[str, list] = {}
     for p in prods:
         nr  = str(p.get("aftalenr") or "")
         prv = str(p.get("selskab") or "")
         if nr:
             prod_by_nr.setdefault((nr, prv), []).append(p)
+            prod_by_nr_alone.setdefault(nr, []).append(p)
+
+    def get_prods(nr: str, selskab: str) -> list:
+        """Hent payout-produkter med (nr, selskab)-nøgle; fallback til nr alene."""
+        exact = prod_by_nr.get((nr, selskab), [])
+        if exact:
+            return exact
+        # Fallback: brug nr alene – men kun hvis der kun er ét selskab der ejer dette nr
+        all_for_nr = prod_by_nr_alone.get(nr, [])
+        providers = {str(p.get("selskab") or "") for p in all_for_nr}
+        if len(providers) <= 1:
+            return all_for_nr
+        # Kollision på tværs af selskaber: filtrer på tomme providers (ikke sat)
+        return [p for p in all_for_nr if not p.get("selskab")]
 
     def varighed(aldersperioder: dict) -> str:
         """Beregn omtrentlig udbetalingsperiode fra payout-perioder."""
@@ -433,7 +449,7 @@ def build_oversigt_tabel(profil: dict) -> str:
         total_opsp += opsp
         saldo_s = f"{opsp:,.0f} kr.".replace(",", ".")
 
-        sub = prod_by_nr.get((nr, selskab), [])
+        sub = get_prods(nr, selskab)
         # Fold ud hvis der er mere end ét payout-produkt under samme aftalenr
         if len(sub) > 1:
             private_rækker.append(
@@ -447,7 +463,7 @@ def build_oversigt_tabel(profil: dict) -> str:
                 private_rækker.append(f"| {selskab} | \u00a0\u00a0↳ {spt} | {sub_saldo_s} | {beм(spt, per, kort=True)} |")
         else:
             # Find payout-perioder for enkelt produkt
-            sub1 = prod_by_nr.get((nr, selskab), [])
+            sub1 = get_prods(nr, selskab)
             per1 = sub1[0].get("aldersperioder", {}) if sub1 else {}
             # Vis investeringsform (f.eks. "Puljeinvestering") hvis sat og forskellig fra produkttype
             inv = a.get("investeringsform") or ""

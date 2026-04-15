@@ -271,25 +271,35 @@ def generer_udbetalingstabel(
     # antal produkter uden saldo — bruges til ligelig fordeling af rest-saldo.
     from collections import defaultdict
 
-    def _find_ordning(sel: str, nr: str):
+    def _find_ordning(sel: str, nr: str, ptype: str = ""):
         """Find bedste ordning-match.
         Prioritering:
-          1. Aftalenr + selskab matcher (undgår kollision på placeholder-nr som 1111111111)
-          2. Kun selskab matcher
-          3. Kun aftalenr matcher (lavest prioritet — placeholder-nr kan give falsk match)
+          1. Aftalenr + selskab (undgår kollision på placeholder-nr som 1111111111)
+          2. Selskab + produkttype matcher (fx Nordea Kapitalpension ≠ Nordea Ratepension)
+          3. Selskab alene (første match)
+          4. Aftalenr alene (lavest prioritet)
         """
-        sel_l = sel.lower()
+        sel_l   = sel.lower()
+        ptype_l = ptype.lower()
         # 1. Bedste match: begge felter
         if nr:
             for o in ordninger:
                 if (str(o.get("aftalenr") or "") == nr
                         and (o.get("selskab") or "").lower() == sel_l):
                     return o
-        # 2. Selskab alene
+        # 2. Selskab + produkttype-hint (undgår at Kapitalpension bruger Ratepension-saldo)
+        if ptype_l:
+            for o in ordninger:
+                if (o.get("selskab") or "").lower() == sel_l:
+                    opt = (o.get("produkttype") or "").lower()
+                    # Match på første 4 tegn af type (kapital, rate, livs, alds)
+                    if ptype_l[:4] and ptype_l[:4] in opt:
+                        return o
+        # 3. Selskab alene
         for o in ordninger:
             if (o.get("selskab") or "").lower() == sel_l:
                 return o
-        # 3. Aftalenr alene (fallback)
+        # 4. Aftalenr alene (fallback)
         if nr:
             for o in ordninger:
                 if str(o.get("aftalenr") or "") == nr:
@@ -327,8 +337,8 @@ def generer_udbetalingstabel(
         # Saldo — fordel rest-saldo ligeligt hvis ingen individuel saldo
         pv = float(prod.get("opsparing") or prod.get("estimated_saldo") or 0)
         if not pv:
-            nr     = str(prod.get("aftalenr") or "")
-            ordning = _find_ordning(selskab.lower(), nr)
+            nr      = str(prod.get("aftalenr") or "")
+            ordning = _find_ordning(selskab.lower(), nr, ptype)
             if ordning:
                 total    = float(ordning.get("opsparing") or 0)
                 kendte   = _kendte_saldi.get(selskab.lower(), 0.0)
@@ -336,9 +346,9 @@ def generer_udbetalingstabel(
                 count    = max(1, _mangler_saldo.get(selskab.lower(), 1))
                 pv = rest / count
 
-        # PMT
+        # PMT — kapitalpension er lukket for nye indbetalinger siden 2013
         pmt = float(prod.get("estimated_pmt") or 0)
-        if not pmt and total_opsparing > 0 and pv > 0:
+        if not pmt and "kapital" not in ptype_l and total_opsparing > 0 and pv > 0:
             pmt = netto_indbetal * (pv / total_opsparing)
         if "rate" in ptype_l:
             pmt = min(pmt, RATEPENSION_LOFT)

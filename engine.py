@@ -509,16 +509,22 @@ def generer_udbetalingstabel(
         })
 
     # ── Jævn fordeling ───────────────────────────────────────────────────────
-    # Engangsbeloeb er tilrådighed fra dag 1 og bruges som buffer til at udjævne.
-    # jaevn_netto_mdr = (engangsbeloeb_netto + sum af alle årsnettobeløb) / år / 12
-    total_netto_alle_aar = sum(row["total_netto_aar"] for row in tabel)
+    # Engangsbeloeb er tilrådighed fra dag 1 og forrentes med r frem til brug.
+    # Beregnes som NPV-annuitet så buffer udtømmes præcist ved periodens slutning.
+    #
+    # X = (B₀ + PV(normal_netto)) / (12 × annuitetsfaktor)
+    # hvor PV diskonteres med r og annuitetsfaktoren = Σ 1/(1+r)^i for i=1..n
     n_aar = max(1, len(tabel))
-    jaevn_netto_mdr = (engangs_netto_total + total_netto_alle_aar) / n_aar / 12
+    pv_normal      = sum(row["total_netto_aar"] / (1 + r) ** (i + 1)
+                         for i, row in enumerate(tabel))
+    annuitet_faktor = sum(1 / (1 + r) ** (i + 1) for i in range(n_aar))
+    jaevn_netto_mdr = (engangs_netto_total + pv_normal) / annuitet_faktor / 12
 
-    # Buffer-tracking: lump sum brugt til supplement, overskud geninvesteres
+    # Buffer-tracking: forrentes med r hvert år, supplement trækkes fra
     jaevn_tabel = []
     buffer = engangs_netto_total
     for row in tabel:
+        buffer      *= (1 + r)                         # forrentning af restbuffer
         normal_mdr   = row["total_netto_mdr"]
         fra_buffer   = jaevn_netto_mdr - normal_mdr   # positivt = trækker på buffer (månedlig)
         buffer      -= fra_buffer * 12                 # × 12: løkken kører én gang per år

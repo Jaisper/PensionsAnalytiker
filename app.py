@@ -193,26 +193,48 @@ Brug tallene fra "BEREGNET PENSIONSANALYSE" nedenfor.
 def _kapital_skat_type_fra_historik(session: dict) -> str | None:
     """
     Scan samtalens historik for om spm 5 er besvaret.
-    Returnerer 'F' hvis brugeren bekræftede forudbetalt afgift, 'A' hvis nej, None hvis ubesvaret.
+    Returnerer 'F' hvis forudbetalt/skattefri, 'A' hvis 40% afgift, None hvis ubesvaret.
+    Scanner SENEST-FUNDNE bekræftelse (sidst i historikken vinder).
     """
     msgs = session.get("messages", [])
+    resultat = None
+
     for i, msg in enumerate(msgs):
-        role = msg.get("role", "")
+        role    = msg.get("role", "")
         content = (msg.get("content") or "").lower()
-        # Bruger sagde "ja" og konteksten (forrige assistant-besked) handler om kapitalpension-afgift
-        if role == "user" and content.strip() in ("ja", "j", "yes"):
-            # Tjek forrige assistant-besked for om den handlede om kapitalpension
-            if i > 0:
-                prev = (msgs[i - 1].get("content") or "").lower()
-                if "kapitalpension" in prev and ("afgift" in prev or "betalt" in prev or "2013" in prev):
-                    return "F"
-        # LLM bekræftede eksplicit F-skat for kapitalpension
-        if role == "assistant" and "kapitalpension" in content:
-            if "afgiftsfri (f)" in content or "skat_type.*f" in content or "f-skat" in content:
-                return "F"
-            if "40% afgift" in content and "ikke" not in content[:content.find("40% afgift") + 20]:
-                return "A"
-    return None
+
+        # ── Tjek assistent-beskeder: LLM bekræfter F eller A ──
+        if role == "assistant" and "kapital" in content:
+            f_mønstre = [
+                "afgiftsfri", "skattefri", "f-skat", "afgift.*betalt",
+                "forudbetalt", "konverteret", "afgift er betalt",
+            ]
+            a_mønstre = [
+                "40% afgift", "afgiftspligtig", "a-skat",
+            ]
+            import re as _re
+            if any(_re.search(m, content) for m in f_mønstre):
+                resultat = "F"
+            elif any(_re.search(m, content) for m in a_mønstre):
+                resultat = "A"
+
+        # ── Tjek bruger-svar "ja" efter assistent spurgte om kapitalpension-afgift ──
+        if role == "user":
+            svar = content.strip()
+            # Positiv bekræftelse
+            pos = any(svar.startswith(w) for w in ("ja", "j ", "yes", "korrekt", "rigtigt", "bekræft"))
+            # Negativ
+            neg = any(svar.startswith(w) for w in ("nej", "no", "ikke"))
+            if pos or neg:
+                # Tjek om forrige assistent-besked handlede om kapitalpension-afgift
+                for j in range(i - 1, max(i - 4, -1), -1):
+                    if msgs[j].get("role") == "assistant":
+                        prev = (msgs[j].get("content") or "").lower()
+                        if "kapital" in prev and ("afgift" in prev or "betalt" in prev or "2013" in prev):
+                            resultat = "F" if pos else "A"
+                        break
+
+    return resultat
 
 
 def _kør_engine(session_id: str) -> str:

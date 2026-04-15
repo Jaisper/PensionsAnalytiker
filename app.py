@@ -250,6 +250,18 @@ def get_system_prompt(session_id: str) -> str:
 
 # ─── API ENDPOINTS ───────────────────────────────────────────────────────────
 
+@app.get("/api/version")
+async def get_version():
+    import subprocess
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).parent
+        ).decode().strip()
+    except Exception:
+        commit = "ukendt"
+    return {"commit": commit}
+
+
 @app.post("/api/session")
 async def create_session():
     session_id = str(uuid.uuid4())

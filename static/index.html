@@ -347,7 +347,7 @@
 <header>
   <div>
     <h1>PensionsAnalytiker</h1>
-    <div class="subtitle">Baseret på din PensionsInfo-rapport</div>
+    <div class="subtitle">Baseret på din PensionsInfo-rapport · <span id="version-tag" style="opacity:0.6;font-size:0.7rem"></span></div>
   </div>
   <div id="upload-area">
     <label id="upload-label" for="file-input">&#x2B06; Upload rapport</label>
@@ -1285,6 +1285,12 @@ Upload derefter PDF'en her øverst til højre.`,
   function escapeHtml(s) {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
+
+  // ── Version tag ──────────────────────────────────────────────────────────
+  fetch('/api/version').then(r => r.json()).then(d => {
+    const el = document.getElementById('version-tag');
+    if (el && d.commit) el.textContent = d.commit;
+  }).catch(() => {});
 
   // ── Textarea auto-resize + Enter to send ──────────────────────────────────
   const textarea = document.getElementById('message-input');

@@ -214,20 +214,25 @@ def _estimer_pmt_fordeling(
     Resultater gemmes direkte på hvert produkt-dict.
     """
     from collections import defaultdict
-    by_nr: dict[str, list] = defaultdict(list)
+    # Gruppér på (aftalenr, selskab) — aftalenr alene giver kollisioner
+    # når flere selskaber bruger samme placeholder-nr (fx "1111111111")
+    by_key: dict[tuple, list] = defaultdict(list)
     for prod in pensionsprodukter:
-        nr = prod.get("aftalenr") or ""
+        nr  = prod.get("aftalenr") or ""
+        sel = (prod.get("selskab") or "").lower()
         if nr:
-            by_nr[nr].append(prod)
+            by_key[(nr, sel)].append(prod)
 
-    for nr, prods in by_nr.items():
+    for (nr, sel), prods in by_key.items():
         if len(prods) < 2:
             continue   # kun relevant for multi-produkt aftaler
 
-        # Find samlet PMT for denne aftale fra ordninger
+        # Find samlet PMT: kræv match på begge felter
         samlet_pmt = next(
             (o["aarlig_indbetaling"] for o in ordninger
-             if str(o.get("aftalenr") or "") == nr and o.get("aarlig_indbetaling")),
+             if str(o.get("aftalenr") or "") == nr
+             and (o.get("selskab") or "").lower() == sel
+             and o.get("aarlig_indbetaling")),
             None,
         )
         if not samlet_pmt:
@@ -261,7 +266,9 @@ def _estimer_pmt_fordeling(
         # Normaliser derefter så sum(PV_i) = faktisk total saldo
         samlet_opsparing = next(
             (o["opsparing"] for o in ordninger
-             if str(o.get("aftalenr") or "") == nr and o.get("opsparing")),
+             if str(o.get("aftalenr") or "") == nr
+             and (o.get("selskab") or "").lower() == sel
+             and o.get("opsparing")),
             None,
         )
         if n and n > 0 and samlet_opsparing:

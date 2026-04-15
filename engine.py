@@ -520,8 +520,8 @@ def generer_udbetalingstabel(
     buffer = engangs_netto_total
     for row in tabel:
         normal_mdr   = row["total_netto_mdr"]
-        fra_buffer   = jaevn_netto_mdr - normal_mdr   # positivt = trækker på buffer
-        buffer      -= fra_buffer
+        fra_buffer   = jaevn_netto_mdr - normal_mdr   # positivt = trækker på buffer (månedlig)
+        buffer      -= fra_buffer * 12                 # × 12: løkken kører én gang per år
         jaevn_tabel.append({
             "alder":       row["alder"],
             "normal_mdr":  round(normal_mdr),

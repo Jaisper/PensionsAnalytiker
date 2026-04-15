@@ -508,13 +508,37 @@ def generer_udbetalingstabel(
             "over_topskat":    over_topskat,
         })
 
+    # ── Jævn fordeling ───────────────────────────────────────────────────────
+    # Engangsbeloeb er tilrådighed fra dag 1 og bruges som buffer til at udjævne.
+    # jaevn_netto_mdr = (engangsbeloeb_netto + sum af alle årsnettobeløb) / år / 12
+    total_netto_alle_aar = sum(row["total_netto_aar"] for row in tabel)
+    n_aar = max(1, len(tabel))
+    jaevn_netto_mdr = (engangs_netto_total + total_netto_alle_aar) / n_aar / 12
+
+    # Buffer-tracking: lump sum brugt til supplement, overskud geninvesteres
+    jaevn_tabel = []
+    buffer = engangs_netto_total
+    for row in tabel:
+        normal_mdr   = row["total_netto_mdr"]
+        fra_buffer   = jaevn_netto_mdr - normal_mdr   # positivt = trækker på buffer
+        buffer      -= fra_buffer
+        jaevn_tabel.append({
+            "alder":       row["alder"],
+            "normal_mdr":  round(normal_mdr),
+            "jaevn_mdr":   round(jaevn_netto_mdr),
+            "fra_buffer":  round(fra_buffer),
+            "buffer_rest": round(max(0.0, buffer)),
+        })
+
     return {
-        "produkter":     produkter,
-        "engangsbeloeb": engangsbeloeb,
-        "tabel":         tabel,
-        "fp_alder":      fp_alder,
-        "pensionsalder": pensionsalder,
-        "advarsler":     advarsler,
+        "produkter":      produkter,
+        "engangsbeloeb":  engangsbeloeb,
+        "tabel":          tabel,
+        "jaevn_tabel":    jaevn_tabel,
+        "jaevn_netto_mdr": round(jaevn_netto_mdr),
+        "fp_alder":       fp_alder,
+        "pensionsalder":  pensionsalder,
+        "advarsler":      advarsler,
         "parametre": {
             "r":               r,
             "n":               n,
@@ -757,12 +781,13 @@ def format_engine_til_llm(result: dict) -> str:
     Konverterer engine-output til tekst der injiceres som 'Hard Facts' i system-prompt.
     LLM'en præsenterer disse tal direkte — beregner aldrig selv.
     """
-    p        = result["parametre"]
-    loebende = [pr for pr in result["produkter"] if pr["udb_type"] != "engangsbeloeb"]
-    engang   = result["engangsbeloeb"]
-    tabel    = result["tabel"]
-    fp_alder = result["fp_alder"]
-    advarsler = result.get("advarsler", [])
+    p            = result["parametre"]
+    loebende     = [pr for pr in result["produkter"] if pr["udb_type"] != "engangsbeloeb"]
+    engang       = result["engangsbeloeb"]
+    tabel        = result["tabel"]
+    jaevn_tabel  = result.get("jaevn_tabel", [])
+    fp_alder     = result["fp_alder"]
+    advarsler    = result.get("advarsler", [])
 
     L = [
         "## BEREGNET PENSIONSANALYSE — HARD FACTS",
@@ -854,7 +879,7 @@ def format_engine_til_llm(result: dict) -> str:
     vis_idx = sorted(vis_idx)
 
     L += [
-        f"### TABEL 2 — ÅR-FOR-ÅR BRUTTO/NETTO (uddrag — LLM rekonstruerer alle {len(tabel)} rækker)",
+        f"### TABEL 2A — ÅR-FOR-ÅR BRUTTO/NETTO (uddrag — baggrundsinformation)",
         f"Kolonner: Alder | {' | '.join(alle_labels)} | Brutto/år | Netto/mdr | Note",
         header, sep,
     ]
@@ -902,27 +927,54 @@ def format_engine_til_llm(result: dict) -> str:
         )
         prev = i
 
+    L.append("")
+
+    # ── Tabel 2 — Jævn fordeling (PRIMÆR TABEL — vis denne til brugeren) ──────
+    jaevn_mdr = result.get("jaevn_netto_mdr", 0)
+    engangs_total = sum(pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"] for pr in engang)
+    L += [
+        f"### TABEL 2 — JÆVN FORDELING NETTO (PRIMÆR — vis denne)",
+        f"Jævn netto/mdr over hele perioden: **{jaevn_mdr:,.0f} kr/mdr**".replace(",", "."),
+        f"Engangsbeløb netto ({engangs_total:,.0f} kr) bruges som buffer fra år 1.".replace(",", ".") if engangs_total else "",
+        "| Alder | Normal netto/mdr | Jævn netto/mdr | Fra buffer/mdr | Buffer rest |",
+        "|---|---|---|---|---|",
+    ]
+    # Uddrag: samme logik som Tabel 2A
+    jaevn_vis_idx = set(range(min(5, len(jaevn_tabel))))
+    jaevn_vis_idx |= set(range(max(0, len(jaevn_tabel) - 3), len(jaevn_tabel)))
+    if fp_idx is not None:
+        jaevn_vis_idx |= {max(0, fp_idx - 1), fp_idx, min(fp_idx + 1, len(jaevn_tabel) - 1)}
+    for pr in loebende:
+        if pr["stopper_ved_alder"] is not None:
+            stop_i = pr["stopper_ved_alder"] - start_alder
+            jaevn_vis_idx |= {max(0, stop_i - 1), min(stop_i, len(jaevn_tabel) - 1)}
+    jaevn_vis_idx = sorted(jaevn_vis_idx)
+
+    prev_j = -1
+    for i in jaevn_vis_idx:
+        if i > prev_j + 1:
+            L.append("| … | … | … | … | … |")
+        row = jaevn_tabel[i]
+        fra_b = row["fra_buffer"]
+        L.append(
+            f"| {row['alder']} "
+            f"| {row['normal_mdr']:,.0f} "
+            f"| {row['jaevn_mdr']:,.0f} "
+            f"| {fra_b:+,.0f} "
+            f"| {row['buffer_rest']:,.0f} |".replace(",", ".")
+        )
+        prev_j = i
+
     L += [
         "",
-        "INSTRUKTION: Rekonstruér ALLE rækker med præcis denne kolonnestruktur. "
-        "PRODUKTKOLONNER = BRUTTO KR/ÅR (brug 'Brutto/år'-kolonnen fra Tabel 1, IKKE 'Brutto/mdr'). "
-        "Brutto/år-sumkolonnen = sum af alle produktkolonner. "
-        "Netto/mdr = samlet månedlig netto efter skat. "
-        "Note: 'Topskat' hvis PI > 588.900 kr; 'Modregning -X kr' hvis pensionstillæg reduceres.",
+        "INSTRUKTION: Rekonstruér ALLE rækker i Tabel 2 (jævn fordeling) og præsentér den som primær tabel til brugeren. "
+        "Tabel 2A (variabel) er baggrundsinformation — vis den kun hvis brugeren spørger. "
+        "Fra buffer/mdr: positivt = trækker på buffer, negativt = buffer vokser. "
+        "Jævn netto/mdr er konstant for alle år.",
     ]
 
     # ── Skatteeksempel for år 1 ───────────────────────────────────────────────
     if tabel:
         L += ["", _format_skatteeksempel(tabel[0], loebende, result["parametre"], fp_alder)]
-
-    # ── Fordel engangsbeloeb prompt ───────────────────────────────────────────
-    engangs_total = sum(pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"] for pr in engang)
-    if engangs_total > 0:
-        L += [
-            "",
-            "INSTRUKTION: Vis følgende forslag til brugeren efter analysen:",
-            f"> **Engangsudbetalinger ({engangs_total:,.0f} kr netto) sker i pensionsår 1.**".replace(",", "."),
-            "> Skriv **\"Fordel engangsudbetalinger over 10 år\"** for at se alternativ beregning.",
-        ]
 
     return "\n".join(L)

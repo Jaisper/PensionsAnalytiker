@@ -106,6 +106,13 @@ payout_products
   in "Nuværende pensionsopsparinger" or "Dine aftaler". Set null if not individually stated.
   When a provider has multiple products (e.g. Aldersopsparing + Ratepension + Livsvarig pension),
   each may have its own balance listed — extract each separately.
+
+  tax field rules:
+  - "S" = beskattes som indkomst (ratepension, livsvarig pension, ATP, folkepension)
+  - "F" = skattefri/afgiftsfri udbetaling (aldersopsparing; kapitalpension ONLY if the report
+    says "forudbetalt", "afgiftsfri", "afgift betalt", "konverteret" or "40% afgift er betalt")
+  - "A" = kapitalpension where 40% afgift has NOT been pre-paid (still owed at payout)
+  Default for kapitalpension: use "F" if any indication of pre-payment exists, otherwise "A".
 """
 
 

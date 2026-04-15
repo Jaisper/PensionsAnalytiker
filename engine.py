@@ -266,8 +266,39 @@ def generer_udbetalingstabel(
             f"{overskud:,.0f} kr/år flyttes automatisk til livsvarig pension.".replace(",", ".")
         )
 
+    # ── Pre-compute saldo-fordeling ───────────────────────────────────────────
+    # For hvert selskab: find matchende ordning, kendte individuelle saldi og
+    # antal produkter uden saldo — bruges til ligelig fordeling af rest-saldo.
+    from collections import defaultdict
+
+    def _find_ordning(sel: str, nr: str):
+        """Find bedste ordning-match: aftalenr først, derefter selskab."""
+        if nr:
+            for o in ordninger:
+                if str(o.get("aftalenr") or "") == nr:
+                    return o
+        for o in ordninger:
+            if (o.get("selskab") or "").lower() == sel.lower():
+                return o
+        return None
+
+    # Per selskab: sum af kendte saldi og antal produkter uden saldo
+    _kendte_saldi:   dict[str, float] = defaultdict(float)
+    _mangler_saldo:  dict[str, int]   = defaultdict(int)
+    for _p in pensionsprodukter:
+        _sel = (_p.get("selskab") or "").lower()
+        _pt  = (_p.get("produkttype") or "").lower()
+        if "atp" in _sel or "folkepension" in _pt:
+            continue
+        _pv = float(_p.get("opsparing") or _p.get("estimated_saldo") or 0)
+        if _pv:
+            _kendte_saldi[_sel] += _pv
+        else:
+            _mangler_saldo[_sel] += 1
+
     # ── Byg produktliste ──────────────────────────────────────────────────────
     produkter = []
+    _key_tæller: dict[str, int] = defaultdict(int)   # til unikke keys ved duplikater
     for prod in pensionsprodukter:
         selskab   = prod.get("selskab") or ""
         ptype     = prod.get("produkttype") or ""
@@ -279,14 +310,17 @@ def generer_udbetalingstabel(
         if "atp" in selskab.lower() or "atp" in ptype_l or "folkepension" in ptype_l:
             continue
 
-        # Saldo
+        # Saldo — fordel rest-saldo ligeligt hvis ingen individuel saldo
         pv = float(prod.get("opsparing") or prod.get("estimated_saldo") or 0)
         if not pv:
-            nr = str(prod.get("aftalenr") or "")
-            for o in ordninger:
-                if str(o.get("aftalenr") or "") == nr:
-                    pv = float(o.get("opsparing") or 0)
-                    break
+            nr     = str(prod.get("aftalenr") or "")
+            ordning = _find_ordning(selskab.lower(), nr)
+            if ordning:
+                total    = float(ordning.get("opsparing") or 0)
+                kendte   = _kendte_saldi.get(selskab.lower(), 0.0)
+                rest     = max(0.0, total - kendte)
+                count    = max(1, _mangler_saldo.get(selskab.lower(), 1))
+                pv = rest / count
 
         # PMT
         pmt = float(prod.get("estimated_pmt") or 0)
@@ -312,12 +346,17 @@ def generer_udbetalingstabel(
             mdr_brutto = beregn_maanedlig_annuitet(fv, r, udb_aar)
             stopper    = pensionsalder + udb_aar
 
+        # Unik key — tilføj tæller ved duplikater (fx 2× Livsvarig pension)
+        base_key = f"{selskab}_{ptype}"
+        _key_tæller[base_key] += 1
+        key = base_key if _key_tæller[base_key] == 1 else f"{base_key}_{_key_tæller[base_key]}"
+
         produkter.append({
             "selskab": selskab, "produkttype": ptype, "skat_type": skat_type,
             "pv": pv, "pmt": pmt, "fv": fv,
             "udb_type": udb_type, "udb_aar": udb_aar,
             "mdr_brutto": mdr_brutto, "stopper_ved_alder": stopper,
-            "key": f"{selskab}_{ptype}",
+            "key": key,
         })
 
     engangsbeloeb = [p for p in produkter if p["udb_type"] == "engangsbeloeb"]

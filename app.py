@@ -82,6 +82,7 @@ Har brugeren svaret på alle relevante spørgsmål i én besked: gå DIREKTE til
 - Svar **ja**: kapitalpensionen er afgiftsfri (F) — ingen yderligere skat ved udbetaling. Brug F i tabellen, beregn fuldt beløb.
 - Svar **nej**: kapitalpensionen er afgiftspligtig (A) — 40% afgift ved udbetaling. Nettoudbetaling = beløb × 0,60.
 - Standardantagelse hvis ikke spurgt: A (40% afgift).
+- **VIGTIGT: Du må ALDRIG selv konkludere at afgiften er betalt (F) baseret på rapportens tekst eller "evt. forudbetalt i 2013". Du SKAL stille spørgsmålet og vente på brugerens svar — det er brugerens eneste mulighed for at undgå 40% afgift i beregningen.**
 
 **Spørgsmål 6** — stil **kun hvis der er en firmapension med flere produkttyper (fx Velliv med Ratepension + Livsvarig + Aldersopsparing):**
 Præsentér altid produkterne i denne faste rækkefølge: **Ratepension → Livsvarig pension → Aldersopsparing**.

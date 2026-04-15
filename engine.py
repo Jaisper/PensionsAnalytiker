@@ -509,22 +509,22 @@ def generer_udbetalingstabel(
         })
 
     # ── Jævn fordeling ───────────────────────────────────────────────────────
-    # Engangsbeloeb er tilrådighed fra dag 1 og forrentes med r frem til brug.
-    # Beregnes som NPV-annuitet så buffer udtømmes præcist ved periodens slutning.
-    #
-    # X = (B₀ + PV(normal_netto)) / (12 × annuitetsfaktor)
-    # hvor PV diskonteres med r og annuitetsfaktoren = Σ 1/(1+r)^i for i=1..n
+    # Buffer (fri opsparing) forrentes med r efter 40% kapitalindkomstskat.
+    # NPV-annuitet beregnes med r_buffer så buffer udtømmes præcist ved periodens slutning.
+    BUFFER_SKAT = 0.40
+    r_buffer = r * (1 - BUFFER_SKAT)   # fx 4% × 60% = 2,4% efter skat
+
     n_aar = max(1, len(tabel))
-    pv_normal      = sum(row["total_netto_aar"] / (1 + r) ** (i + 1)
+    pv_normal      = sum(row["total_netto_aar"] / (1 + r_buffer) ** (i + 1)
                          for i, row in enumerate(tabel))
-    annuitet_faktor = sum(1 / (1 + r) ** (i + 1) for i in range(n_aar))
+    annuitet_faktor = sum(1 / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
     jaevn_netto_mdr = (engangs_netto_total + pv_normal) / annuitet_faktor / 12
 
-    # Buffer-tracking: forrentes med r hvert år, supplement trækkes fra
+    # Buffer-tracking: forrentes med r_buffer (efter 40% skat), supplement trækkes fra
     jaevn_tabel = []
     buffer = engangs_netto_total
     for row in tabel:
-        buffer      *= (1 + r)                         # forrentning af restbuffer
+        buffer      *= (1 + r_buffer)                  # forrentning efter skat
         normal_mdr   = row["total_netto_mdr"]
         fra_buffer   = jaevn_netto_mdr - normal_mdr   # positivt = trækker på buffer (månedlig)
         buffer      -= fra_buffer * 12                 # × 12: løkken kører én gang per år
@@ -941,11 +941,13 @@ def format_engine_til_llm(result: dict) -> str:
     # ── Tabel 3 — Jævn fordeling (ALLE rækker — LLM må IKKE rekonstruere) ──────
     jaevn_mdr = result.get("jaevn_netto_mdr", 0)
     engangs_total = sum(pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"] for pr in engang)
+    r_buf_pct = p["r"] * (1 - 0.40) * 100
     L += [
         "",
         f"### TABEL 3 — JÆVN FORDELING NETTO",
         f"Jævn netto/mdr over hele perioden: **{jaevn_mdr:,.0f} kr/mdr**".replace(",", "."),
-        f"Engangsbeløb netto ({engangs_total:,.0f} kr) bruges som buffer fra år 1.".replace(",", ".") if engangs_total else "",
+        (f"Engangsbeløb netto ({engangs_total:,.0f} kr) bruges som buffer fra år 1. "
+         f"Buffer forrentes med {r_buf_pct:.1f}% p.a. efter 40% kapitalindkomstskat.").replace(",", ".") if engangs_total else "",
         "| Alder | Normal netto/mdr | Jævn netto/mdr | Fra buffer/mdr | Buffer rest |",
         "|---|---|---|---|---|",
     ]
@@ -965,9 +967,7 @@ def format_engine_til_llm(result: dict) -> str:
         "INSTRUKTION: Kopiér Tabel 3 direkte — MÅ IKKE rekonstruere eller beregne buffer selv. "
         "Fra buffer/mdr: positivt = trækker på buffer (normal < jævn), negativt = buffer vokser (normal > jævn). "
         "Buffer forrentes med pensionsafkastet og udtømmes ved periodens slutning.",
-        "OBS: Buffer-afkast (renter/udbytte) er IKKE fratrukket skat i modellen — i praksis beskattes "
-        "kapitalindkomst fra fri opsparing med ca. 37-42% (kapitalindkomst) eller 27-42% (aktieindkomst). "
-        "Præsentér dette som en forbehold ved Tabel 3.",
+        "Buffer-afkast er beregnet efter 40% kapitalindkomstskat på afkastet (ikke på bufferen selv).",
     ]
 
     return "\n".join(L)

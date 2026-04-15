@@ -190,6 +190,31 @@ Brug tallene fra "BEREGNET PENSIONSANALYSE" nedenfor.
 """
 
 
+def _kapital_skat_type_fra_historik(session: dict) -> str | None:
+    """
+    Scan samtalens historik for om spm 5 er besvaret.
+    Returnerer 'F' hvis brugeren bekræftede forudbetalt afgift, 'A' hvis nej, None hvis ubesvaret.
+    """
+    msgs = session.get("messages", [])
+    for i, msg in enumerate(msgs):
+        role = msg.get("role", "")
+        content = (msg.get("content") or "").lower()
+        # Bruger sagde "ja" og konteksten (forrige assistant-besked) handler om kapitalpension-afgift
+        if role == "user" and content.strip() in ("ja", "j", "yes"):
+            # Tjek forrige assistant-besked for om den handlede om kapitalpension
+            if i > 0:
+                prev = (msgs[i - 1].get("content") or "").lower()
+                if "kapitalpension" in prev and ("afgift" in prev or "betalt" in prev or "2013" in prev):
+                    return "F"
+        # LLM bekræftede eksplicit F-skat for kapitalpension
+        if role == "assistant" and "kapitalpension" in content:
+            if "afgiftsfri (f)" in content or "skat_type.*f" in content or "f-skat" in content:
+                return "F"
+            if "40% afgift" in content and "ikke" not in content[:content.find("40% afgift") + 20]:
+                return "A"
+    return None
+
+
 def _kør_engine(session_id: str) -> str:
     """Kør deterministisk beregning hvis pensionsalder er oplyst. Returnerer formateret tekst."""
     session = sessions.get(session_id, {})
@@ -200,11 +225,20 @@ def _kør_engine(session_id: str) -> str:
         return "*(Ikke beregnet endnu — venter på pensionsalder fra spørgsmål 3)*"
 
     try:
+        # Anvend kapital-skat override fra samtalehistorik (spm 5)
+        import copy
+        profil_kopi = copy.deepcopy(profil)
+        kapital_skat = params.get("kapital_skat_type") or _kapital_skat_type_fra_historik(session)
+        if kapital_skat:
+            for p in profil_kopi.get("pensionsprodukter", []):
+                if "kapital" in (p.get("produkttype") or "").lower():
+                    p["skat_type"] = kapital_skat
+
         skat = SkatParametre.fra_pct(
             kommuneskat_pct=float(params.get("kommuneskat_pct", 25.0)),
             enlig=bool(params.get("enlig", True)),
         )
-        result = generer_udbetalingstabel(profil, params, skat)
+        result = generer_udbetalingstabel(profil_kopi, params, skat)
         session["engine_output"] = result
         return format_engine_til_llm(result)
     except Exception as e:
@@ -661,6 +695,7 @@ class Parametre(BaseModel):
     kommuneskat_pct: float | None = None
     enlig: bool | None = None
     saldi_overrides: list | None = None  # [{aftalenr, produkttype, saldo}]
+    kapital_skat_type: str | None = None  # "F" = forudbetalt, "A" = 40% afgift
 
 
 @app.post("/api/parametre")
@@ -668,12 +703,13 @@ async def gem_parametre(req: Parametre):
     if req.session_id not in sessions:
         raise HTTPException(404, "Session ikke fundet")
     p = sessions[req.session_id]["beregningsparametre"]
-    if req.netto_indbetaling is not None: p["netto_indbetaling"] = req.netto_indbetaling
-    if req.afkast_pct is not None:        p["afkast_pct"] = req.afkast_pct
-    if req.pensionsalder is not None:     p["pensionsalder"] = req.pensionsalder
-    if req.udbetaling_aar is not None:    p["udbetaling_aar"] = req.udbetaling_aar
-    if req.kommuneskat_pct is not None:   p["kommuneskat_pct"] = req.kommuneskat_pct
-    if req.enlig is not None:             p["enlig"] = req.enlig
+    if req.netto_indbetaling is not None:  p["netto_indbetaling"] = req.netto_indbetaling
+    if req.afkast_pct is not None:         p["afkast_pct"] = req.afkast_pct
+    if req.pensionsalder is not None:      p["pensionsalder"] = req.pensionsalder
+    if req.udbetaling_aar is not None:     p["udbetaling_aar"] = req.udbetaling_aar
+    if req.kommuneskat_pct is not None:    p["kommuneskat_pct"] = req.kommuneskat_pct
+    if req.enlig is not None:              p["enlig"] = req.enlig
+    if req.kapital_skat_type is not None:  p["kapital_skat_type"] = req.kapital_skat_type
 
     # Opdatér saldi i profilen så engine regner på aktuelle værdier (ikke PDF-saldi)
     if req.saldi_overrides:

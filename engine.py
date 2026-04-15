@@ -914,18 +914,19 @@ def format_engine_til_llm(result: dict) -> str:
 
         brutto_aar += fp_b_aar + atp_b_aar
 
-        # Note
+        # Note — samlet i ét felt, ingen pipe-separatorer (ville skabe ekstra kolonner)
         note_parts = []
         engangs_dette = row.get("engangs_netto", 0.0)
         if engangs_dette:
-            note_parts.append(f"Engangsbeløb: +{engangs_dette:,.0f} kr (engangs)".replace(",", "."))
+            skat_label = "F-skat" if any(p.get("skat_type") == "F" for p in (row.get("produkter") or {}).values()) else "A-skat"
+            note_parts.append(f"Engangsbeløb: +{engangs_dette:,.0f} kr. ({skat_label})".replace(",", "."))
         if row["over_topskat"]:
             note_parts.append("Topskat")
         tillaeg_max = PENSIONSTILLAEG_MAX_ENLIG_AAR / 12
         if har_fp and row["tillaeg_mdr"] < tillaeg_max * 0.95:
             tabt = round(tillaeg_max - row["tillaeg_mdr"])
-            note_parts.append(f"Modregning -{tabt:,.0f}".replace(",", "."))
-        note = " | ".join(note_parts) if note_parts else "—"
+            note_parts.append(f"Modregning -{tabt:,.0f} kr/mdr".replace(",", "."))
+        note = "; ".join(note_parts) if note_parts else "—"
 
         L.append(
             f"| {row['alder']} | " + " | ".join(prod_cols)

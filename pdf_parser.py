@@ -22,6 +22,10 @@ RULES:
 - Amounts: integers in DKK, no separators (e.g. 771000 not "771.000 kr.")
 - Missing value: null (never 0 unless explicitly stated as 0)
 - Do not invent numbers
+- ONE agreement = ONE entry in agreements[] and ONE entry in payout_products[].
+  Do NOT split a single agreement into multiple entries because it contains
+  investment pools, sub-funds, risk profiles, or asset allocations (aktier/obligationer/etc.).
+  A "puljeinvestering", "markedsrente" or similar is still just ONE product.
 
 Return exactly this structure:
 

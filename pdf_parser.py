@@ -326,20 +326,22 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
         "rapport_dato": "",
     }
 
-    # Byg aftalenr → produkttype(r) fra payout_products (mere præcis end agreements[].type)
-    nr_til_ptypes: dict[str, list[str]] = {}
+    # Byg (aftalenr, selskab) → produkttype(r) fra payout_products (mere præcis end agreements[].type)
+    nr_til_ptypes: dict[tuple, list[str]] = {}
     for p in raw.get("payout_products", []):
         nr    = str(p.get("number") or "").strip()
+        prv_p = str(p.get("provider") or "").strip()
         ptype = (p.get("type") or "").strip()
         if nr and ptype:
-            if nr not in nr_til_ptypes:
-                nr_til_ptypes[nr] = []
-            if ptype not in nr_til_ptypes[nr]:
-                nr_til_ptypes[nr].append(ptype)
+            key = (nr, prv_p)
+            if key not in nr_til_ptypes:
+                nr_til_ptypes[key] = []
+            if ptype not in nr_til_ptypes[key]:
+                nr_til_ptypes[key].append(ptype)
 
-    def best_ptype(nr: str, fallback: str) -> str:
+    def best_ptype(nr: str, selskab: str, fallback: str) -> str:
         """Vælg bedste produkttype: kapitalpension > aldersopsparing > ratepension > livsvarig > resten."""
-        ptypes = nr_til_ptypes.get(nr, [])
+        ptypes = nr_til_ptypes.get((nr, selskab), [])
         if not ptypes:
             return fallback
         priority = ["kapitalpension", "livsvarig", "ratepension", "aldersopsparing"]
@@ -355,7 +357,7 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
         nr  = str(a.get("number") or "").strip()
         prv = str(a.get("provider") or "")
         raw_type = a.get("type") or ""
-        ptype = best_ptype(nr, raw_type)
+        ptype = best_ptype(nr, prv, raw_type)
         ordninger.append({
             "aftalenr":           nr,
             "selskab":            prv,

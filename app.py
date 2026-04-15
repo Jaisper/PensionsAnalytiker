@@ -368,12 +368,13 @@ def build_oversigt_tabel(profil: dict) -> str:
     ord_  = profil.get("ordninger", [])
     prods = profil.get("pensionsprodukter", [])
 
-    # Byg index: aftalenr → liste af payout-produkter
-    prod_by_nr: dict[str, list] = {}
+    # Byg index: (aftalenr, selskab) → liste af payout-produkter
+    prod_by_nr: dict[tuple, list] = {}
     for p in prods:
-        nr = str(p.get("aftalenr") or "")
+        nr  = str(p.get("aftalenr") or "")
+        prv = str(p.get("selskab") or "")
         if nr:
-            prod_by_nr.setdefault(nr, []).append(p)
+            prod_by_nr.setdefault((nr, prv), []).append(p)
 
     def varighed(aldersperioder: dict) -> str:
         """Beregn omtrentlig udbetalingsperiode fra payout-perioder."""
@@ -432,7 +433,7 @@ def build_oversigt_tabel(profil: dict) -> str:
         total_opsp += opsp
         saldo_s = f"{opsp:,.0f} kr.".replace(",", ".")
 
-        sub = prod_by_nr.get(nr, [])
+        sub = prod_by_nr.get((nr, selskab), [])
         # Fold ud hvis der er mere end ét payout-produkt under samme aftalenr
         if len(sub) > 1:
             private_rækker.append(
@@ -446,9 +447,12 @@ def build_oversigt_tabel(profil: dict) -> str:
                 private_rækker.append(f"| {selskab} | \u00a0\u00a0↳ {spt} | {sub_saldo_s} | {beм(spt, per, kort=True)} |")
         else:
             # Find payout-perioder for enkelt produkt
-            sub1 = prod_by_nr.get(nr, [])
+            sub1 = prod_by_nr.get((nr, selskab), [])
             per1 = sub1[0].get("aldersperioder", {}) if sub1 else {}
-            private_rækker.append(f"| {selskab} | {ptype} | {saldo_s} | {beм(ptype, per1)} |")
+            # Vis investeringsform (f.eks. "Puljeinvestering") hvis sat og forskellig fra produkttype
+            inv = a.get("investeringsform") or ""
+            display_ptype = inv if inv and inv.lower() not in (ptype or "").lower() and ptype.lower() not in inv.lower() else ptype
+            private_rækker.append(f"| {selskab} | {display_ptype} | {saldo_s} | {beм(ptype, per1)} |")
 
     # ── ATP — find beløb og startperiode fra payout_products ──
     atp_prod = next((p for p in prods if "ATP" in (p.get("selskab") or "")), None)

@@ -272,14 +272,28 @@ def generer_udbetalingstabel(
     from collections import defaultdict
 
     def _find_ordning(sel: str, nr: str):
-        """Find bedste ordning-match: aftalenr først, derefter selskab."""
+        """Find bedste ordning-match.
+        Prioritering:
+          1. Aftalenr + selskab matcher (undgår kollision på placeholder-nr som 1111111111)
+          2. Kun selskab matcher
+          3. Kun aftalenr matcher (lavest prioritet — placeholder-nr kan give falsk match)
+        """
+        sel_l = sel.lower()
+        # 1. Bedste match: begge felter
+        if nr:
+            for o in ordninger:
+                if (str(o.get("aftalenr") or "") == nr
+                        and (o.get("selskab") or "").lower() == sel_l):
+                    return o
+        # 2. Selskab alene
+        for o in ordninger:
+            if (o.get("selskab") or "").lower() == sel_l:
+                return o
+        # 3. Aftalenr alene (fallback)
         if nr:
             for o in ordninger:
                 if str(o.get("aftalenr") or "") == nr:
                     return o
-        for o in ordninger:
-            if (o.get("selskab") or "").lower() == sel.lower():
-                return o
         return None
 
     # Per selskab: sum af kendte saldi og antal produkter uden saldo

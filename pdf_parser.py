@@ -93,7 +93,14 @@ has_health_insurance
   true if any health insurance policy is mentioned.
 
 earliest_retirement_age
-  The lowest retirement age shown in "Hvis du går på pension som X-årig" scenarios.
+  The LOWEST retirement age across the entire report. Check ALL of these locations:
+  1. "Hvis du går på pension som X-årig" section headers — note every X mentioned
+  2. Per-agreement detail pages ("yderligere oplysninger") — look for phrases like
+     "Tidligst mulig pensionsalder: X år", "Tidligst udbetaling: X år",
+     "Du kan tidligst hæve fra X-årig", "tidligste pensionsalder X"
+  3. Any mention of "62 år", "63 år" etc. as a minimum payout age
+  Return the MINIMUM age found across all sections (e.g. if one policy says 62 and
+  scenarios start at 64, return 62).
 
 payout_products
   From the EARLIEST retirement age scenario ONLY.
@@ -144,15 +151,33 @@ def _filter_relevant_pages(pages: list[str]) -> str:
         "Kritisk sygdom",
         "Sundhedsforsikring",
         "Øvrige forsikringer",
+        # Per-aftale detaljesider med tidligste pensionsalder
+        "yderligere oplysninger",
+        "Tidligst mulig pensionsalder",
+        "Tidligst udbetaling",
+        "tidligste pensionsalder",
+        "Tidligste pensionsalder",
+        "Du kan tidligst",
+        "tidligst hæve",
+        "Opsparingsalder",
     ]
-    # Find tidligste pensionsalder
+    # Find tidligste pensionsalder fra alle mulige formuleringer
     earliest_age = None
+    AGE_PATTERNS = [
+        r"Hvis du går på pension som (\d+)-årig",
+        r"[Tt]idligst\s+mulig\s+pensionsalder[:\s]+(\d+)",
+        r"[Tt]idligst\s+udbetaling[:\s]+(\d+)",
+        r"[Tt]idligste\s+pensionsalder[:\s]+(\d+)",
+        r"[Dd]u kan tidligst hæve fra (\d+)-årig",
+        r"[Tt]idligst hæve.*?(\d+)\s*år",
+    ]
     for page in pages:
-        m = re.search(r"Hvis du går på pension som (\d+)-årig", page)
-        if m:
-            age = int(m.group(1))
-            if earliest_age is None or age < earliest_age:
-                earliest_age = age
+        for pat in AGE_PATTERNS:
+            for m in re.finditer(pat, page):
+                age = int(m.group(1))
+                if 55 <= age <= 75:  # sanity check
+                    if earliest_age is None or age < earliest_age:
+                        earliest_age = age
 
     kept = []
     for i, page in enumerate(pages):

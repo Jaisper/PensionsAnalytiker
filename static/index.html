@@ -222,6 +222,30 @@
       50% { opacity: 0.35; }
     }
 
+    /* ── Parametre panel (persistent, collapsible) ── */
+    #parametre-panel {
+      background: #eaf2fb;
+      border-bottom: 2px solid #b8cfe8;
+      overflow: hidden;
+    }
+    #parametre-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 24px;
+      cursor: pointer;
+      user-select: none;
+      background: #dceaf8;
+    }
+    #parametre-panel-header:hover { background: #cfe0f5; }
+    #parametre-panel-header .ptitle {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #1a3a5c;
+    }
+    #parametre-panel-toggle { font-size: 0.78rem; color: #5578a0; }
+    #parametre-panel-body { padding: 12px 24px 16px; }
+
     /* ── Interview formular ── */
     .iform-wrap h4 { font-size: 0.9rem; font-weight: 600; color: #1a3a5c; margin-bottom: 12px; }
     .iform-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
@@ -391,6 +415,16 @@
   <button class="quick-btn" onclick="askQuick('Giv mig en kort oversigt over det danske pensionssystem — folkepension, ATP og private ordninger.')">Det danske pensionssystem</button>
   <button class="quick-btn" onclick="askQuick('Hvad er forskellen på ratepension, livsvarig pension, aldersopsparing og kapitalpension?')">Danske pensionsprodukter</button>
   <button class="quick-btn" onclick="showStaticAnswer('pensionsinfo')">Hent PensionsInfo-rapport</button>
+</div>
+
+<div id="parametre-panel" style="display:none">
+  <div id="parametre-panel-header" onclick="toggleParametrePanel()">
+    <span class="ptitle">&#x2699;&#xFE0E; Beregningsparametre</span>
+    <span id="parametre-panel-toggle">&#x25BC; Skjul</span>
+  </div>
+  <div id="parametre-panel-body">
+    <!-- Formular injiceres her af buildInterviewForm() -->
+  </div>
 </div>
 
 <div id="chat-container">
@@ -586,9 +620,8 @@ Upload derefter PDF'en her øverst til højre.`,
       await inject('assistant', trin0);
     }
 
-    // 2. Vis spørgeskema-formular (Q1–Q7)
-    const formEl = buildInterviewForm(profil);
-    document.getElementById('chat-container').appendChild(formEl);
+    // 2. Vis spørgeskema-formular i det vedvarende panel (Q1–Q8)
+    buildInterviewForm(profil);
     const formSummary = 'Spørgsmål 1–7 er vist i en formular. Afventer brugerens svar.';
     await inject('assistant', formSummary);
 
@@ -781,15 +814,24 @@ Upload derefter PDF'en her øverst til højre.`,
       </tr>`;
     }
 
-    const el = document.createElement('div');
-    el.className = 'message assistant';
-    el.id = 'interview-form-el';
-    el.innerHTML = `<div class="bubble"><div class="iform-wrap">
-      <h4>Udfyld for at starte analysen</h4>
+    const body = document.getElementById('parametre-panel-body');
+    body.innerHTML = `<div class="iform-wrap" id="interview-form-el">
       <table class="iform-table">${rows}</table>
-      <button class="iform-submit" onclick="submitInterviewForm()">Start analyse &#x2192;</button>
-    </div></div>`;
-    return el;
+      <button class="iform-submit" id="iform-submit-btn" onclick="submitInterviewForm()">Start analyse &#x2192;</button>
+    </div>`;
+    const panel = document.getElementById('parametre-panel');
+    panel.style.display = '';
+    // Ensure panel is open
+    document.getElementById('parametre-panel-body').style.display = '';
+    document.getElementById('parametre-panel-toggle').textContent = '\u25BC Skjul';
+    return null;
+  }
+
+  let _parametrePanelOpen = true;
+  function toggleParametrePanel() {
+    _parametrePanelOpen = !_parametrePanelOpen;
+    document.getElementById('parametre-panel-body').style.display = _parametrePanelOpen ? '' : 'none';
+    document.getElementById('parametre-panel-toggle').textContent = _parametrePanelOpen ? '\u25BC Skjul' : '\u25B6 Vis';
   }
 
   function toggleQ6Mode() {
@@ -896,9 +938,11 @@ Upload derefter PDF'en her øverst til højre.`,
 
     const msg = 'Mine svar:\n' + parts.join('\n');
 
-    // Fjern formular fra UI
-    const formEl = document.getElementById('interview-form-el');
-    if (formEl) formEl.remove();
+    // Opdater knaptekst og fold panel sammen efter indsendelse
+    const submitBtn = document.getElementById('iform-submit-btn');
+    if (submitBtn) submitBtn.textContent = '(Gen)start analyse \u2192';
+    // Fold panel sammen så analysen fylder mere
+    if (_parametrePanelOpen) toggleParametrePanel();
 
     // ── Gem parametre i session så engine kan køre ────────────────────────────
     // Kommuneskat-lookup (2025-satser, ca.-værdier)

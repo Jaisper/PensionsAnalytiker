@@ -95,7 +95,7 @@ has_health_insurance
 
 agreements[].earliest_payout_age
   The earliest age at which THIS specific agreement can be paid out.
-  Find it on the "Pension - yderligere oplysninger" page for that agreement.
+  Find it on the "Pension - flere oplysninger" page for that agreement.
   Look for phrases like:
     "Tidligst mulig pensionsalder: X år"
     "Tidligst udbetaling: X år"
@@ -162,6 +162,7 @@ def _filter_relevant_pages(pages: list[str]) -> str:
         "Sundhedsforsikring",
         "Øvrige forsikringer",
         # Per-aftale detaljesider med tidligste pensionsalder
+        "flere oplysninger",
         "yderligere oplysninger",
         "Tidligst mulig pensionsalder",
         "Tidligst udbetaling",

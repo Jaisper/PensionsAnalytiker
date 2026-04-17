@@ -39,7 +39,8 @@ Return exactly this structure:
       "type": "product type in Danish (e.g. Ratepension, Kapitalpension, Livsvarig pension, Markedsrente)",
       "balance": null,
       "annual_contribution": null,
-      "insurance_only": false
+      "insurance_only": false,
+      "earliest_payout_age": null
     }
   ],
   "death_cover": null,
@@ -92,15 +93,24 @@ critical_illness
 has_health_insurance
   true if any health insurance policy is mentioned.
 
+agreements[].earliest_payout_age
+  The earliest age at which THIS specific agreement can be paid out.
+  Find it on the "Pension - yderligere oplysninger" page for that agreement.
+  Look for phrases like:
+    "Tidligst mulig pensionsalder: X år"
+    "Tidligst udbetaling: X år"
+    "Du kan tidligst hæve fra X-årig"
+    "Tidligste pensionsalder: X"
+    "Opsparingsalder: X år"
+  Each agreement can have a DIFFERENT age (e.g. old contracts from before 2007
+  may allow payout from age 60, newer ones from 62 or 63).
+  Set null if not stated for this agreement.
+
 earliest_retirement_age
-  The LOWEST retirement age across the entire report. Check ALL of these locations:
-  1. "Hvis du går på pension som X-årig" section headers — note every X mentioned
-  2. Per-agreement detail pages ("yderligere oplysninger") — look for phrases like
-     "Tidligst mulig pensionsalder: X år", "Tidligst udbetaling: X år",
-     "Du kan tidligst hæve fra X-årig", "tidligste pensionsalder X"
-  3. Any mention of "62 år", "63 år" etc. as a minimum payout age
-  Return the MINIMUM age found across all sections (e.g. if one policy says 62 and
-  scenarios start at 64, return 62).
+  The LOWEST earliest_payout_age across all agreements.
+  Also check "Hvis du går på pension som X-årig" section headers — the lowest
+  X shown there is a lower bound.
+  Return the overall minimum (e.g. if one policy says 60 and another 63, return 60).
 
 payout_products
   From the EARLIEST retirement age scenario ONLY.
@@ -390,14 +400,17 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
         prv = str(a.get("provider") or "")
         raw_type = a.get("type") or ""
         ptype = best_ptype(nr, prv, raw_type)
+        epa = a.get("earliest_payout_age")
+        epa_int = int(epa) if epa and 55 <= int(epa) <= 75 else None
         ordninger.append({
-            "aftalenr":           nr,
-            "selskab":            prv,
-            "produkttype":        ptype,
-            "aarlig_indbetaling": to_int(a.get("annual_contribution")) or 0,
-            "opsparing":          to_int(a.get("balance")),
-            "kun_forsikring":     bool(a.get("insurance_only", False)),
-            "investeringsform":   raw_type,
+            "aftalenr":              nr,
+            "selskab":               prv,
+            "produkttype":           ptype,
+            "aarlig_indbetaling":    to_int(a.get("annual_contribution")) or 0,
+            "opsparing":             to_int(a.get("balance")),
+            "kun_forsikring":        bool(a.get("insurance_only", False)),
+            "investeringsform":      raw_type,
+            "tidligste_udbetaling":  epa_int,
         })
 
     # ── Opsparing total per selskab (fra ordninger) ──
@@ -430,7 +443,16 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
             "opsparing":      to_int(p.get("current_balance")),
         })
 
-    tidligste = raw.get("earliest_retirement_age")
+    # Brug minimum af per-aftale tidligste_udbetaling (den er mere præcis end top-level)
+    per_aftale_ages = [o["tidligste_udbetaling"] for o in ordninger if o["tidligste_udbetaling"]]
+    tidligste_top = raw.get("earliest_retirement_age")
+    if per_aftale_ages:
+        tidligste = min(per_aftale_ages)
+        # Ret top-level op hvis per-aftale er lavere
+        if tidligste_top and tidligste_top < tidligste:
+            tidligste = tidligste_top
+    else:
+        tidligste = tidligste_top
 
     # ── Estimér FV og PMT-fordeling for multi-produkt aftaler ──
     _estimer_pmt_fordeling(pensionsprodukter, ordninger, alder, tidligste)
@@ -486,7 +508,10 @@ def format_profil_til_tekst(profil: dict) -> str:
         ptype    = a.get("produkttype", "")
         kun_fors = a.get("kun_forsikring", False)
 
+        tid_udb = a.get("tidligste_udbetaling")
         linje = f"  {selskab} ({nr}){' – ' + ptype if ptype else ''}"
+        if tid_udb:
+            linje += f"  [tidligst udbetaling: {tid_udb} år]"
         linje += f"\n    Indbetaling: {indbetal:,.0f} kr/år".replace(",", ".")
         if opsp:
             linje += f"  |  Opsparing: {opsp:,.0f} kr.".replace(",", ".")

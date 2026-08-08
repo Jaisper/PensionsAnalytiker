@@ -951,7 +951,7 @@ def format_engine_til_llm(result: dict) -> str:
             None,
         )
         n_mdr    = first["produkter"][pr["key"]]["mdr_netto"] if first else 0.0
-        varighed = "livsvarig (18 år est.)" if pr["udb_type"] == "livsvarig" else f"{pr['udb_aar']} år"
+        varighed = f"livsvarig ({pr['udb_aar']} år est.)" if pr["udb_type"] == "livsvarig" else f"{pr['udb_aar']} år"
         L.append(
             f"| {pr['selskab']} – {pr['produkttype']} | {pr['skat_type']}"
             f" | {pr['start_alder']} år"
@@ -994,11 +994,13 @@ def format_engine_til_llm(result: dict) -> str:
     alle_labels = prod_labels + ["Folkepension", "ATP"]
     n_prod_cols = len(alle_labels)
     has_real    = inflation_pct > 0
+    has_engangs = bool(engang)
 
-    header_cols = " | ".join(f"{l} kr/år" for l in alle_labels)
-    real_col    = " | Real/mdr" if has_real else ""
-    header = f"| Alder | {header_cols} | Brutto/år | Netto/mdr{real_col} | Note |"
-    sep    = "|---|" + "|---|" * n_prod_cols + "---|---" + ("|---" if has_real else "") + "|---|"
+    header_cols  = " | ".join(f"{l} kr/år" for l in alle_labels)
+    real_col     = " | Real/mdr" if has_real else ""
+    engangs_hdr  = " | Engangsbeløb netto" if has_engangs else ""
+    header = f"| Alder | {header_cols}{engangs_hdr} | Brutto/år | Netto/mdr{real_col} | Note |"
+    sep    = "|---|" + "|---|" * n_prod_cols + ("|---|" if has_engangs else "") + "---|---" + ("|---" if has_real else "") + "|---|"
 
     fp_idx      = next((i for i, r in enumerate(tabel) if r["alder"] >= fp_alder), None)
     pension_idx = next((i for i, r in enumerate(tabel) if r["alder"] >= p["pensionsalder"]), 0)
@@ -1052,8 +1054,10 @@ def format_engine_til_llm(result: dict) -> str:
         if row["alder"] < p["pensionsalder"]:
             note_parts.append("Arbejder stadig")
         engangs_dette = row.get("engangs_netto", 0.0)
-        if engangs_dette:
-            note_parts.append(f"Engangsbeløb: +{engangs_dette:,.0f} kr.".replace(",", "."))
+        engangs_col_val = (
+            f" | {engangs_dette:,.0f} kr.".replace(",", ".") if engangs_dette > 0
+            else (" | —" if has_engangs else "")
+        )
         if row["over_topskat"]:
             note_parts.append("Topskat")
         tillaeg_max = PENSIONSTILLAEG_MAX_ENLIG_AAR / 12
@@ -1066,6 +1070,7 @@ def format_engine_til_llm(result: dict) -> str:
 
         L.append(
             f"| {row['alder']} | " + " | ".join(prod_cols)
+            + engangs_col_val
             + f" | {brutto_aar:,.0f} | {row['total_netto_mdr']:,.0f}".replace(",", ".")
             + real_col_val
             + f" | {note} |"
@@ -1074,6 +1079,21 @@ def format_engine_til_llm(result: dict) -> str:
 
     if has_real:
         L.append(f"*Real/mdr: 2025-købekraft ved {inflation_pct:.1f}% p.a. inflation*")
+
+    if has_engangs:
+        r = p["r"]
+        total_engangs_netto = sum(
+            pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
+            for pr in engang
+        )
+        # Annuitet over 12 mdr
+        r_mdr = r / 12
+        mdr_12 = total_engangs_netto * r_mdr / (1 - (1 + r_mdr) ** -12) if r_mdr > 0 else total_engangs_netto / 12
+        L += [
+            "",
+            f"*Engangsbeløb: samlet netto {kr(total_engangs_netto)} kr. — "
+            f"fordelt over 12 måneder = ca. {mdr_12:,.0f} kr/mdr ekstra i udbetalingsåret.*".replace(",", "."),
+        ]
 
     # Skatteeksempel år 1
     if tabel:

@@ -309,8 +309,10 @@
     /* ── Main (chat-wrapper) ── */
     main {
       flex: 1;
-      min-height: 0;   /* tillader flex at krympe main under indholdsstørrelse */
+      min-height: 0;        /* tillader flex at krympe main under indholdsstørrelse */
       overflow: hidden;
+      display: flex;        /* chat-container bruger flex:1 — main skal være flex-container */
+      flex-direction: column;
     }
 
     /* ── Input ── */

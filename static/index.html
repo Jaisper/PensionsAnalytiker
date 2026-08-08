@@ -842,7 +842,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Tidligst muligt: ${tidligst} år</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq3" value="${Math.max(tidligst, 62)}" min="55" max="75"
+          <input type="number" id="iq3" value="${Math.max(tidligst, 62)}" min="60" max="75"
             oninput="autoFillStartAldre()" aria-label="Ønsket pensionsalder i år">
           <span class="unit">år</span>
         </td>
@@ -870,7 +870,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <td style="padding:3px 2px;font-size:0.82rem;color:#4a6a80;padding-right:10px;min-width:180px">
             ${selskab} – ${ptype}${hint}</td>
           <td style="padding:3px 0;white-space:nowrap">
-            <input type="number" id="iq_start_${idx}" value="${defaultAlder}" min="55" max="85"
+            <input type="number" id="iq_start_${idx}" value="${defaultAlder}" min="60" max="85"
               data-key="${escapeAttr(key)}" data-is-engangs="${isEngangs}" style="width:70px">
             <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">år</span>
           </td>
@@ -1982,7 +1982,7 @@ function renderTimeline(data) {
     const widthPct = Math.max(1, pct(stopAge) - leftPct);
     const barLabel = isEngangs ? `${startAge}–${stopAge}` : `${startAge}–${stopAge}`;
 
-    const minDragAge = Math.max(55, fpAlder - 7);
+    const minDragAge = Math.max(60, fpAlder - 5);  // PALFP: tidligst 5 år før folkepension, gulv 60
     const barTitle = isEngangs
       ? `Midten: flyt udbetaling · Højre kant: juster bufferperiode · ${barLabel} år`
       : `Venstre kant: juster start · Højre kant: juster slut · Midten: flyt · ${barLabel} år`;

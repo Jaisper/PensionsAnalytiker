@@ -227,6 +227,10 @@
       background: #eaf2fb;
       border-bottom: 2px solid #b8cfe8;
       overflow: hidden;
+      flex-shrink: 0;   /* må ikke klemmes af flex-layoutet */
+    }
+    #chart-panel {
+      flex-shrink: 0;   /* samme — må ikke klemmes */
     }
     #parametre-panel-header {
       display: flex;
@@ -301,6 +305,13 @@
 
     /* ── Tabel overflow ── */
     .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 10px 0; }
+
+    /* ── Main (chat-wrapper) ── */
+    main {
+      flex: 1;
+      min-height: 0;   /* tillader flex at krympe main under indholdsstørrelse */
+      overflow: hidden;
+    }
 
     /* ── Input ── */
     #input-area {

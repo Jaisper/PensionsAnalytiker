@@ -420,17 +420,24 @@
 .tl-wrap { margin-top: 10px; }
 .tl-label { font-size: 0.76rem; color: #5578a0; margin-bottom: 6px; font-weight: 600; }
 .tl-track-area { position: relative; user-select: none; }
-.tl-scale { display: flex; justify-content: space-between; font-size: 0.68rem; color: #8aa0b8; margin-bottom: 4px; padding: 0 0; }
+.tl-scale { display: flex; justify-content: space-between; font-size: 0.68rem; color: #8aa0b8; margin-bottom: 4px; }
 .tl-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .tl-row-label { font-size: 0.74rem; color: #3a5a78; width: 160px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tl-track { flex: 1; height: 26px; background: #e2ecf8; border-radius: 4px; position: relative; cursor: pointer; }
-.tl-bar { position: absolute; top: 4px; height: calc(100% - 8px); border-radius: 4px; cursor: grab; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; color: rgba(255,255,255,0.9); font-weight: 600; overflow: visible; white-space: nowrap; min-width: 8px; }
-.tl-bar-label { padding: 0 14px; pointer-events: none; overflow: hidden; white-space: nowrap; }
-/* Handles sidder på TRACK-niveau (ikke bar) så overflow:hidden ikke clipper dem */
-.tl-handle { position: absolute; top: 0; width: 14px; height: 100%; background: rgba(0,0,0,0.22); cursor: ew-resize; border-radius: 3px; z-index: 3; touch-action: none; }
-.tl-handle.start { left: 0; border-radius: 4px 0 0 4px; }
-.tl-handle.end { right: 0; border-radius: 0 4px 4px 0; }
-.tl-handle.move { left: 50%; top: 50%; transform: translate(-50%,-50%); width: 16px; height: 16px; border-radius: 50%; background: rgba(255,255,255,0.9); border: 2px solid rgba(0,0,0,0.35); cursor: grab; }
+.tl-track { flex: 1; height: 28px; background: #e2ecf8; border-radius: 4px; position: relative; }
+/* Bar er det primære drag-mål — hele baren er klikbar */
+.tl-bar { position: absolute; top: 3px; height: calc(100% - 6px); border-radius: 4px; cursor: grab;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 0.65rem; color: rgba(255,255,255,0.95); font-weight: 600;
+          overflow: hidden; white-space: nowrap; min-width: 10px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.2); touch-action: none; }
+.tl-bar:active { cursor: grabbing; }
+/* Visuelle kant-indikatorer (pointer-events:none — kun visuelle) */
+.tl-bar::before, .tl-bar::after {
+  content: ''; position: absolute; top: 20%; height: 60%; width: 4px;
+  background: rgba(255,255,255,0.5); border-radius: 2px; pointer-events: none;
+}
+.tl-bar::before { left: 5px; }
+.tl-bar::after  { right: 5px; }
 .chart-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
 .chart-btn { border: none; border-radius: 6px; padding: 6px 14px; font-size: 0.82rem; cursor: pointer; font-family: inherit; }
 .chart-btn.primary { background: #1a3a5c; color: white; }
@@ -1967,13 +1974,11 @@ function renderTimeline(data) {
            data-is-engangs="${isEngangs}" data-key="${escapeAttr(prod.key)}">
         <div class="tl-bar" id="tl-bar-${idx}"
              style="left:${leftPct}%;width:${widthPct}%;background:${color}"
-             title="${label}: ${barLabel} år">
-          <span class="tl-bar-label">${barLabel}</span>
+             title="${isEngangs ? `Træk for at rykke · ${barLabel} år` : `Venstre kant: juster start · Højre kant: juster slut · Midten: flyt · ${barLabel} år`}"
+             onmousedown="tlBarDown(event,${idx})"
+             ontouchstart="tlBarTouch(event,${idx})">
+          <span style="padding:0 18px;pointer-events:none;overflow:hidden">${barLabel}</span>
         </div>
-        ${isEngangs
-          ? `<div class="tl-handle move" style="left:calc(${leftPct}% + ${widthPct/2}% - 8px)" id="tl-h-move-${idx}" onmousedown="tlDragStart(event,${idx},'move')"></div>`
-          : `<div class="tl-handle start" style="left:${leftPct}%" id="tl-h-start-${idx}" onmousedown="tlDragStart(event,${idx},'start')"></div>
-             <div class="tl-handle end" style="left:calc(${leftPct + widthPct}% - 14px)" id="tl-h-end-${idx}" onmousedown="tlDragStart(event,${idx},'end')"></div>`}
       </div>
     </div>`;
   });
@@ -2009,19 +2014,50 @@ function renderTimeline(data) {
   container.innerHTML = html;
 
   // Touch support
-  container.addEventListener('touchstart', e => {
-    const handle = e.target.closest('.tl-handle');
-    if (handle) {
-      e.preventDefault();
-      const row = handle.closest('.tl-row');
-      const idx = row ? parseInt(row.dataset.idx) : NaN;
-      if (isNaN(idx)) return;
-      const type = handle.classList.contains('start') ? 'start'
-                 : handle.classList.contains('end')   ? 'end'
-                 : 'move';
-      tlDragStart({ clientX: e.touches[0].clientX, preventDefault: ()=>{} }, idx, type);
-    }
-  }, { passive: false });
+  // Touch er håndteret via ontouchstart direkte på .tl-bar elementerne
+}
+
+function tlBarDown(e, idx) {
+  e.preventDefault();
+  const bar  = document.getElementById(`tl-bar-${idx}`);
+  const track = document.getElementById(`tl-track-${idx}`);
+  if (!bar || !track) return;
+  const rect   = bar.getBoundingClientRect();
+  const xInBar = e.clientX - rect.left;
+  const zone   = Math.min(24, rect.width * 0.22);   // kant-zone: 22% eller max 24px
+  let handleType;
+  if (track.dataset.isEngangs === 'true' || rect.width < 30) {
+    handleType = 'move';
+  } else if (xInBar < zone) {
+    handleType = 'start';
+  } else if (xInBar > rect.width - zone) {
+    handleType = 'end';
+  } else {
+    handleType = 'move';
+  }
+  tlDragStart(e, idx, handleType);
+}
+
+function tlBarTouch(e, idx) {
+  if (e.touches.length !== 1) return;
+  e.preventDefault();
+  const bar  = document.getElementById(`tl-bar-${idx}`);
+  const track = document.getElementById(`tl-track-${idx}`);
+  if (!bar || !track) return;
+  const rect   = bar.getBoundingClientRect();
+  const xInBar = e.touches[0].clientX - rect.left;
+  const zone   = Math.min(24, rect.width * 0.22);
+  let handleType;
+  if (track.dataset.isEngangs === 'true' || rect.width < 30) {
+    handleType = 'move';
+  } else if (xInBar < zone) {
+    handleType = 'start';
+  } else if (xInBar > rect.width - zone) {
+    handleType = 'end';
+  } else {
+    handleType = 'move';
+  }
+  tlDragStart({ clientX: e.touches[0].clientX, preventDefault: () => {} }, idx, handleType);
 }
 
 function tlDragStart(e, idx, handleType) {
@@ -2099,16 +2135,6 @@ function tlUpdateBar(d) {
   const lbl = bar.querySelector('.tl-bar-label');
   if (lbl) lbl.textContent = d.isEngangs ? `${d.start}` : `${d.start}–${d.stop}`;
 
-  // Opdatér handle-positioner (de sidder på track-niveau)
-  if (d.isEngangs) {
-    const hm = document.getElementById(`tl-h-move-${d.idx}`);
-    if (hm) hm.style.left = `calc(${leftPct}% + ${widthPct / 2}% - 8px)`;
-  } else {
-    const hs = document.getElementById(`tl-h-start-${d.idx}`);
-    const he = document.getElementById(`tl-h-end-${d.idx}`);
-    if (hs) hs.style.left = leftPct + '%';
-    if (he) he.style.left = `calc(${leftPct + widthPct}% - 14px)`;
-  }
 }
 
 async function tlApplyChanges(d) {

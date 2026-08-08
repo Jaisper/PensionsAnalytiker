@@ -428,6 +428,7 @@
 .tl-handle { position: absolute; top: 0; width: 8px; height: 100%; background: rgba(0,0,0,0.25); cursor: ew-resize; border-radius: 3px; }
 .tl-handle.start { left: 0; border-radius: 4px 0 0 4px; }
 .tl-handle.end { right: 0; border-radius: 0 4px 4px 0; }
+.tl-handle.move { left: 50%; top: 50%; transform: translate(-50%,-50%); width: 12px; height: 12px; border-radius: 50%; background: rgba(255,255,255,0.85); border: 2px solid rgba(0,0,0,0.35); cursor: grab; z-index: 2; }
 .chart-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
 .chart-btn { border: none; border-radius: 6px; padding: 6px 14px; font-size: 0.82rem; cursor: pointer; font-family: inherit; }
 .chart-btn.primary { background: #1a3a5c; color: white; }
@@ -1944,18 +1945,24 @@ function renderTimeline(data) {
     const widthPct = Math.max(1, pct(stopAge) - leftPct);
     const barLabel = isEngangs ? `${startAge}` : `${startAge}–${stopAge}`;
 
+    // PALFP-minimum: fp_alder - 5 år (PBL §16), min 55 for gamle kontrakter
+    const minDragAge = isEngangs ? Math.max(55, fpAlder - 7) : Math.max(55, fpAlder - 7);
+
     html += `<div class="tl-row" data-key="${escapeAttr(prod.key)}" data-idx="${idx}">
       <div class="tl-row-label" title="${label}">${label}</div>
       <div class="tl-track" id="tl-track-${idx}"
            data-agemin="${ageMin}" data-agemax="${ageMax}" data-span="${span}"
            data-start="${startAge}" data-stop="${isEngangs ? startAge + 1 : stopAge}"
+           data-minage="${minDragAge}"
            data-is-engangs="${isEngangs}" data-key="${escapeAttr(prod.key)}">
         <div class="tl-bar" id="tl-bar-${idx}"
              style="left:${leftPct}%;width:${widthPct}%;background:${color}"
              title="${label}: ${barLabel} år">
-          ${!isEngangs ? '<div class="tl-handle start" onmousedown="tlDragStart(event,'+idx+',\'start\')"></div>' : ''}
+          ${isEngangs
+            ? `<div class="tl-handle move" onmousedown="tlDragStart(event,${idx},'move')"></div>`
+            : `<div class="tl-handle start" onmousedown="tlDragStart(event,${idx},'start')"></div>`}
           <span style="padding:0 4px;pointer-events:none">${barLabel}</span>
-          ${!isEngangs ? '<div class="tl-handle end" onmousedown="tlDragStart(event,'+idx+',\'end\')"></div>' : ''}
+          ${!isEngangs ? `<div class="tl-handle end" onmousedown="tlDragStart(event,${idx},'end')"></div>` : ''}
         </div>
       </div>
     </div>`;
@@ -1997,7 +2004,9 @@ function renderTimeline(data) {
     if (handle) {
       e.preventDefault();
       const idx = parseInt(handle.closest('.tl-row').dataset.idx);
-      const type = handle.classList.contains('start') ? 'start' : 'end';
+      const type = handle.classList.contains('start') ? 'start'
+                 : handle.classList.contains('end')   ? 'end'
+                 : 'move';
       tlDragStart({ clientX: e.touches[0].clientX, preventDefault: ()=>{} }, idx, type);
     }
   }, { passive: false });
@@ -2013,13 +2022,14 @@ function tlDragStart(e, idx, handleType) {
     handleType,
     track,
     rect,
-    ageMin:   parseInt(track.dataset.agemin),
-    ageMax:   parseInt(track.dataset.agemax),
-    span:     parseInt(track.dataset.span),
-    start:    parseInt(track.dataset.start),
-    stop:     parseInt(track.dataset.stop),
+    ageMin:    parseInt(track.dataset.agemin),
+    ageMax:    parseInt(track.dataset.agemax),
+    minAge:    parseInt(track.dataset.minage || track.dataset.agemin),
+    span:      parseInt(track.dataset.span),
+    start:     parseInt(track.dataset.start),
+    stop:      parseInt(track.dataset.stop),
     isEngangs: track.dataset.isEngangs === 'true',
-    key:      track.dataset.key,
+    key:       track.dataset.key,
   };
 
   const moveHandler = (ev) => {
@@ -2028,8 +2038,14 @@ function tlDragStart(e, idx, handleType) {
     const frac = Math.max(0, Math.min(1, (clientX - _tlDrag.rect.left) / _tlDrag.rect.width));
     const age  = Math.max(_tlDrag.ageMin, Math.min(_tlDrag.ageMax, Math.round(_tlDrag.ageMin + frac * _tlDrag.span)));
 
-    if (_tlDrag.handleType === 'start') {
-      _tlDrag.start = Math.min(age, _tlDrag.stop - 1);
+    if (_tlDrag.handleType === 'move') {
+      // Engangsbeløb: flyt hele baren — begge ender rykker samme antal år
+      const dur = _tlDrag.stop - _tlDrag.start;
+      const newStart = Math.max(_tlDrag.minAge, Math.min(_tlDrag.ageMax - dur, age));
+      _tlDrag.start = newStart;
+      _tlDrag.stop  = newStart + dur;
+    } else if (_tlDrag.handleType === 'start') {
+      _tlDrag.start = Math.max(_tlDrag.minAge, Math.min(age, _tlDrag.stop - 1));
     } else {
       _tlDrag.stop = Math.max(age, _tlDrag.start + 1);
     }

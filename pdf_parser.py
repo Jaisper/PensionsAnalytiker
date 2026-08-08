@@ -6,6 +6,7 @@ Bruger pdfplumber til tekst-udtræk og Claude Sonnet til struktureret JSON-ekstr
 import re
 import os
 import json
+import asyncio
 import warnings
 import pdfplumber
 from pathlib import Path
@@ -133,15 +134,6 @@ payout_products
 """
 
 
-def parse_pensionsinfo_pdf(pdf_path: str) -> dict:
-    """Udtrækker og strukturerer data fra en PensionsInfo PDF."""
-    pages = _extract_pages(pdf_path)
-    relevant = _filter_relevant_pages(pages)
-    raw = _extract_with_llm(relevant)
-    full_text = "\n\n".join(f"=== SIDE {i+1} ===\n{p}" for i, p in enumerate(pages) if p)
-    return _to_legacy_format(raw, full_text)
-
-
 def _extract_pages(pdf_path: str) -> list[str]:
     pages = []
     with pdfplumber.open(pdf_path) as pdf:
@@ -161,7 +153,6 @@ def _filter_relevant_pages(pages: list[str]) -> str:
         "Kritisk sygdom",
         "Sundhedsforsikring",
         "Øvrige forsikringer",
-        # Per-aftale detaljesider med tidligste pensionsalder
         "flere oplysninger",
         "yderligere oplysninger",
         "Tidligst mulig pensionsalder",
@@ -172,7 +163,6 @@ def _filter_relevant_pages(pages: list[str]) -> str:
         "tidligst hæve",
         "Opsparingsalder",
     ]
-    # Find tidligste pensionsalder fra alle mulige formuleringer
     earliest_age = None
     AGE_PATTERNS = [
         r"Hvis du går på pension som (\d+)-årig",
@@ -186,7 +176,7 @@ def _filter_relevant_pages(pages: list[str]) -> str:
         for pat in AGE_PATTERNS:
             for m in re.finditer(pat, page):
                 age = int(m.group(1))
-                if 55 <= age <= 75:  # sanity check
+                if 55 <= age <= 75:
                     if earliest_age is None or age < earliest_age:
                         earliest_age = age
 
@@ -199,22 +189,41 @@ def _filter_relevant_pages(pages: list[str]) -> str:
     return "\n\n".join(kept)
 
 
-def _extract_with_llm(text: str) -> dict:
-    import anthropic
-    client = anthropic.Anthropic()
+async def _extract_with_llm(text: str) -> dict:
+    """Kalder Claude med op til 3 forsøg ved fejl."""
+    import anthropic as _anthropic
+    client = _anthropic.AsyncAnthropic()
+    last_exc: Exception = RuntimeError("Ingen forsøg gennemført")
 
-    msg = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=8000,
-        messages=[{
-            "role": "user",
-            "content": f"{EXTRACTION_PROMPT}\n\nREPORT TEXT:\n{text}",
-        }],
-    )
-    raw = msg.content[0].text.strip()
-    raw = re.sub(r"^```(?:json)?\n?", "", raw)
-    raw = re.sub(r"\n?```$", "", raw)
-    return json.loads(raw)
+    for attempt in range(3):
+        try:
+            msg = await client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=8000,
+                messages=[{
+                    "role": "user",
+                    "content": f"{EXTRACTION_PROMPT}\n\nREPORT TEXT:\n{text}",
+                }],
+            )
+            raw = msg.content[0].text.strip()
+            raw = re.sub(r"^```(?:json)?\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+            return json.loads(raw)
+        except Exception as e:
+            last_exc = e
+            if attempt < 2:
+                await asyncio.sleep(2 ** attempt)
+
+    raise last_exc
+
+
+async def parse_pensionsinfo_pdf(pdf_path: str) -> dict:
+    """Udtrækker og strukturerer data fra en PensionsInfo PDF."""
+    pages = await asyncio.to_thread(_extract_pages, pdf_path)
+    relevant = _filter_relevant_pages(pages)
+    raw = await _extract_with_llm(relevant)
+    full_text = "\n\n".join(f"=== SIDE {i+1} ===\n{p}" for i, p in enumerate(pages) if p)
+    return _to_legacy_format(raw, full_text)
 
 
 def _fv_fra_payout(ptype: str, aldersperioder: dict, r: float = 0.04) -> float | None:
@@ -226,10 +235,10 @@ def _fv_fra_payout(ptype: str, aldersperioder: dict, r: float = 0.04) -> float |
         return None
     pt = (ptype or "").lower()
     if "kapitalpension" in pt or "aldersopsparing" in pt:
-        return float(first)          # engangsbeløb ≈ FV direkte
+        return float(first)
     elif "livsvarig" in pt or "livrente" in pt:
         m = 25
-    else:                            # ratepension — find antal år fra periodenøgler
+    else:
         m = 0
         for k in aldersperioder:
             if re.match(r"^\d+ år$", k):
@@ -257,8 +266,6 @@ def _estimer_pmt_fordeling(
     Resultater gemmes direkte på hvert produkt-dict.
     """
     from collections import defaultdict
-    # Gruppér på (aftalenr, selskab) — aftalenr alene giver kollisioner
-    # når flere selskaber bruger samme placeholder-nr (fx "1111111111")
     by_key: dict[tuple, list] = defaultdict(list)
     for prod in pensionsprodukter:
         nr  = prod.get("aftalenr") or ""
@@ -268,9 +275,8 @@ def _estimer_pmt_fordeling(
 
     for (nr, sel), prods in by_key.items():
         if len(prods) < 2:
-            continue   # kun relevant for multi-produkt aftaler
+            continue
 
-        # Find samlet PMT: kræv match på begge felter
         samlet_pmt = next(
             (o["aarlig_indbetaling"] for o in ordninger
              if str(o.get("aftalenr") or "") == nr
@@ -281,7 +287,6 @@ def _estimer_pmt_fordeling(
         if not samlet_pmt:
             continue
 
-        # Estimér FV per produkt (fra payout-beløb)
         fv_list = []
         for prod in prods:
             fv = _fv_fra_payout(prod["produkttype"], prod.get("aldersperioder") or {}, r)
@@ -291,7 +296,6 @@ def _estimer_pmt_fordeling(
         if not total_fv:
             continue
 
-        # Fordel PMT proportionalt med FV
         n = (tidligste - alder) if (tidligste and alder and tidligste > alder) else None
         pmt_per_prod = []
         for prod, fv in zip(prods, fv_list):
@@ -305,8 +309,6 @@ def _estimer_pmt_fordeling(
             prod["estimated_fv_rapport"] = int(fv)
             pmt_per_prod.append(float(pmt_i))
 
-        # Back-beregn PV per produkt: PV = (FV - PMT×((1+r)^n-1)/r) / (1+r)^n
-        # Normaliser derefter så sum(PV_i) = faktisk total saldo
         samlet_opsparing = next(
             (o["opsparing"] for o in ordninger
              if str(o.get("aftalenr") or "") == nr
@@ -341,19 +343,17 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
             return int(v)
         return None
 
-    # ── Person — udled fødselsdato og alder fra CPR ──
     import re as _re
     from datetime import date as _date
 
     foedselsdato = ""
     alder = None
     cpr_raw = str(raw.get("cpr") or "")
-    cpr_digits = _re.sub(r"\D", "", cpr_raw)  # fjern bindestreg etc.
+    cpr_digits = _re.sub(r"\D", "", cpr_raw)
     if len(cpr_digits) >= 6:
         dd  = int(cpr_digits[0:2])
         mm  = int(cpr_digits[2:4])
         yy  = int(cpr_digits[4:6])
-        # Århundrede: pensionskunder er altid født i 1900-tallet
         yyyy = 1900 + yy
         try:
             foedselsdato = f"{dd:02d}.{mm:02d}.{yyyy}"
@@ -369,7 +369,6 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
         "rapport_dato": "",
     }
 
-    # Byg (aftalenr, selskab) → produkttype(r) fra payout_products (mere præcis end agreements[].type)
     nr_til_ptypes: dict[tuple, list[str]] = {}
     for p in raw.get("payout_products", []):
         nr    = str(p.get("number") or "").strip()
@@ -383,7 +382,6 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
                 nr_til_ptypes[key].append(ptype)
 
     def best_ptype(nr: str, selskab: str, fallback: str) -> str:
-        """Vælg bedste produkttype: kapitalpension > aldersopsparing > ratepension > livsvarig > resten."""
         ptypes = nr_til_ptypes.get((nr, selskab), [])
         if not ptypes:
             return fallback
@@ -394,7 +392,6 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
                     return pt
         return ptypes[0]
 
-    # ── Ordninger ──
     ordninger = []
     for a in raw.get("agreements", []):
         nr  = str(a.get("number") or "").strip()
@@ -414,14 +411,12 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
             "tidligste_udbetaling":  epa_int,
         })
 
-    # ── Opsparing total per selskab (fra ordninger) ──
     opsparing_total: dict[str, int] = {}
     for o in ordninger:
         if o["opsparing"] and not o["kun_forsikring"]:
             prv = o["selskab"]
             opsparing_total[prv] = opsparing_total.get(prv, 0) + o["opsparing"]
 
-    # ── Forsikringer ──
     forsikringer = {
         "liv_ved_doed":            to_int(raw.get("death_cover")) or 0,
         "tabt_arbejdsevne_aarlig": to_int(raw.get("disability_annual")) or 0,
@@ -430,7 +425,6 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
         "gruppeliv":               0,
     }
 
-    # ── Pensionsprodukter ──
     pensionsprodukter = []
     for p in raw.get("payout_products", []):
         ams = p.get("amounts") or {}
@@ -444,18 +438,15 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
             "opsparing":      to_int(p.get("current_balance")),
         })
 
-    # Brug minimum af per-aftale tidligste_udbetaling (den er mere præcis end top-level)
     per_aftale_ages = [o["tidligste_udbetaling"] for o in ordninger if o["tidligste_udbetaling"]]
     tidligste_top = raw.get("earliest_retirement_age")
     if per_aftale_ages:
         tidligste = min(per_aftale_ages)
-        # Ret top-level op hvis per-aftale er lavere
         if tidligste_top and tidligste_top < tidligste:
             tidligste = tidligste_top
     else:
         tidligste = tidligste_top
 
-    # ── Estimér FV og PMT-fordeling for multi-produkt aftaler ──
     _estimer_pmt_fordeling(pensionsprodukter, ordninger, alder, tidligste)
 
     samlet_aarlig_indbetaling = sum(
@@ -528,7 +519,6 @@ def format_profil_til_tekst(profil: dict) -> str:
         linjer.append(f"  TOTAL OPSPARING: {total_ops:,.0f} kr.".replace(",", "."))
 
     if prod:
-        # Vis skattetyper, varighed og estimerede PMT-fordelinger
         linjer += ["", "=== PRODUKTTYPER, SKAT, VARIGHED OG ESTIMERET INDBETALING ==="]
         linjer.append("  (Estimerede indbetalinger er back-beregnet fra payout-siden — brug som udgangspunkt, ikke facit)")
         seen = set()
@@ -543,7 +533,6 @@ def format_profil_til_tekst(profil: dict) -> str:
                 continue
             seen.add(key)
 
-            # Udled varighed fra periodenavne (ikke beløb)
             varighed_str = ""
             pt_lower = ptype.lower()
             if "kapitalpension" in pt_lower or "aldersopsparing" in pt_lower:

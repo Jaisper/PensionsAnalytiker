@@ -58,7 +58,7 @@ PENSION_REGLER = {
             "4. Indbetal til aldersopsparing (op til 58.900 kr/år hvis under 5 år til pension)",
             "5. Fri opsparing eller aktier ved yderligere opsparing",
         ],
-        "topskat_graense_2025": 568_900,
+        "topskat_graense_2025": 588_900,
         "note": "Pensionsindbetalinger reducerer den skattepligtige indkomst og kan trække dig under topskattegrænsen",
     },
     "vigtige_regler": [

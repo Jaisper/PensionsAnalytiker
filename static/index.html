@@ -448,9 +448,18 @@
 
   // ── Init ──────────────────────────────────────────────────────────────────
   async function init() {
+    const stored = localStorage.getItem('pensionSessionId');
+    if (stored) {
+      const check = await fetch(`/api/session/${stored}/history`).catch(() => null);
+      if (check && check.ok) {
+        sessionId = stored;
+        return;
+      }
+    }
     const res = await fetch('/api/session', { method: 'POST' });
     const data = await res.json();
     sessionId = data.session_id;
+    localStorage.setItem('pensionSessionId', sessionId);
   }
 
   // ── Upload ────────────────────────────────────────────────────────────────
@@ -691,11 +700,21 @@ Upload derefter PDF'en her øverst til højre.`,
         </td>
       </tr>
       <tr>
+        <td class="ql"><strong>2b.</strong> Inflation (til realværdi)
+          <div class="qdesc">Viser real-købekraft (2025-kroner) i udbetalingstabellen</div>
+        </td>
+        <td class="qi">
+          <input type="number" id="iq2b" value="2" min="0" max="10" step="0.1">
+          <span class="unit">%</span>
+        </td>
+      </tr>
+      <tr>
         <td class="ql"><strong>3.</strong> Pensionsalder
           <div class="qdesc">Tidligst muligt: ${tidligst} år</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq3" value="${Math.max(tidligst, 62)}" min="55" max="75">
+          <input type="number" id="iq3" value="${Math.max(tidligst, 62)}" min="55" max="75"
+            oninput="autoFillStartAldre()">
           <span class="unit">år</span>
         </td>
       </tr>
@@ -708,6 +727,31 @@ Upload derefter PDF'en her øverst til højre.`,
           <span class="unit">år</span>
         </td>
       </tr>`;
+
+    // Per-produkt start-aldre: loebende produkter (ikke kapital/aldersopsparing/ATP/FP)
+    const _loebendeKeys = computeProductKeys(profil);
+    if (_loebendeKeys.length > 0) {
+      const defaultAlder = Math.max(tidligst, 62);
+      const startRows = _loebendeKeys.map(({key, selskab, ptype}, idx) => `
+        <tr style="border:none">
+          <td style="padding:3px 2px;font-size:0.82rem;color:#4a6a80;padding-right:10px;min-width:180px">
+            ${selskab} – ${ptype}</td>
+          <td style="padding:3px 0;white-space:nowrap">
+            <input type="number" id="iq_start_${idx}" value="${defaultAlder}" min="55" max="80"
+              data-key="${escapeAttr(key)}" style="width:70px">
+            <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">år</span>
+          </td>
+        </tr>`).join('');
+      rows += `
+      <tr>
+        <td class="ql"><strong>4b.</strong> Startaldere per produkt
+          <div class="qdesc">Du kan udsætte opstart af individuelle ordninger (fx vente med livsvarig til folkepensionsalder)</div>
+        </td>
+        <td class="qi">
+          <table style="border-collapse:collapse">${startRows}</table>
+        </td>
+      </tr>`;
+    }
 
     if (hasKapital) {
       rows += `
@@ -796,6 +840,21 @@ Upload derefter PDF'en her øverst til højre.`,
         <td class="qi">
           <input type="text" id="iq7" value="Frederiksberg" placeholder="fx Aarhus">
         </td>
+      </tr>
+      <tr>
+        <td class="ql"><strong>7b.</strong> Kirkeskat
+          <div class="qdesc">Fratrækkes ved lønmodtagere der er medlemmer af folkekirken</div>
+        </td>
+        <td class="qi">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:5px">
+            <input type="checkbox" id="iq_kirkeskat" checked onchange="toggleKirkeskat()">
+            <span style="font-size:0.85rem;color:#2a3a4a">Ja, betaler kirkeskat</span>
+          </label>
+          <div id="kirkeskat_pct_wrap">
+            <input type="number" id="iq_kirkeskat_pct" value="0.7" min="0.1" max="2" step="0.1" style="width:70px">
+            <span class="unit">%</span>
+          </div>
+        </td>
       </tr>`;
 
     // Q8: Årlig bruttoindtægt — vis hvis pensionsopsparing tyder på topskat-relevans
@@ -814,6 +873,18 @@ Upload derefter PDF'en her øverst til højre.`,
       </tr>`;
     }
 
+    // Q9: Frie investeringsaktiver — vis altid (relevant for komplet formueanalyse)
+    rows += `
+      <tr>
+        <td class="ql"><strong>9.</strong> Frie investeringsaktiver
+          <div class="qdesc">Aktier, obligationer og øvrig opsparing uden for pensionsordninger — relevant for den samlede formueanalyse</div>
+        </td>
+        <td class="qi">
+          <input type="number" id="iq9" placeholder="0" min="0" step="50000">
+          <span class="unit">kr.</span>
+        </td>
+      </tr>`;
+
     const body = document.getElementById('parametre-panel-body');
     body.innerHTML = `<div class="iform-wrap" id="interview-form-el">
       <table class="iform-table">${rows}</table>
@@ -825,6 +896,47 @@ Upload derefter PDF'en her øverst til højre.`,
     document.getElementById('parametre-panel-body').style.display = '';
     document.getElementById('parametre-panel-toggle').textContent = '\u25BC Skjul';
     return null;
+  }
+
+  // Compute engine product keys matching engine.py logic
+  function computeProductKeys(profil) {
+    const keyCounter = {};
+    const result = [];
+    for (const prod of (profil?.pensionsprodukter || [])) {
+      const selskab = prod.selskab || '';
+      const ptype   = prod.produkttype || '';
+      const ptLow   = ptype.toLowerCase();
+      const selLow  = selskab.toLowerCase();
+      if (selLow.includes('atp') || ptLow.includes('atp') || ptLow.includes('folkepension')) continue;
+      if (ptLow.includes('kapital') || ptLow.includes('aldersopsparing')) continue;
+      const baseKey = `${selskab}_${ptype}`;
+      keyCounter[baseKey] = (keyCounter[baseKey] || 0) + 1;
+      const key = keyCounter[baseKey] === 1 ? baseKey : `${baseKey}_${keyCounter[baseKey]}`;
+      result.push({ key, selskab, ptype, prod });
+    }
+    return result;
+  }
+
+  function escapeAttr(s) {
+    return (s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function toggleKirkeskat() {
+    const checked = document.getElementById('iq_kirkeskat')?.checked;
+    const wrap = document.getElementById('kirkeskat_pct_wrap');
+    if (wrap) wrap.style.display = checked ? '' : 'none';
+  }
+
+  function autoFillStartAldre() {
+    const pa = parseInt(document.getElementById('iq3')?.value || '0');
+    if (!pa) return;
+    document.querySelectorAll('[id^="iq_start_"]').forEach(inp => {
+      // Only auto-fill if value equals previous pensionsalder or is default
+      const cur = parseInt(inp.value || '0');
+      if (!cur || cur < pa) inp.value = pa;
+      else if (cur === inp._lastPa) inp.value = pa;
+      inp._lastPa = pa;
+    });
   }
 
   let _parametrePanelOpen = true;
@@ -889,12 +1001,40 @@ Upload derefter PDF'en her øverst til højre.`,
     const profil = _currentProfil;
     const tidligst = profil?.tidligste_pensionsalder ?? 65;
 
+    // ── Validering ─────────────────────────────────────────────────────────
+    const nuvaerende = profil?.person?.alder || 0;
+    const pensionsalderVal = parseInt(document.getElementById('iq3')?.value || '0');
+    const iq1Val = parseFloat(document.getElementById('iq1')?.value || '-1');
+    const afkastVal = parseFloat(document.getElementById('iq2')?.value || '-1');
+
+    if (isNaN(iq1Val) || iq1Val < 0) {
+      alert('Angiv en gyldig månedlig netto-indbetaling (0 eller mere).');
+      return;
+    }
+    if (nuvaerende && pensionsalderVal <= nuvaerende) {
+      alert(`Pensionsalder (${pensionsalderVal} år) skal være højere end din nuværende alder (${nuvaerende} år).`);
+      return;
+    }
+    if (pensionsalderVal < 55 || pensionsalderVal > 80) {
+      alert('Pensionsalder skal være mellem 55 og 80 år.');
+      return;
+    }
+    if (isNaN(afkastVal) || afkastVal < 0 || afkastVal > 20) {
+      alert('Forventet afkast skal være mellem 0% og 20%.');
+      return;
+    }
+
     const v = id => document.getElementById(id)?.value?.trim() ?? '';
     const iq1Mdr = parseFloat(v('iq1')) || 0;
     const iq1Aar = Math.round(iq1Mdr * 12);
+    const inflationVal = parseFloat(v('iq2b')) || 2.0;
+    const kirkeskatChecked = document.getElementById('iq_kirkeskat')?.checked ?? true;
+    const kirkeskatPct = kirkeskatChecked ? (parseFloat(v('iq_kirkeskat_pct')) || 0.7) : 0.0;
+
     const parts = [
       `1. Netto indbetaling: ${iq1Aar} kr/år (${iq1Mdr} kr/mdr)`,
       `2. Forventet afkast: ${v('iq2')}%`,
+      `2b. Inflation: ${inflationVal}%`,
       `3. Pensionsalder: ${v('iq3')} år`,
       `4. Udbetalingsperiode: ${v('iq4')} år`,
     ];
@@ -928,12 +1068,32 @@ Upload derefter PDF'en her øverst til højre.`,
       }
     }
 
+    // Per-produkt start-aldre
+    const loebendeKeys = computeProductKeys(profil);
+    const produktStartAldre = {};
+    if (loebendeKeys.length > 0) {
+      const pensionsalderVal2 = parseInt(v('iq3')) || parseInt(v('iq3'));
+      const startAldreLinjer = [];
+      loebendeKeys.forEach(({key, selskab, ptype}, idx) => {
+        const startAlder = parseInt(document.getElementById(`iq_start_${idx}`)?.value || pensionsalderVal2);
+        produktStartAldre[key] = startAlder;
+        startAldreLinjer.push(`${selskab} – ${ptype}: ${startAlder} år`);
+      });
+      parts.push(`4b. Start-aldre: ${startAldreLinjer.join(', ')}`);
+    }
+
     const kommune = v('iq7');
     parts.push(`7. Kommune: ${kommune || 'ikke oplyst (brug landsgennemsnit 25%)'}`);
+    parts.push(`7b. Kirkeskat: ${kirkeskatPct}%`);
 
     const bruttoindtaegt = v('iq8');
     if (bruttoindtaegt) {
       parts.push(`8. Årlig bruttoindtægt (løn): ${bruttoindtaegt} kr/år`);
+    }
+
+    const frieMidler = parseFloat(v('iq9'));
+    if (frieMidler > 0) {
+      parts.push(`9. Frie investeringsaktiver: ${Math.round(frieMidler).toLocaleString('da-DK')} kr.`);
     }
 
     const msg = 'Mine svar:\n' + parts.join('\n');
@@ -1003,13 +1163,16 @@ Upload derefter PDF'en her øverst til højre.`,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session_id: sessionId,
-        netto_indbetaling: iq1Aar,
-        afkast_pct:        parseFloat(v('iq2')) || 4.0,
-        pensionsalder:     parseInt(v('iq3'))   || tidligst,
-        udbetaling_aar:    parseInt(v('iq4'))   || 30,
-        kommuneskat_pct:   kommuneskatPct,
-        saldi_overrides:   saldiOverrides.length ? saldiOverrides : undefined,
+        session_id:           sessionId,
+        netto_indbetaling:    iq1Aar,
+        afkast_pct:           parseFloat(v('iq2')) || 4.0,
+        pensionsalder:        parseInt(v('iq3'))   || tidligst,
+        udbetaling_aar:       parseInt(v('iq4'))   || 30,
+        kommuneskat_pct:      kommuneskatPct,
+        saldi_overrides:      saldiOverrides.length ? saldiOverrides : undefined,
+        inflation_pct:        inflationVal,
+        kirkeskat_pct:        kirkeskatPct,
+        produkt_start_aldre:  Object.keys(produktStartAldre).length ? produktStartAldre : undefined,
       }),
     });
 

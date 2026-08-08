@@ -6,7 +6,10 @@ import os
 import re
 import json
 import uuid
+import hashlib
+import time
 import tempfile
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
@@ -15,31 +18,106 @@ import warnings
 
 load_dotenv(Path(__file__).parent / ".env")
 
-# Supprimér støjende PDF-parser advarsler
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message=".*FontBBox.*")
 warnings.filterwarnings("ignore", message=".*gray.*color.*")
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import anthropic
 
 from pdf_parser import parse_pensionsinfo_pdf, format_profil_til_tekst
 from pension_rules import PENSION_REGLER
-from engine import generer_udbetalingstabel, format_engine_til_llm, SkatParametre, fordel_pmt_default, format_fordeling_til_llm
+from engine import (generer_udbetalingstabel, format_engine_til_llm, SkatParametre,
+                     fordel_pmt_default, format_fordeling_til_llm, generer_scenarier)
 
 app = FastAPI(title="PensionsAnalytiker")
 
-# Servér statiske filer
 static_path = Path(__file__).parent / "static"
 static_path.mkdir(exist_ok=True)
 
 # In-memory session store (brug Redis i produktion)
 sessions: dict[str, dict] = {}
 
-SYSTEM_PROMPT = """Du er en dansk pensionsanalytiker-assistent. Du analyserer brugerens pensionsoplysninger \
+MAX_HISTORY_MESSAGES = 40
+MAX_UPLOAD_BYTES = 25_000_000
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+
+_rate_store: dict[str, list[float]] = defaultdict(list)
+
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    if request.url.path not in ("/api/upload", "/api/chat", "/api/parametre"):
+        return await call_next(request)
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    window, limit = 60.0, 40
+    _rate_store[ip] = [t for t in _rate_store[ip] if now - t < window]
+    if len(_rate_store[ip]) >= limit:
+        return JSONResponse({"error": "For mange forespørgsler — vent et øjeblik"}, status_code=429)
+    _rate_store[ip].append(now)
+    return await call_next(request)
+
+# ── Kommuneskat — alle 98 kommuner (2025-satser) ─────────────────────────────
+
+def _normalize_kommune(s: str) -> str:
+    return (s.lower()
+            .replace("æ", "ae").replace("ø", "o").replace("å", "a")
+            .replace("-", "").replace(" ", ""))
+
+KOMMUNESKAT_2025: dict[str, float] = {
+    # Hovedstaden
+    "kobenhavn": 23.5, "frederiksberg": 22.8, "albertslund": 25.4,
+    "allerrod": 24.6, "ballerup": 25.4, "brondby": 25.9,
+    "dragor": 25.9, "egedal": 25.8, "fredensborg": 25.7,
+    "frederikssund": 25.8, "fureso": 24.1, "gentofte": 22.0,
+    "gladsaxe": 23.8, "gladsakse": 23.8, "glostrup": 24.4,
+    "gribskov": 26.5, "halsnaes": 26.7, "helsingor": 25.7,
+    "herlev": 25.2, "hillerod": 25.8, "horsholm": 22.5,
+    "hvidovre": 24.6, "hojetaastrup": 24.8, "ishoj": 24.1,
+    "koge": 25.7, "lejre": 26.4, "lyngby": 22.9,
+    "lyngbytaarbaek": 22.9, "rudersdal": 21.9, "roskilde": 26.3,
+    "rodovre": 25.0, "solrod": 24.7, "stevns": 26.2,
+    "taarnby": 24.3, "vallensbaek": 24.6, "greve": 24.6,
+    # Sjælland
+    "holbaek": 26.2, "kalundborg": 26.7, "naestved": 26.4,
+    "odsherred": 27.4, "ringsted": 26.4, "slagelse": 26.5,
+    "soro": 26.6, "vordingborg": 26.8, "faxe": 27.2,
+    "korsor": 26.5,
+    # Bornholm
+    "bornholm": 26.4,
+    # Fyn
+    "assens": 26.5, "faaborgmidtfyn": 25.9, "kerteminde": 26.2,
+    "langeland": 27.6, "middelfart": 26.1, "nordfyn": 27.0,
+    "nyborg": 26.2, "odense": 25.3, "svendborg": 26.0, "aero": 26.6,
+    # Syddanmark
+    "billund": 24.4, "esbjerg": 25.6, "fanoe": 25.5,
+    "fredericia": 25.6, "haderslev": 25.8, "kolding": 25.3,
+    "sonderborg": 26.1, "tonder": 27.0, "varde": 26.1,
+    "vejen": 26.1, "vejle": 25.5, "aabenraa": 25.9,
+    # Midtjylland
+    "aarhus": 24.5, "arhus": 24.5, "favrskov": 25.2,
+    "hedensted": 25.3, "herning": 25.3, "holstebro": 25.8,
+    "horsens": 25.5, "ikastbrande": 25.5, "lemvig": 26.5,
+    "norddjurs": 26.8, "odder": 25.2, "randers": 26.0,
+    "ringkobingskjern": 26.0, "samsoe": 26.3, "silkeborg": 24.7,
+    "skanderborg": 24.7, "skive": 26.1, "struer": 26.3,
+    "syddjurs": 25.7, "viborg": 24.9,
+    # Nordjylland
+    "bronderslev": 26.7, "frederikshavn": 27.4, "hjorring": 26.0,
+    "jammerbugt": 26.5, "laeso": 26.0, "mariagerfjord": 26.3,
+    "morsoe": 26.8, "rebild": 26.0, "thisted": 26.7,
+    "vesthimmerlands": 26.8, "aalborg": 25.4,
+    # Lolland-Falster
+    "guldborgsund": 27.3, "lolland": 27.8,
+}
+
+# ── System-prompt: statisk del (caches på tværs af alle sessioner) ────────────
+
+STATIC_SYSTEM_PROMPT = """Du er en dansk pensionsanalytiker-assistent. Du analyserer brugerens pensionsoplysninger \
 fra PensionsInfo og giver konkrete, personlige anbefalinger.
 
 ## GENERELLE REGLER
@@ -73,7 +151,7 @@ Har brugeren svaret på alle relevante spørgsmål i én besked: gå DIREKTE til
 
 **Spørgsmål 2:** Forventet **årligt afkast** efter PAL-skat? (standard 4% — skriv "ok" for at bekræfte)
 
-**Spørgsmål 3:** Hvornår vil du **gå på pension**? (tidligst muligt: {tidligste_pensionsalder} år)
+**Spørgsmål 3:** Hvornår vil du **gå på pension**? (tidligst muligt: se TIDLIGSTE PENSIONSALDER i kontekstblokken)
 
 **Spørgsmål 4:** Over hvor mange **udbetalingsår**? (standard 30 år — skriv "ok" for at bekræfte)
 
@@ -88,7 +166,7 @@ Har brugeren svaret på alle relevante spørgsmål i én besked: gå DIREKTE til
 Præsentér altid produkterne i denne faste rækkefølge: **Ratepension → Livsvarig pension → Aldersopsparing**.
 Brug den BEREGNEDE standardfordeling herunder (Rate fyldes op til 63.100 kr/år-loftet, resten til Livsvarig):
 
-{spm6_fordeling}
+[Se SPM6_FORDELING i kontekstblokken]
 
 Vis standardindbetalingsfordeling (primær) og nuværende saldi (sekundær kontekst):
 "Din [selskab] firmapension — samlet indbetaling [total] kr/år fordeles som standard:
@@ -120,7 +198,7 @@ Når alle relevante svar er indsamlet: lav **komplet pensionsanalyse** inkl. udb
 
 ## BEREGNINGSREGLER — ABSOLUT FORBUD MOD EGNE BEREGNINGER
 
-⚠️ KRITISK: Du må ALDRIG præsentere et beregnet tal der ikke er hentet direkte fra "BEREGNET PENSIONSANALYSE" nedenfor.
+⚠️ KRITISK: Du må ALDRIG præsentere et beregnet tal der ikke er hentet direkte fra "BEREGNET PENSIONSANALYSE" i kontekstblokken nedenfor.
 Dette gælder uanset om brugeren beder om det, og uanset om du tror du ved svaret.
 Du har IKKE adgang til korrekte skatteberegninger — engine'en har. Brug KUN engine-tal.
 
@@ -159,11 +237,12 @@ Når brugeren spørger om skatteoptimering:
 - S-ordninger (rate/livsvarig): AM-bidrag gælder | A-ordninger: 40% afgift | F-ordninger: skattefri
 
 ## UDBETALINGSTABEL
-Brug tallene fra "BEREGNET PENSIONSANALYSE" nedenfor.
+Brug tallene fra "BEREGNET PENSIONSANALYSE" i kontekstblokken.
 
-**Tabel 1**: FV og månedlig udbetaling per produkt — vis som angivet.
+**Tabel 1**: FV og månedlig udbetaling per produkt — inkl. "Start"-kolonne der viser hvilken alder produktet begynder at udbetale. Vis som angivet.
 
 **Tabel 2** — fast kolonnestruktur (rekonstruér ALLE rækker):
+Hvis inflation er oplyst: vis Real/mdr-kolonnen (2025-købekraft) efter Netto/mdr-kolonnen.
 | Alder | [produkt kr/år] | Folkepension kr/år | ATP kr/år | Brutto/år | Netto/mdr | Note |
 - Alle produktkolonner viser brutto kr/år
 - Brutto/år = sum af alle produktkolonner
@@ -174,20 +253,34 @@ Brug tallene fra "BEREGNET PENSIONSANALYSE" nedenfor.
 
 **Skatteeksempel år 1** — vis ALTID afsnittet "SKATTEBEREGNING — EKSEMPEL ÅR 1" direkte efter Tabel 2, ord for ord som det står i engine-outputtet. Ingen udeladelser.
 
-{engine_analyse}
-
-## BRUGERENS BEREGNEDE PARAMETRE
-{parametre}
+**Tabel 4** — Scenarieanalyse: hvis tilgængelig, vis den direkte. Forklar at Base-scenariet (brugerens valgte afkast) svarer til Tabel 1–3, og at pesimistisk/optimistisk er afkast ±2%.
 
 ## NØGLESATSER 2025
 - Ratepension loft: 63.100 kr/år | Aldersopsparing: 9.100 kr/år (58.900 kr under 5 år til pension)
 - AM-bidrag: 8% | Bundskat: 12,01% | Topskatgrænse: 588.900 kr PI | Topskat: 15%
 - Folkepension: 7.955 kr/mdr | ATP: ca. 1.825 kr/mdr | PAL-skat: 15,3%
 - Pensionstillæg max (enlig): 8.891 kr/mdr — modregnes 30,9% af S-indkomst over 98.400 kr/år
-
-## BRUGERENS PENSIONSPROFIL
-{profil}
 """
+
+
+# ── Engine caching ────────────────────────────────────────────────────────────
+
+def _engine_cache_key(session: dict) -> str:
+    params = session.get("beregningsparametre", {})
+    profil = session.get("profil") or {}
+    data = {
+        "pensionsalder":      params.get("pensionsalder"),
+        "afkast_pct":         params.get("afkast_pct"),
+        "udbetaling_aar":     params.get("udbetaling_aar"),
+        "kommuneskat_pct":    params.get("kommuneskat_pct"),
+        "kirkeskat_pct":      params.get("kirkeskat_pct"),
+        "enlig":              params.get("enlig"),
+        "kapital_skat_type":  params.get("kapital_skat_type"),
+        "inflation_pct":      params.get("inflation_pct"),
+        "produkt_start_aldre": json.dumps(params.get("produkt_start_aldre", {}), sort_keys=True),
+        "profil_id":          id(profil),
+    }
+    return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 
 def _kapital_skat_type_fra_historik(session: dict) -> str | None:
@@ -203,7 +296,6 @@ def _kapital_skat_type_fra_historik(session: dict) -> str | None:
         role    = msg.get("role", "")
         content = (msg.get("content") or "").lower()
 
-        # ── Tjek assistent-beskeder: LLM bekræfter F eller A ──
         if role == "assistant" and "kapital" in content:
             f_mønstre = [
                 "afgiftsfri", "skattefri", "f-skat", "afgift.*betalt",
@@ -218,15 +310,11 @@ def _kapital_skat_type_fra_historik(session: dict) -> str | None:
             elif any(_re.search(m, content) for m in a_mønstre):
                 resultat = "A"
 
-        # ── Tjek bruger-svar "ja" efter assistent spurgte om kapitalpension-afgift ──
         if role == "user":
             svar = content.strip()
-            # Positiv bekræftelse
             pos = any(svar.startswith(w) for w in ("ja", "j ", "yes", "korrekt", "rigtigt", "bekræft"))
-            # Negativ
             neg = any(svar.startswith(w) for w in ("nej", "no", "ikke"))
             if pos or neg:
-                # Tjek om forrige assistent-besked handlede om kapitalpension-afgift
                 for j in range(i - 1, max(i - 4, -1), -1):
                     if msgs[j].get("role") == "assistant":
                         prev = (msgs[j].get("content") or "").lower()
@@ -246,8 +334,11 @@ def _kør_engine(session_id: str) -> str:
     if not profil or not params.get("pensionsalder"):
         return "*(Ikke beregnet endnu — venter på pensionsalder fra spørgsmål 3)*"
 
+    cache_key = _engine_cache_key(session)
+    if session.get("_engine_cache_key") == cache_key and session.get("_engine_cache_text"):
+        return session["_engine_cache_text"]
+
     try:
-        # Anvend kapital-skat override fra samtalehistorik (spm 5)
         import copy
         profil_kopi = copy.deepcopy(profil)
         kapital_skat = params.get("kapital_skat_type") or _kapital_skat_type_fra_historik(session)
@@ -258,17 +349,25 @@ def _kør_engine(session_id: str) -> str:
 
         skat = SkatParametre.fra_pct(
             kommuneskat_pct=float(params.get("kommuneskat_pct", 25.0)),
+            kirkeskat_pct=float(params.get("kirkeskat_pct", 0.7)),
             enlig=bool(params.get("enlig", True)),
         )
         result = generer_udbetalingstabel(profil_kopi, params, skat)
+        result["scenarier"] = generer_scenarier(copy.deepcopy(profil_kopi), params, skat)
         session["engine_output"] = result
-        return format_engine_til_llm(result)
+        result_text = format_engine_til_llm(result)
+        session["_engine_cache_key"]  = cache_key
+        session["_engine_cache_text"] = result_text
+        return result_text
     except Exception as e:
         import traceback
-        return f"*(Engine-fejl: {type(e).__name__}: {e})*\n\n```\n{traceback.format_exc()}\n```"
+        logging.error("Engine fejl: %s", traceback.format_exc())
+        return f"*(Engine-fejl: {type(e).__name__}: {e})*"
 
 
-def get_system_prompt(session_id: str) -> str:
+# ── Dynamisk kontekstblok (ændres pr. session/svar) ──────────────────────────
+
+def _get_dynamic_context(session_id: str) -> str:
     session = sessions.get(session_id, {})
     profil_tekst = session.get("profil_tekst", "Ingen rapport uploadet endnu.")
     params = session.get("beregningsparametre", {})
@@ -276,22 +375,26 @@ def get_system_prompt(session_id: str) -> str:
 
     tidligste = profil.get("tidligste_pensionsalder", "ukendt")
 
-    # Formater indsamlede parametre
     if params:
-        parametre_tekst = "\n".join([
+        lines = [
             f"- Netto årlig indbetaling: {params.get('netto_indbetaling', 'ikke oplyst')} kr/år",
             f"- Forventet afkast efter PAL-skat: {params.get('afkast_pct', 4.0)}%",
             f"- Ønsket pensionsalder: {params.get('pensionsalder', 'ikke oplyst')} år",
             f"- Udbetalingsperiode: {params.get('udbetaling_aar', 30)} år",
             f"- Kommuneskat: {params.get('kommuneskat_pct', 'ikke oplyst')}%",
+            f"- Kirkeskat: {params.get('kirkeskat_pct', 0.7)}%",
             f"- Status: {'Enlig' if params.get('enlig', True) else 'Par/samlevende'}",
-        ])
+        ]
+        if params.get("inflation_pct"):
+            lines.append(f"- Inflation (realværdi): {params['inflation_pct']}%")
+        if params.get("produkt_start_aldre"):
+            lines.append(f"- Per-produkt start-aldre: {params['produkt_start_aldre']}")
+        parametre_tekst = "\n".join(lines)
     else:
         parametre_tekst = "Ikke indsamlet endnu — start interview."
 
     engine_tekst = _kør_engine(session_id)
 
-    # Beregn default PMT-fordeling til Spørgsmål 6 — kun når spm 1 er besvaret
     netto_indbetaling = params.get("netto_indbetaling")
     if not profil:
         spm6_fordeling = "*(Ingen rapport uploadet — Spørgsmål 6 ikke relevant)*"
@@ -301,42 +404,40 @@ def get_system_prompt(session_id: str) -> str:
         fordeling = fordel_pmt_default(profil, float(netto_indbetaling))
         spm6_fordeling = format_fordeling_til_llm(fordeling) if fordeling else \
             "*(Ingen multi-produkt firmapension fundet — Spørgsmål 6 ikke relevant)*"
-    netto_indbetaling = float(netto_indbetaling or 0)
 
-    return SYSTEM_PROMPT.format(
-        profil=profil_tekst,
-        parametre=parametre_tekst,
-        engine_analyse=engine_tekst,
-        tidligste_pensionsalder=tidligste,
-        spm6_fordeling=spm6_fordeling,
+    return (
+        f"## TIDLIGSTE PENSIONSALDER\n{tidligste} år\n\n"
+        f"## SPM6_FORDELING\n{spm6_fordeling}\n\n"
+        f"## BEREGNEDE PARAMETRE\n{parametre_tekst}\n\n"
+        f"## BEREGNET PENSIONSANALYSE\n{engine_tekst}\n\n"
+        f"## PENSIONSPROFIL\n{profil_tekst}\n"
     )
 
 
-# ─── API ENDPOINTS ───────────────────────────────────────────────────────────
+def get_system_prompt_blocks(session_id: str) -> list:
+    """Returnerer system-prompt som blok-liste med prompt caching på den statiske del."""
+    return [
+        {
+            "type": "text",
+            "text": STATIC_SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "type": "text",
+            "text": _get_dynamic_context(session_id),
+        },
+    ]
 
-@app.get("/api/version")
-async def get_version():
-    import subprocess
-    try:
-        commit = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).parent
-        ).decode().strip()
-    except Exception:
-        commit = "ukendt"
-    return {"commit": commit}
+
+# ── Historik pruning ──────────────────────────────────────────────────────────
+
+def _prune_history(session: dict) -> None:
+    msgs = session["messages"]
+    if len(msgs) > MAX_HISTORY_MESSAGES:
+        session["messages"] = msgs[:2] + msgs[-(MAX_HISTORY_MESSAGES - 2):]
 
 
-@app.post("/api/session")
-async def create_session():
-    session_id = str(uuid.uuid4())
-    sessions[session_id] = {
-        "messages": [],
-        "profil": None,
-        "profil_tekst": "",
-        "beregningsparametre": {},
-    }
-    return {"session_id": session_id}
-
+# ── Ordningsforklaringer ──────────────────────────────────────────────────────
 
 ORDNING_FORKLARINGER = {
     "kapitalpension": (
@@ -373,13 +474,10 @@ ORDNING_FORKLARINGER = {
 }
 
 
-
-
 def build_trin0(profil: dict) -> str:
     """Bygger hele Trin 0 i Python: tabel + ordningsforklaringer. Ingen LLM."""
     tabel = build_oversigt_tabel(profil)
 
-    # Find hvilke ordningstyper brugeren har
     ordninger = profil.get("ordninger", [])
     prod = profil.get("pensionsprodukter", [])
     typer_set = set()
@@ -393,11 +491,9 @@ def build_trin0(profil: dict) -> str:
         for key in ORDNING_FORKLARINGER:
             if key in pt:
                 typer_set.add(key)
-    # ATP og Folkepension inkluderes altid
     typer_set.add("atp")
     typer_set.add("folkepension")
 
-    # Byg forklaringstekst i fast rækkefølge
     rækkefølge = ["kapitalpension", "ratepension", "aldersopsparing", "livsvarig pension", "livrente", "atp", "folkepension"]
     forklaringer = []
     for key in rækkefølge:
@@ -425,15 +521,10 @@ def build_sporgsmaal1(profil: dict) -> str:
 
 
 def build_oversigt_tabel(profil: dict) -> str:
-    """Bygger oversigtstabel: Selskab | Produkttype | Saldo | Bemærkning.
-    Private ordninger øverst, ATP + Folkepension nederst.
-    Aftaler med flere payout-produkter foldes ud som sub-rækker.
-    """
+    """Bygger oversigtstabel: Selskab | Produkttype | Saldo | Bemærkning."""
     ord_  = profil.get("ordninger", [])
     prods = profil.get("pensionsprodukter", [])
 
-    # Byg index: (aftalenr, selskab) → liste af payout-produkter
-    # Også nr_alone som fallback når payout_products ikke har provider sat
     prod_by_nr: dict[tuple, list] = {}
     prod_by_nr_alone: dict[str, list] = {}
     for p in prods:
@@ -444,20 +535,16 @@ def build_oversigt_tabel(profil: dict) -> str:
             prod_by_nr_alone.setdefault(nr, []).append(p)
 
     def get_prods(nr: str, selskab: str) -> list:
-        """Hent payout-produkter med (nr, selskab)-nøgle; fallback til nr alene."""
         exact = prod_by_nr.get((nr, selskab), [])
         if exact:
             return exact
-        # Fallback: brug nr alene – men kun hvis der kun er ét selskab der ejer dette nr
         all_for_nr = prod_by_nr_alone.get(nr, [])
         providers = {str(p.get("selskab") or "") for p in all_for_nr}
         if len(providers) <= 1:
             return all_for_nr
-        # Kollision på tværs af selskaber: filtrer på tomme providers (ikke sat)
         return [p for p in all_for_nr if not p.get("selskab")]
 
     def varighed(aldersperioder: dict) -> str:
-        """Beregn omtrentlig udbetalingsperiode fra payout-perioder."""
         if not aldersperioder:
             return ""
         paying = {k: v for k, v in aldersperioder.items() if v}
@@ -474,7 +561,6 @@ def build_oversigt_tabel(profil: dict) -> str:
         return f"ca. {years} år" if years else ""
 
     def beм(ptype: str, aldersperioder: dict | None = None, kort: bool = False) -> str:
-        """kort=True bruges til sub-rækker: kortere tekst uden antal år."""
         pt = (ptype or "").lower()
         if "kapitalpension" in pt:
             return "Engangsbeløb — 40% afgift (evt. forudbetalt i 2013)"
@@ -504,7 +590,7 @@ def build_oversigt_tabel(profil: dict) -> str:
             continue
         selskab = a.get("selskab") or "?"
         if "ATP" in selskab:
-            continue                          # ATP håndteres separat nederst
+            continue
         opsp = a.get("opsparing")
         if not opsp:
             continue
@@ -514,7 +600,6 @@ def build_oversigt_tabel(profil: dict) -> str:
         saldo_s = f"{opsp:,.0f} kr.".replace(",", ".")
 
         sub = get_prods(nr, selskab)
-        # Fold ud hvis der er mere end ét payout-produkt under samme aftalenr
         if len(sub) > 1:
             private_rækker.append(
                 f"| {selskab} | **Firmapension** (samlet) | **{saldo_s}** | Samlet saldo for {len(sub)} produkter |"
@@ -524,17 +609,14 @@ def build_oversigt_tabel(profil: dict) -> str:
                 per = sp.get("aldersperioder") or {}
                 sub_opsp = sp.get("opsparing")
                 sub_saldo_s = f"{sub_opsp:,.0f} kr.".replace(",", ".") if sub_opsp else "—"
-                private_rækker.append(f"| {selskab} | \u00a0\u00a0↳ {spt} | {sub_saldo_s} | {beм(spt, per, kort=True)} |")
+                private_rækker.append(f"| {selskab} |   ↳ {spt} | {sub_saldo_s} | {beм(spt, per, kort=True)} |")
         else:
-            # Find payout-perioder for enkelt produkt
             sub1 = get_prods(nr, selskab)
             per1 = sub1[0].get("aldersperioder", {}) if sub1 else {}
-            # Vis investeringsform (f.eks. "Puljeinvestering") hvis sat og forskellig fra produkttype
             inv = a.get("investeringsform") or ""
             display_ptype = inv if inv and inv.lower() not in (ptype or "").lower() and ptype.lower() not in inv.lower() else ptype
             private_rækker.append(f"| {selskab} | {display_ptype} | {saldo_s} | {beм(ptype, per1)} |")
 
-    # ── ATP — find beløb og startperiode fra payout_products ──
     atp_prod = next((p for p in prods if "ATP" in (p.get("selskab") or "")), None)
     if atp_prod:
         per = atp_prod.get("aldersperioder") or {}
@@ -561,36 +643,70 @@ def build_oversigt_tabel(profil: dict) -> str:
     return tabel
 
 
+# ─── API ENDPOINTS ───────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.get("/api/version")
+async def get_version():
+    import subprocess
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).parent
+        ).decode().strip()
+    except Exception:
+        commit = "ukendt"
+    return {"commit": commit}
+
+
+@app.post("/api/session")
+async def create_session():
+    session_id = str(uuid.uuid4())
+    sessions[session_id] = {
+        "messages": [],
+        "profil": None,
+        "profil_tekst": "",
+        "beregningsparametre": {},
+    }
+    return {"session_id": session_id}
+
+
 @app.post("/api/upload/{session_id}")
 async def upload_rapport(session_id: str, file: UploadFile = File(...)):
     if session_id not in sessions:
         raise HTTPException(404, "Session ikke fundet")
 
-    if not file.filename.endswith(".pdf"):
+    if not (file.filename or "").endswith(".pdf"):
         raise HTTPException(400, "Kun PDF-filer accepteres")
 
-    # Gem midlertidigt og parser
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         content = await file.read()
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(400, f"Filen er for stor (max {MAX_UPLOAD_BYTES // 1_000_000} MB)")
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
-        profil = parse_pensionsinfo_pdf(tmp_path)
+        profil = await parse_pensionsinfo_pdf(tmp_path)
         profil_tekst = format_profil_til_tekst(profil)
 
         sessions[session_id]["profil"] = profil
         sessions[session_id]["profil_tekst"] = profil_tekst
 
-        # Fjern rå tekst fra response (for stor)
-        # default_pmt beregnes IKKE her — afventer brugerens svar på spm 1
-        profil_response = {k: v for k, v in profil.items() if k != "raa_tekst"}
+        # Ekskludér rå tekst og CPR-holdigt raw-objekt fra client-response
+        profil_response = {k: v for k, v in profil.items() if k not in ("raa_tekst", "raw")}
+        if "person" in profil_response:
+            profil_response["person"] = {
+                k: v for k, v in profil_response["person"].items()
+                if k != "foedselsdato"
+            }
 
-        # Byg hele Trin 0 i Python (tabel + forklaringer)
         trin0 = build_trin0(profil)
         sporgsmaal1 = build_sporgsmaal1(profil)
 
-        # Nulstil samtale og parametre ved ny rapport
         sessions[session_id]["messages"] = []
         sessions[session_id]["beregningsparametre"] = {}
 
@@ -603,9 +719,12 @@ async def upload_rapport(session_id: str, file: UploadFile = File(...)):
             "sporgsmaal1": sporgsmaal1,
             "start_interview": True,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
-        raise HTTPException(500, detail=f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+        logging.error("Upload fejl for session %s: %s", session_id, traceback.format_exc())
+        raise HTTPException(500, detail=f"Fejl ved indlæsning af rapport: {type(e).__name__}: {e}")
     finally:
         os.unlink(tmp_path)
 
@@ -616,8 +735,7 @@ class ChatMessage(BaseModel):
 
 
 def _parse_mine_svar(message: str, session: dict) -> None:
-    """Udtræk parametre direkte fra 'Mine svar:'-besked og gem i session.
-    Bruges som sikkerhedsnet hvis /api/parametre fejlede stille."""
+    """Udtræk parametre direkte fra 'Mine svar:'-besked og gem i session."""
     if not message.startswith("Mine svar:"):
         return
     p = session["beregningsparametre"]
@@ -643,23 +761,16 @@ def _parse_mine_svar(message: str, session: dict) -> None:
     v = _num(r"4\.\s*Udbetalingsperiode:\s*(\d+)", message, int)
     if v is not None: p["udbetaling_aar"] = v
 
-    # Kommune → kommuneskat fra samme lookup som frontend
     m = re.search(r"7\.\s*Kommune:\s*([^\n]+)", message)
     if m and "kommuneskat_pct" not in p:
-        kommune = m.group(1).strip().lower()
-        KOMMUNESKAT = {
-            "københavn": 23.5, "kobenhavn": 23.5, "frederiksberg": 22.8,
-            "gentofte": 22.0, "lyngby": 22.9, "gladsaxe": 23.8, "rudersdal": 21.9,
-            "hørsholm": 22.5, "horsholm": 22.5, "aarhus": 24.5, "århus": 24.5,
-            "odense": 25.3, "aalborg": 25.4, "esbjerg": 25.6, "randers": 26.0,
-            "kolding": 25.3, "horsens": 25.5, "vejle": 25.5, "roskilde": 26.3,
-            "helsingør": 25.7, "helsingor": 25.7, "næstved": 26.4, "naestved": 26.4,
-            "silkeborg": 24.7, "viborg": 24.9, "herning": 25.3, "svendborg": 26.0,
-        }
-        import unicodedata
-        key = "".join(c for c in unicodedata.normalize("NFD", kommune)
-                      if unicodedata.category(c) != "Mn").replace(" ", "")
-        p["kommuneskat_pct"] = KOMMUNESKAT.get(key, 25.0)
+        kommune = m.group(1).strip()
+        p["kommuneskat_pct"] = KOMMUNESKAT_2025.get(_normalize_kommune(kommune), 25.0)
+
+    v = _num(r"2b\.\s*Inflation:\s*([\d.,]+)", message)
+    if v is not None: p["inflation_pct"] = v
+
+    v = _num(r"7b\.\s*Kirkeskat:\s*([\d.,]+)", message)
+    if v is not None: p["kirkeskat_pct"] = v
 
 
 @app.post("/api/chat")
@@ -669,22 +780,21 @@ async def chat(req: ChatMessage):
 
     session = sessions[req.session_id]
     session["messages"].append({"role": "user", "content": req.message})
-
-    # Sikkerhedsnet: udtræk parametre fra "Mine svar:"-besked selv hvis /api/parametre fejlede
+    _prune_history(session)
     _parse_mine_svar(req.message, session)
 
-    client = anthropic.Anthropic()
+    client = anthropic.AsyncAnthropic()
 
     async def stream_response():
         full_response = ""
         try:
-            with client.messages.stream(
+            async with client.messages.stream(
                 model="claude-sonnet-4-6",
                 max_tokens=8000,
-                system=get_system_prompt(req.session_id),
+                system=get_system_prompt_blocks(req.session_id),
                 messages=session["messages"],
             ) as stream:
-                for text in stream.text_stream:
+                async for text in stream.text_stream:
                     full_response += text
                     yield f"data: {json.dumps({'text': text})}\n\n"
 
@@ -697,8 +807,10 @@ async def chat(req: ChatMessage):
             if e.status_code == 529 or "overloaded" in str(e).lower():
                 yield f"data: {json.dumps({'error': 'overloaded'})}\n\n"
             else:
+                logging.error("API fejl i chat: %s", e)
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
         except Exception as e:
+            logging.error("Chat fejl: %s", e)
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(
@@ -716,8 +828,11 @@ class Parametre(BaseModel):
     udbetaling_aar: int | None = None
     kommuneskat_pct: float | None = None
     enlig: bool | None = None
-    saldi_overrides: list | None = None  # [{aftalenr, produkttype, saldo}]
-    kapital_skat_type: str | None = None  # "F" = forudbetalt, "A" = 40% afgift
+    saldi_overrides: list | None = None
+    kapital_skat_type: str | None = None
+    inflation_pct: float | None = None
+    kirkeskat_pct: float | None = None
+    produkt_start_aldre: dict | None = None
 
 
 @app.post("/api/parametre")
@@ -725,15 +840,17 @@ async def gem_parametre(req: Parametre):
     if req.session_id not in sessions:
         raise HTTPException(404, "Session ikke fundet")
     p = sessions[req.session_id]["beregningsparametre"]
-    if req.netto_indbetaling is not None:  p["netto_indbetaling"] = req.netto_indbetaling
-    if req.afkast_pct is not None:         p["afkast_pct"] = req.afkast_pct
-    if req.pensionsalder is not None:      p["pensionsalder"] = req.pensionsalder
-    if req.udbetaling_aar is not None:     p["udbetaling_aar"] = req.udbetaling_aar
-    if req.kommuneskat_pct is not None:    p["kommuneskat_pct"] = req.kommuneskat_pct
-    if req.enlig is not None:              p["enlig"] = req.enlig
-    if req.kapital_skat_type is not None:  p["kapital_skat_type"] = req.kapital_skat_type
+    if req.netto_indbetaling is not None:    p["netto_indbetaling"] = req.netto_indbetaling
+    if req.afkast_pct is not None:           p["afkast_pct"] = req.afkast_pct
+    if req.pensionsalder is not None:        p["pensionsalder"] = req.pensionsalder
+    if req.udbetaling_aar is not None:       p["udbetaling_aar"] = req.udbetaling_aar
+    if req.kommuneskat_pct is not None:      p["kommuneskat_pct"] = req.kommuneskat_pct
+    if req.enlig is not None:                p["enlig"] = req.enlig
+    if req.kapital_skat_type is not None:    p["kapital_skat_type"] = req.kapital_skat_type
+    if req.inflation_pct is not None:        p["inflation_pct"] = req.inflation_pct
+    if req.kirkeskat_pct is not None:        p["kirkeskat_pct"] = req.kirkeskat_pct
+    if req.produkt_start_aldre is not None:  p["produkt_start_aldre"] = req.produkt_start_aldre
 
-    # Opdatér saldi i profilen så engine regner på aktuelle værdier (ikke PDF-saldi)
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")
         if profil:
@@ -749,7 +866,6 @@ async def gem_parametre(req: Parametre):
                     if (str(o.get("aftalenr") or "") == nr and
                             (o.get("produkttype") or "").lower() == ptype):
                         o["opsparing"] = saldo
-            # Regenerér profil_tekst med opdaterede saldi
             sessions[req.session_id]["profil_tekst"] = format_profil_til_tekst(profil)
 
     return {"success": True, "parametre": p}
@@ -764,7 +880,6 @@ async def get_history(session_id: str):
 
 @app.get("/api/session/{session_id}/raw")
 async def get_raw_extraction(session_id: str):
-    """Returnerer den rå LLM-ekstraktion til debugging."""
     if session_id not in sessions:
         raise HTTPException(404, "Session ikke fundet")
     profil = sessions[session_id].get("profil") or {}
@@ -773,7 +888,6 @@ async def get_raw_extraction(session_id: str):
 
 @app.get("/api/session/{session_id}/text")
 async def get_pdf_text(session_id: str, q: str = ""):
-    """Returnerer rå PDF-tekst til debugging. Brug ?q=nordea til filtrering."""
     if session_id not in sessions:
         raise HTTPException(404, "Session ikke fundet")
     profil = sessions[session_id].get("profil") or {}
@@ -786,7 +900,6 @@ async def get_pdf_text(session_id: str, q: str = ""):
             result.append(f"--- linje {i} ---")
             result.append("\n".join(lines[max(0, i-3):i+4]))
         tekst = "\n".join(result) if result else f"(ingen match for '{q}')"
-    from fastapi.responses import PlainTextResponse
     return PlainTextResponse(tekst)
 
 
@@ -811,7 +924,6 @@ async def clear_history(session_id: str):
     return {"success": True}
 
 
-# Servér frontend
 @app.get("/")
 async def root():
     html_path = static_path / "index.html"

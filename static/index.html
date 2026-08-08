@@ -700,16 +700,21 @@ Upload derefter PDF'en her øverst til højre.`,
       });
     }
 
-    // 1. Vis Trin 0 (oversigt)
+    // 1. Vis Trin 0 (oversigt) — vises i chat men gemmes IKKE i AI-historik her
     if (trin0) {
       const el = addMessage('assistant', '');
       el.querySelector('.bubble').innerHTML = renderMarkdown(trin0);
-      await inject('assistant', trin0);
     }
 
     // 2. Vis spørgeskema-formular i det vedvarende panel (Q1–Q8)
     buildInterviewForm(profil);
-    const formSummary = 'Spørgsmål 1–7 er vist i en formular. Afventer brugerens svar.';
+
+    // 3. Injicer ét gyldigt user→assistant-par i AI-historik så API-krav om
+    //    skiftevis roller overholdes (API afviser to på hinanden følgende assistant-beskeder)
+    await inject('user', 'Start pensionsanalyse og vis oversigt');
+    const formSummary = trin0
+      ? trin0 + '\n\nSpørgsmål 1–9 er vist i formular. Afventer brugerens svar.'
+      : 'Spørgsmål 1–9 er vist i formular. Afventer brugerens svar.';
     await inject('assistant', formSummary);
 
     // Scroll til toppen af analysen (første besked)

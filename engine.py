@@ -493,18 +493,25 @@ def generer_udbetalingstabel(
     annuitet_faktor = sum(1 / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
     jaevn_netto_mdr = (engangs_netto_total + pv_normal) / annuitet_faktor / 12
 
+    engangs_buffer_aar = parametre.get("engangs_buffer_aar")
+
     jaevn_tabel = []
     buffer = engangs_netto_total
-    for row in pension_rækker:
+    for i, row in enumerate(pension_rækker):
         buffer      *= (1 + r_buffer)
         normal_mdr   = row["total_netto_mdr"]
         fra_buffer   = jaevn_netto_mdr - normal_mdr
         buffer      -= fra_buffer * 12
+        # Zero out buffer contribution after engangs_buffer_aar years
+        if engangs_buffer_aar is not None and engangs_netto_total > 0 and i >= engangs_buffer_aar:
+            fra_buffer_vis = 0
+        else:
+            fra_buffer_vis = round(max(0, fra_buffer))
         jaevn_tabel.append({
             "alder":       row["alder"],
             "normal_mdr":  round(normal_mdr),
             "jaevn_mdr":   round(jaevn_netto_mdr),
-            "fra_buffer":  round(fra_buffer),
+            "fra_buffer":  fra_buffer_vis,
             "buffer_rest": round(max(0.0, buffer)),
         })
 
@@ -530,6 +537,7 @@ def generer_udbetalingstabel(
             "enlig":           skat_params.enlig,
             "inflation_pct":   inflation_pct * 100,
             "loenvaekst_pct":  loenvaekst_pct * 100,
+            "engangs_buffer_aar": engangs_buffer_aar,
         },
     }
 

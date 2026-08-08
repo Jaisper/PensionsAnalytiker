@@ -920,6 +920,7 @@ class Parametre(BaseModel):
     loenvaekst_pct: float | None = None
     fri_formue: float | None = None
     fri_formue_kapital_skat_pct: float | None = None
+    engangs_buffer_aar: int | None = None
 
 
 @app.post("/api/parametre")
@@ -940,6 +941,7 @@ async def gem_parametre(req: Parametre):
     if req.loenvaekst_pct is not None:        p["loenvaekst_pct"] = req.loenvaekst_pct
     if req.fri_formue is not None:                    p["fri_formue"] = req.fri_formue
     if req.fri_formue_kapital_skat_pct is not None:   p["fri_formue_kapital_skat_pct"] = req.fri_formue_kapital_skat_pct
+    if req.engangs_buffer_aar is not None:            p["engangs_buffer_aar"] = req.engangs_buffer_aar
 
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")
@@ -989,8 +991,10 @@ async def get_engine_data(session_id: str):
         "tabel_start": result["tabel_start"],
         "parametre": result["parametre"],
         "jaevn_netto_mdr": result.get("jaevn_netto_mdr", 0),
+        "jaevn_tabel": result.get("jaevn_tabel", []),
         "produkt_start_aldre": params.get("produkt_start_aldre", {}),
         "fri_formue_analyse": result.get("fri_formue_analyse"),
+        "engangs_buffer_aar": params.get("engangs_buffer_aar"),
     })
 
 

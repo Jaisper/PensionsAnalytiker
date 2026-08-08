@@ -1557,7 +1557,7 @@ Upload derefter PDF'en her øverst til højre.`,
     el.className = `message ${role}`;
     el.innerHTML = `<div class="bubble" data-raw="${escapeHtml(text)}">${role === 'assistant' ? renderMarkdown(text) : escapeHtml(text)}</div>`;
     container.appendChild(el);
-    scrollToBottom();
+    scrollToBottom(true);   // ny besked — tving scroll
     return el;
   }
 
@@ -1567,7 +1567,7 @@ Upload derefter PDF'en her øverst til højre.`,
     el.className = 'message assistant';
     el.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
     container.appendChild(el);
-    scrollToBottom();
+    scrollToBottom(true);   // ny besked — tving scroll
     return el;
   }
 
@@ -1577,13 +1577,16 @@ Upload derefter PDF'en her øverst til højre.`,
     el.className = 'message assistant';
     el.innerHTML = '<div class="analysing-indicator">Analyse igang...</div>';
     container.appendChild(el);
-    scrollToBottom();
+    scrollToBottom(true);   // ny besked — tving scroll
     return el;
   }
 
-  function scrollToBottom() {
+  function scrollToBottom(force = false) {
     const c = document.getElementById('chat-container');
-    c.scrollTop = c.scrollHeight;
+    // Kun auto-scroll hvis brugeren er inden for 160px af bunden — eller force=true
+    if (force || (c.scrollHeight - c.scrollTop - c.clientHeight) < 160) {
+      c.scrollTop = c.scrollHeight;
+    }
   }
 
   function scrollToElement(el) {

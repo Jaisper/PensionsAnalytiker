@@ -971,7 +971,11 @@ async def get_history(session_id: str):
 async def get_engine_data(session_id: str):
     if session_id not in sessions:
         raise HTTPException(404, "Session ikke fundet")
-    result = sessions[session_id].get("engine_output")
+    session = sessions[session_id]
+    # Kør engine med aktuelle parametre (bruger intern cache — kører kun hvis params har ændret sig)
+    if session.get("profil") and session.get("beregningsparametre"):
+        _kør_engine(session_id)
+    result = session.get("engine_output")
     if not result:
         return JSONResponse({"error": "Ingen beregning endnu"}, status_code=404)
     params = sessions[session_id].get("beregningsparametre", {})

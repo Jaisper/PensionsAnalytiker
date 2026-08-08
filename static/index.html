@@ -706,8 +706,24 @@ Upload derefter PDF'en her øverst til højre.`,
       el.querySelector('.bubble').innerHTML = renderMarkdown(trin0);
     }
 
-    // 2. Vis spørgeskema-formular i det vedvarende panel (Q1–Q8)
-    buildInterviewForm(profil);
+    // 2. Vis spørgeskema-formular i det vedvarende panel (Q1–Q9)
+    let formOk = false;
+    try {
+      buildInterviewForm(profil);
+      formOk = true;
+    } catch (formErr) {
+      console.error('buildInterviewForm fejl:', formErr);
+      const errEl = addMessage('assistant', '');
+      errEl.querySelector('.bubble').innerHTML =
+        `<em style="color:#c44">Formular-fejl: ${formErr.message}</em>`;
+    }
+
+    // Guide-besked i chat der peger på formularen
+    if (formOk) {
+      const guideEl = addMessage('assistant', '');
+      guideEl.querySelector('.bubble').innerHTML =
+        '<p>&#x261D; Udfyld beregningsparametrene i panelet ovenfor og klik <strong>Start analyse</strong>.</p>';
+    }
 
     // 3. Injicer ét gyldigt user→assistant-par i AI-historik så API-krav om
     //    skiftevis roller overholdes (API afviser to på hinanden følgende assistant-beskeder)

@@ -1244,7 +1244,7 @@ Upload derefter PDF'en her øverst til højre.`,
     const loebendeKeys = computeProductKeys(profil);
     const produktStartAldre = {};
     if (loebendeKeys.length > 0) {
-      const pensionsalderVal2 = parseInt(v('iq3')) || parseInt(v('iq3'));
+      const pensionsalderVal2 = parseInt(v('iq3')) || 65;
       const startAldreLinjer = [];
       loebendeKeys.forEach(({key, selskab, ptype}, idx) => {
         const startAlder = parseInt(document.getElementById(`iq_start_${idx}`)?.value || pensionsalderVal2);
@@ -1718,7 +1718,7 @@ let _tlDrag = null;  // active drag state
 
 function toggleChartPanel() {
   _chartPanelOpen = !_chartPanelOpen;
-  document.getElementById('chart-panel-body').style.display = _chartPanelOpen ? '' : 'none';
+  document.getElementById('chart-panel-body').style.display = _chartPanelOpen ? 'block' : 'none';
   document.getElementById('chart-panel-toggle').textContent = _chartPanelOpen ? '▼ Skjul' : '▶ Vis';
 }
 
@@ -1728,7 +1728,7 @@ async function loadAndRenderChart() {
   _chartData = await res.json();
   renderChart(_chartData);
   renderTimeline(_chartData);
-  document.getElementById('chart-panel').style.display = '';
+  document.getElementById('chart-panel').style.display = 'block';
 }
 
 function renderChart(data) {

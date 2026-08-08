@@ -500,8 +500,20 @@ def get_system_prompt_blocks(session_id: str) -> list:
 
 def _prune_history(session: dict) -> None:
     msgs = session["messages"]
-    if len(msgs) > MAX_HISTORY_MESSAGES:
-        session["messages"] = msgs[:2] + msgs[-(MAX_HISTORY_MESSAGES - 2):]
+    if len(msgs) <= MAX_HISTORY_MESSAGES:
+        return
+    pruned = msgs[:2] + msgs[-(MAX_HISTORY_MESSAGES - 2):]
+    # Fjern consecutive same-role beskeder der kan opstå ved join-punktet
+    result: list[dict] = []
+    for msg in pruned:
+        if result and result[-1]["role"] == msg["role"]:
+            result[-1] = msg  # erstat med nyeste (bevar kontekst)
+        else:
+            result.append(msg)
+    # Anthropic kræver at første besked er 'user'
+    while result and result[0]["role"] != "user":
+        result.pop(0)
+    session["messages"] = result
 
 
 # ── Ordningsforklaringer ──────────────────────────────────────────────────────
@@ -838,6 +850,11 @@ def _parse_mine_svar(message: str, session: dict) -> None:
 
     v = _num(r"7b\.\s*Kirkeskat:\s*([\d.,]+)", message)
     if v is not None: p["kirkeskat_pct"] = v
+
+    m = re.search(r"5\.\s*Kapitalpension afgiftsfri:\s*([^\n]+)", message)
+    if m:
+        val = m.group(1).strip().lower()
+        p["kapital_skat_type"] = "F" if "brug f" in val or val.startswith("ja") else "A"
 
 
 @app.post("/api/chat")

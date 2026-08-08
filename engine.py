@@ -31,7 +31,7 @@ PENSIONSTILLAEG_MODREGNING_PAR    = 0.32             # 32 % (par)
 
 RATEPENSION_LOFT                  = 63_100
 SKATTELOFT                        = 0.5207     # PSL § 19
-LIVSVARIG_ESTIMAT_AAR             = 18             # jf. K2013 aktuarisk benchmark
+LIVSVARIG_ESTIMAT_AAR             = 18             # fallback — overstyres af alder-justeret estimat
 
 
 @dataclass
@@ -350,7 +350,8 @@ def generer_udbetalingstabel(
             udb_type, udb_aar  = "engangsbeloeb", 0
             mdr_brutto, stopper = 0.0, produkt_start_alder
         elif "livsvarig" in ptype_l or "livrente" in ptype_l:
-            udb_aar    = LIVSVARIG_ESTIMAT_AAR
+            # Restlevetid fra pensionsstart — konservativt skøn (levetidsindeks K2023)
+            udb_aar    = max(LIVSVARIG_ESTIMAT_AAR, 90 - produkt_start_alder)
             udb_type   = "livsvarig"
             mdr_brutto = beregn_maanedlig_annuitet(fv, r, udb_aar)
             stopper    = None

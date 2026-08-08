@@ -48,7 +48,7 @@ PENSION_REGLER = {
         "folkepension": "67 år (stiger til 68 i 2030, 69 i 2035 og 70 i 2040 med forbehold for levetidsindeks)",
         "tidligst_private": "62 år (PALFP - 5 år før folkepensionsalder). Visse ordninger fra 60 år for aftaler oprettet før 01.05.2007.",
         "atp": "Udbetales fra folkepensionsalder",
-        "note_jesper": "Jesper er f. 1971, folkepensionsalder 68 år (2039). Tidligste private pension: 63 år.",
+        "note": "Folkepensionsalder stiger løbende — tidligste private pension er PALFP - 5 år.",
     },
     "skat_optimering": {
         "prioritering": [

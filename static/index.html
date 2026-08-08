@@ -254,7 +254,7 @@
     .iform-table td { padding: 9px 6px; vertical-align: middle; line-height: 1.4; }
     .iform-table td.ql { font-size: 0.87rem; color: #2a3a4a; font-weight: 500; padding-right: 20px; width: 55%; }
     .iform-table td.qi { white-space: nowrap; }
-    .iform-table .qdesc { font-size: 0.76rem; color: #7a90a4; margin-top: 2px; font-weight: 400; }
+    .iform-table .qdesc { font-size: 0.76rem; color: #516070; margin-top: 2px; font-weight: 400; }
     .iform-table input[type="number"],
     .iform-table input[type="text"] {
       border: 1px solid #c8d8e8; border-radius: 6px;
@@ -278,6 +278,29 @@
       font-family: inherit; transition: background 0.2s;
     }
     .iform-submit:hover { background: #2a5080; }
+    .field-error { color: #c44; font-size: 0.76rem; margin-top: 3px; display: block; }
+    .iform-table input[aria-invalid="true"],
+    .iform-table select[aria-invalid="true"] { border-color: #c44 !important; background: #fff8f8; }
+
+    /* ── Onboarding steps ── */
+    .onboarding-steps {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 0 12px; font-size: 0.78rem;
+    }
+    .onboarding-steps .step {
+      padding: 3px 10px; border-radius: 12px;
+      background: #dce8f5; color: #5578a0; font-weight: 500;
+    }
+    .onboarding-steps .step.active {
+      background: #1a3a5c; color: white;
+    }
+    .onboarding-steps .step.done {
+      background: #d0eeda; color: #1a6a30;
+    }
+    .onboarding-steps .sep { color: #b0c8d8; }
+
+    /* ── Tabel overflow ── */
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 10px 0; }
 
     /* ── Input ── */
     #input-area {
@@ -371,10 +394,10 @@
 <header>
   <div>
     <h1>PensionsAnalytiker</h1>
-    <div class="subtitle">Baseret på din PensionsInfo-rapport · <span id="version-tag" style="opacity:0.6;font-size:0.7rem"></span></div>
+    <div class="subtitle" id="version-tag" title="">Baseret på din PensionsInfo-rapport</div>
   </div>
   <div id="upload-area">
-    <label id="upload-label" for="file-input">&#x2B06; Upload rapport</label>
+    <label id="upload-label" for="file-input" aria-label="Upload PDF-rapport fra PensionsInfo">&#x2B06; Upload rapport</label>
     <input type="file" id="file-input" accept=".pdf">
     <span id="upload-status">Ingen rapport uploadet</span>
   </div>
@@ -427,19 +450,20 @@
   </div>
 </div>
 
+<main>
 <div id="chat-container">
   <div id="welcome">
     <div class="icon">&#x1F4CA;</div>
     <h2>Velkommen til PensionsAnalytiker</h2>
     <p>Upload din PensionsInfo-rapport (PDF) øverst til højre for at komme i gang, eller stil et generelt pensionsspørgsmål.</p>
-    <p class="privacy-note">&#x1F512; Din rapport behandles midlertidigt i hukommelsen og sendes til Anthropics API til analyse. Ingen data gemmes permanent på serveren. Brug ikke andres data uden samtykke.</p>
   </div>
 </div>
+</main>
 
 <div id="input-area">
   <textarea id="message-input" rows="1" placeholder="Stil et spørgsmål om din pension..."></textarea>
   <button id="clear-btn" onclick="clearHistory()" title="Ryd samtale">Ryd</button>
-  <button id="send-btn" onclick="sendMessage()" title="Send (Enter)">&#x27A4;</button>
+  <button id="send-btn" onclick="sendMessage()" title="Send (Enter)" aria-label="Send besked">&#x27A4;</button>
 </div>
 
 <script>
@@ -686,7 +710,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Det beløb du/din arbejdsgiver indbetaler netto til selve opsparingen per måned${iq1Hint}</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq1" value="" min="0" step="100" oninput="autoFillQ6Pmt()">
+          <input type="number" id="iq1" value="" min="0" step="100" oninput="autoFillQ6Pmt()" aria-label="Månedlig netto-indbetaling i kroner">
           <span class="unit">kr/mdr</span>
         </td>
       </tr>
@@ -695,7 +719,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Standard 4% — skriv andet hvis du vil bruge en anden sats</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq2" value="6" min="0" max="15" step="0.1">
+          <input type="number" id="iq2" value="6" min="0" max="15" step="0.1" aria-label="Forventet årligt afkast i procent">
           <span class="unit">%</span>
         </td>
       </tr>
@@ -704,7 +728,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Viser real-købekraft (2025-kroner) i udbetalingstabellen</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq2b" value="2" min="0" max="10" step="0.1">
+          <input type="number" id="iq2b" value="2" min="0" max="10" step="0.1" aria-label="Inflation i procent">
           <span class="unit">%</span>
         </td>
       </tr>
@@ -714,7 +738,7 @@ Upload derefter PDF'en her øverst til højre.`,
         </td>
         <td class="qi">
           <input type="number" id="iq3" value="${Math.max(tidligst, 62)}" min="55" max="75"
-            oninput="autoFillStartAldre()">
+            oninput="autoFillStartAldre()" aria-label="Ønsket pensionsalder i år">
           <span class="unit">år</span>
         </td>
       </tr>
@@ -723,7 +747,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Standard 30 år — gælder for ratepension og livsvarig</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq4" value="30" min="5" max="40">
+          <input type="number" id="iq4" value="30" min="5" max="40" aria-label="Ønsket udbetalingsperiode i år">
           <span class="unit">år</span>
         </td>
       </tr>`;
@@ -843,7 +867,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Bruges til beregning af kommuneskat og topskatteoptimering</div>
         </td>
         <td class="qi">
-          <input type="text" id="iq7" value="Frederiksberg" placeholder="fx Aarhus">
+          <input type="text" id="iq7" value="Frederiksberg" placeholder="fx Aarhus" aria-label="Bopælskommune" autocomplete="off">
         </td>
       </tr>
       <tr>
@@ -890,16 +914,26 @@ Upload derefter PDF'en her øverst til højre.`,
         </td>
       </tr>`;
 
+    const steps = `
+      <div class="onboarding-steps" role="list" aria-label="Fremgangsmaade">
+        <span class="step done" role="listitem">1 Upload</span>
+        <span class="sep" aria-hidden="true">›</span>
+        <span class="step active" role="listitem" aria-current="step">2 Parametre</span>
+        <span class="sep" aria-hidden="true">›</span>
+        <span class="step" id="step-analyse" role="listitem">3 Analyse</span>
+      </div>`;
+
     const body = document.getElementById('parametre-panel-body');
     body.innerHTML = `<div class="iform-wrap" id="interview-form-el">
+      ${steps}
       <table class="iform-table">${rows}</table>
       <button class="iform-submit" id="iform-submit-btn" onclick="submitInterviewForm()">Start analyse &#x2192;</button>
     </div>`;
     const panel = document.getElementById('parametre-panel');
     panel.style.display = '';
-    // Ensure panel is open
     document.getElementById('parametre-panel-body').style.display = '';
-    document.getElementById('parametre-panel-toggle').textContent = '\u25BC Skjul';
+    document.getElementById('parametre-panel-toggle').textContent = '▼ Skjul';
+    setTimeout(() => document.getElementById('iq1')?.focus(), 80);
     return null;
   }
 
@@ -926,6 +960,30 @@ Upload derefter PDF'en her øverst til højre.`,
 
   function escapeAttr(s) {
     return (s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function showFieldError(fieldId, msg) {
+    const inp = document.getElementById(fieldId);
+    if (!inp) return;
+    inp.setAttribute('aria-invalid', 'true');
+    const errId = fieldId + '_err';
+    let err = document.getElementById(errId);
+    if (!err) {
+      err = document.createElement('span');
+      err.id = errId;
+      err.className = 'field-error';
+      err.setAttribute('role', 'alert');
+      inp.insertAdjacentElement('afterend', err);
+    }
+    err.textContent = msg;
+    inp.focus();
+  }
+
+  function clearFieldErrors() {
+    document.querySelectorAll('[aria-invalid="true"]').forEach(el => {
+      el.removeAttribute('aria-invalid');
+    });
+    document.querySelectorAll('.field-error').forEach(el => el.remove());
   }
 
   function toggleKirkeskat() {
@@ -1020,20 +1078,21 @@ Upload derefter PDF'en her øverst til højre.`,
     const iq1Val = parseFloat(document.getElementById('iq1')?.value || '-1');
     const afkastVal = parseFloat(document.getElementById('iq2')?.value || '-1');
 
+    clearFieldErrors();
     if (isNaN(iq1Val) || iq1Val < 0) {
-      alert('Angiv en gyldig månedlig netto-indbetaling (0 eller mere).');
+      showFieldError('iq1', 'Angiv en gyldig månedlig netto-indbetaling (0 eller mere).');
       return;
     }
     if (nuvaerende && pensionsalderVal <= nuvaerende) {
-      alert(`Pensionsalder (${pensionsalderVal} år) skal være højere end din nuværende alder (${nuvaerende} år).`);
+      showFieldError('iq3', `Pensionsalder skal være højere end din nuværende alder (${nuvaerende} år).`);
       return;
     }
-    if (pensionsalderVal < 55 || pensionsalderVal > 80) {
-      alert('Pensionsalder skal være mellem 55 og 80 år.');
+    if (pensionsalderVal < 55 || pensionsalderVal > 85) {
+      showFieldError('iq3', 'Pensionsalder skal være mellem 55 og 85 år.');
       return;
     }
     if (isNaN(afkastVal) || afkastVal < 0 || afkastVal > 20) {
-      alert('Forventet afkast skal være mellem 0% og 20%.');
+      showFieldError('iq2', 'Forventet afkast skal være mellem 0% og 20%.');
       return;
     }
 
@@ -1111,10 +1170,11 @@ Upload derefter PDF'en her øverst til højre.`,
 
     const msg = 'Mine svar:\n' + parts.join('\n');
 
-    // Opdater knaptekst og fold panel sammen efter indsendelse
+    clearFieldErrors();
     const submitBtn = document.getElementById('iform-submit-btn');
-    if (submitBtn) submitBtn.textContent = '(Gen)start analyse \u2192';
-    // Fold panel sammen så analysen fylder mere
+    if (submitBtn) submitBtn.textContent = '(Gen)start analyse →';
+    const stepAnalyse = document.getElementById('step-analyse');
+    if (stepAnalyse) { stepAnalyse.classList.add('active'); }
     if (_parametrePanelOpen) toggleParametrePanel();
 
     // ── Gem parametre i session så engine kan køre ────────────────────────────
@@ -1250,8 +1310,6 @@ Upload derefter PDF'en her øverst til højre.`,
           }
         }
       }
-      // Scroll til TOP af svaret når det er færdigt
-      scrollToElement(assistantBubble);
     } finally {
       isStreaming = false;
       setInputLocked(false);
@@ -1294,6 +1352,7 @@ Upload derefter PDF'en her øverst til højre.`,
 
       typingEl.remove();
       const assistantBubble = addMessage('assistant', '');
+      scrollToElement(assistantBubble);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -1320,8 +1379,6 @@ Upload derefter PDF'en her øverst til højre.`,
           }
         }
       }
-      // Scroll til TOP af svaret når det er færdigt
-      scrollToElement(assistantBubble);
     } finally {
       isStreaming = false;
       setInputLocked(false);
@@ -1332,13 +1389,14 @@ Upload derefter PDF'en her øverst til højre.`,
     const isOverloaded = errorCode === 'overloaded';
     const msg = isOverloaded
       ? 'AI-tjenesten er overbelastet lige nu — prøv igen om et øjeblik.'
-      : `Fejl: ${errorCode}`;
-    const retryBtn = isOverloaded
-      ? `<button onclick="this.closest('.message').remove(); document.getElementById('message-input').value=${JSON.stringify(retryText)}; sendMessage();"
-           style="margin-top:8px;padding:5px 14px;background:#2a6fa8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem">
-           Prøv igen
-         </button>`
-      : '';
+      : errorCode.startsWith('API') || errorCode.includes('authentication')
+        ? 'API-nøgle mangler eller er ugyldig.'
+        : `Fejl: ${errorCode}`;
+    const retryBtn = `<button onclick="this.closest('.message').remove(); document.getElementById('message-input').value=${JSON.stringify(retryText)}; sendMessage();"
+         style="margin-top:8px;padding:5px 14px;background:#2a6fa8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem"
+         aria-label="Prøv igen">
+         Prøv igen
+       </button>`;
     bubbleEl.querySelector('.bubble').innerHTML =
       `<em style="color:#c97">${msg}</em>${retryBtn}`;
   }
@@ -1405,8 +1463,20 @@ Upload derefter PDF'en her øverst til højre.`,
 
   async function clearHistory() {
     if (!sessionId) return;
-    await fetch(`/api/session/${sessionId}/history`, { method: 'DELETE' });
-    document.getElementById('chat-container').innerHTML = '<div id="welcome" style="text-align:center;color:#8aa0b8;font-size:.9rem;margin:auto;padding:32px;max-width:480px"><div class="icon" style="font-size:2.5rem;margin-bottom:12px">&#x1F4CA;</div><h2 style="color:#3a5a78;margin-bottom:8px;font-size:1.1rem">Samtale ryddet</h2><p>Stil et nyt spørgsmål om din pension.</p></div>';
+    // Vis bekræftelsesbanner i stedet for browser confirm()
+    const btn = document.getElementById('clear-btn');
+    if (btn.dataset.confirming) {
+      delete btn.dataset.confirming;
+      btn.textContent = 'Ryd';
+      btn.style.background = '';
+      await fetch(`/api/session/${sessionId}/history`, { method: 'DELETE' });
+      document.getElementById('chat-container').innerHTML = '<div id="welcome" style="text-align:center;color:#8aa0b8;font-size:.9rem;margin:auto;padding:32px;max-width:480px"><div class="icon" style="font-size:2.5rem;margin-bottom:12px">&#x1F4CA;</div><h2 style="color:#3a5a78;margin-bottom:8px;font-size:1.1rem">Samtale ryddet</h2><p>Stil et nyt spørgsmål om din pension.</p></div>';
+    } else {
+      btn.dataset.confirming = '1';
+      btn.textContent = 'Bekræft ryd?';
+      btn.style.background = '#ffe0e0';
+      setTimeout(() => { if (btn.dataset.confirming) { delete btn.dataset.confirming; btn.textContent = 'Ryd'; btn.style.background = ''; } }, 4000);
+    }
   }
 
   // ── Markdown renderer ────────────────────────────────────────────────────
@@ -1490,7 +1560,7 @@ Upload derefter PDF'en her øverst til højre.`,
       cells(row).forEach(c => { t += `<td>${inline(c)}</td>`; });
       t += '</tr>';
     });
-    return t + '</tbody></table>';
+    return '<div class="table-scroll">' + t + '</tbody></table></div>';
   }
 
   function inline(text) {
@@ -1509,7 +1579,7 @@ Upload derefter PDF'en her øverst til højre.`,
   // ── Version tag ──────────────────────────────────────────────────────────
   fetch('/api/version').then(r => r.json()).then(d => {
     const el = document.getElementById('version-tag');
-    if (el && d.commit) el.textContent = d.commit;
+    if (el && d.commit) el.title = 'Version: ' + d.commit;
   }).catch(() => {});
 
   // ── Textarea auto-resize + Enter to send ──────────────────────────────────

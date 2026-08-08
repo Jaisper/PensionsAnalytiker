@@ -25,9 +25,13 @@ ATP_MDR_STANDARD                  = 1_825      # kr/mdr estimat
 PENSIONSTILLAEG_MAX_ENLIG_AAR     = 8_891 * 12    # 106.692 kr/år
 PENSIONSTILLAEG_BUNDFRADRAG_ENLIG = 98_400         # kr/år
 PENSIONSTILLAEG_MODREGNING        = 0.309          # 30,9 % jf. § 29
+PENSIONSTILLAEG_MAX_PAR_AAR       = 4_396 * 12      # 52.752 kr/år jf. § 29 stk. 2
+PENSIONSTILLAEG_BUNDFRADRAG_PAR   = 196_700          # kr/år (par)
+PENSIONSTILLAEG_MODREGNING_PAR    = 0.32             # 32 % (par)
 
 RATEPENSION_LOFT                  = 63_100
-LIVSVARIG_ESTIMAT_AAR             = 25             # konservativt estimat
+SKATTELOFT                        = 0.5207     # PSL § 19
+LIVSVARIG_ESTIMAT_AAR             = 18             # jf. K2013 aktuarisk benchmark
 
 
 @dataclass
@@ -72,12 +76,19 @@ def tidligste_private_pensionsalder(fp_alder: int) -> int:
 
 # ── Finansielle kernefunktioner ──────────────────────────────────────────────
 
-def beregn_fv(pv: float, pmt: float, r: float, n: int) -> float:
-    """FV = PV·(1+r)^n + PMT·((1+r)^n − 1)/r"""
+def beregn_fv(pv: float, pmt: float, r: float, n: int, g: float = 0.0) -> float:
+    """FV med evt. voksende annuitet (lønvækst g p.a.).
+    g=0: standard formel FV = PV*(1+r)^n + PMT*((1+r)^n-1)/r
+    g>0: voksende annuitet FV = PV*(1+r)^n + PMT*((1+r)^n-(1+g)^n)/(r-g)
+    """
     if n <= 0:  return max(0.0, pv)
-    if r == 0:  return pv + pmt * n
-    g = (1 + r) ** n
-    return pv * g + pmt * (g - 1) / r
+    rn = (1 + r) ** n
+    if g == 0.0:
+        if r == 0:  return pv + pmt * n
+        return pv * rn + pmt * (rn - 1) / r
+    if abs(r - g) < 1e-9:  return pv * rn + pmt * n * (1 + r) ** (n - 1)
+    gn = (1 + g) ** n
+    return pv * rn + pmt * (rn - gn) / (r - g)
 
 
 def beregn_maanedlig_annuitet(fv: float, r: float, m: int) -> float:
@@ -99,6 +110,8 @@ def _topskat_andel(dette_pi: float, total_pi: float) -> float:
 
 def _netto_s_med_am(brutto: float, skat: SkatParametre, total_pi: float, dette_pi: float) -> float:
     basis = BUNDSKAT + skat.kommuneskat + skat.kirkeskat
+    if basis + TOPSKAT > SKATTELOFT:
+        basis = max(0.0, SKATTELOFT - TOPSKAT)  # PSL § 19
     netto = brutto * (1 - AM_BIDRAG) * (1 - basis)
     netto -= _topskat_andel(dette_pi, total_pi)
     return netto
@@ -106,6 +119,8 @@ def _netto_s_med_am(brutto: float, skat: SkatParametre, total_pi: float, dette_p
 
 def _netto_s_uden_am(brutto: float, skat: SkatParametre, total_pi: float, dette_pi: float) -> float:
     basis = BUNDSKAT + skat.kommuneskat + skat.kirkeskat
+    if basis + TOPSKAT > SKATTELOFT:
+        basis = max(0.0, SKATTELOFT - TOPSKAT)  # PSL § 19
     netto = brutto * (1 - basis)
     netto -= _topskat_andel(dette_pi, total_pi)
     return netto
@@ -131,11 +146,17 @@ def beregn_netto_skat(
 # ── Pensionstillæg (modregning) ──────────────────────────────────────────────
 
 def folkepension_pensionstillaeg_aar(privat_s_indkomst_aar: float, skat: SkatParametre) -> float:
-    """Pensionstillæg efter modregning. Kilde: Lov om social pension § 29 (enlige)."""
-    max_t      = PENSIONSTILLAEG_MAX_ENLIG_AAR if skat.enlig else PENSIONSTILLAEG_MAX_ENLIG_AAR * 0.55
-    bundfradrag = PENSIONSTILLAEG_BUNDFRADRAG_ENLIG if skat.enlig else PENSIONSTILLAEG_BUNDFRADRAG_ENLIG * 2.2
+    """Pensionstillæg efter modregning. Kilde: Lov om social pension § 29."""
+    if skat.enlig:
+        max_t       = PENSIONSTILLAEG_MAX_ENLIG_AAR
+        bundfradrag = PENSIONSTILLAEG_BUNDFRADRAG_ENLIG
+        modregning  = PENSIONSTILLAEG_MODREGNING
+    else:
+        max_t       = PENSIONSTILLAEG_MAX_PAR_AAR
+        bundfradrag = PENSIONSTILLAEG_BUNDFRADRAG_PAR
+        modregning  = PENSIONSTILLAEG_MODREGNING_PAR
     overskud   = max(0.0, privat_s_indkomst_aar - bundfradrag)
-    return max(0.0, max_t - overskud * PENSIONSTILLAEG_MODREGNING)
+    return max(0.0, max_t - overskud * modregning)
 
 
 # ── Hjælpefunktioner ─────────────────────────────────────────────────────────
@@ -191,6 +212,7 @@ def generer_udbetalingstabel(
     r              = float(parametre.get("afkast_pct", 4.0)) / 100
     netto_indbetal = float(parametre.get("netto_indbetaling", 0))
     inflation_pct  = float(parametre.get("inflation_pct", 0.0)) / 100
+    loenvaekst_pct = float(parametre.get("loenvaekst_pct", 0.0)) / 100
 
     # Per-produkt start-aldre: {key: start_alder} — loebende produkter kan starte sent
     produkt_start_aldre_param: dict[str, int] = parametre.get("produkt_start_aldre", {})
@@ -321,7 +343,7 @@ def generer_udbetalingstabel(
         produkt_start_alder = int(override) if override is not None else pensionsalder
 
         n_i = max(0, produkt_start_alder - alder_nu)
-        fv  = beregn_fv(pv, pmt, r, n_i)
+        fv  = beregn_fv(pv, pmt, r, n_i, loenvaekst_pct)
 
         # Udbetalingstype
         if "kapital" in ptype_l or "aldersopsparing" in ptype_l:
@@ -506,6 +528,7 @@ def generer_udbetalingstabel(
             "kirkeskat_pct":   skat_params.kirkeskat * 100,
             "enlig":           skat_params.enlig,
             "inflation_pct":   inflation_pct * 100,
+            "loenvaekst_pct":  loenvaekst_pct * 100,
         },
     }
 
@@ -657,6 +680,85 @@ def format_fordeling_til_llm(fordeling: list[dict]) -> str:
     return "\n".join(linjer)
 
 
+# ── Forsikringsanalyse ───────────────────────────────────────────────────────
+
+def analyser_forsikring(profil: dict, parametre: dict) -> dict:
+    """
+    Vurderer om forsikringsdækninger er tilstrækkelige jf. brancheanbefalinger.
+    Returnerer dict med advarsler og analyser.
+    """
+    forsikringer = profil.get("forsikringer", {})
+    ordninger    = profil.get("ordninger", [])
+    person       = profil.get("person", {})
+
+    tabt_arbejdsevne_aarlig = float(forsikringer.get("tabt_arbejdsevne_aarlig") or 0)
+    liv_ved_doed            = float(forsikringer.get("liv_ved_doed") or 0)
+    kritisk_sygdom          = float(forsikringer.get("kritisk_sygdom") or 0)
+
+    # Estimér bruttoløn ud fra samlede pensionsindbetalinger (typisk ~12-17% af løn)
+    samlet_indbetaling = sum(float(o.get("aarlig_indbetaling") or 0) for o in ordninger
+                             if not o.get("kun_forsikring"))
+    estimer_bruttolonn = round(samlet_indbetaling / 0.14) if samlet_indbetaling > 0 else 0
+    # Estimeret nettoløn: ~65% af brutto (middel kommuneskat)
+    estimer_nettoloen  = round(estimer_bruttolonn * 0.65)
+
+    advarsler: list[str] = []
+    analyser:  list[str] = []
+
+    def kr(v: float) -> str:
+        return f"{v:,.0f}".replace(",", ".")
+
+    # Tabt arbejdsevne
+    if tabt_arbejdsevne_aarlig > 0 and estimer_nettoloen > 0:
+        daekning_pct = (tabt_arbejdsevne_aarlig / estimer_nettoloen) * 100
+        if daekning_pct < 60:
+            advarsler.append(
+                f"Tabt arbejdsevne: {kr(tabt_arbejdsevne_aarlig)} kr/år = {daekning_pct:.0f}% af est. nettoløn "
+                f"({kr(estimer_nettoloen)} kr/år) — under anbefalet minimum 60-80%"
+            )
+        elif daekning_pct < 80:
+            analyser.append(
+                f"Tabt arbejdsevne: {kr(tabt_arbejdsevne_aarlig)} kr/år = {daekning_pct:.0f}% af est. nettoløn — "
+                f"inden for anbefalet 60-80%"
+            )
+        else:
+            analyser.append(
+                f"Tabt arbejdsevne: {kr(tabt_arbejdsevne_aarlig)} kr/år = {daekning_pct:.0f}% af est. nettoløn — god dækning"
+            )
+    elif tabt_arbejdsevne_aarlig == 0:
+        advarsler.append(
+            "Ingen tabt-arbejdsevne-dækning fundet — undersøg om dækning findes via overenskomst"
+        )
+
+    # Livsforsikring
+    if liv_ved_doed == 0:
+        analyser.append(
+            "Ingen livsforsikring fundet — vurder behov afhængigt af forsørgerpligt og gæld"
+        )
+    else:
+        analyser.append(
+            f"Livsforsikring ved dødsfald: {kr(liv_ved_doed)} kr. — vurder ift. forsørgerpligt og boliggæld"
+        )
+
+    # Kritisk sygdom
+    if kritisk_sygdom == 0:
+        analyser.append(
+            "Kritisk sygdom: ingen dækning fundet — engangsudbetaling kan dække tab af erhvervsevne i overgangsperiode"
+        )
+    else:
+        analyser.append(f"Kritisk sygdom (engangsudbetaling): {kr(kritisk_sygdom)} kr.")
+
+    return {
+        "tabt_arbejdsevne_aarlig": tabt_arbejdsevne_aarlig,
+        "liv_ved_doed":            liv_ved_doed,
+        "kritisk_sygdom":          kritisk_sygdom,
+        "estimer_bruttolonn":      estimer_bruttolonn,
+        "estimer_nettoloen":       estimer_nettoloen,
+        "advarsler":               advarsler,
+        "analyser":                analyser,
+    }
+
+
 # ── Formatering til LLM-kontekst ─────────────────────────────────────────────
 
 def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder: int) -> str:
@@ -805,7 +907,7 @@ def format_engine_til_llm(result: dict) -> str:
             None,
         )
         n_mdr    = first["produkter"][pr["key"]]["mdr_netto"] if first else 0.0
-        varighed = "livsvarig (25 år est.)" if pr["udb_type"] == "livsvarig" else f"{pr['udb_aar']} år"
+        varighed = "livsvarig (18 år est.)" if pr["udb_type"] == "livsvarig" else f"{pr['udb_aar']} år"
         L.append(
             f"| {pr['selskab']} – {pr['produkttype']} | {pr['skat_type']}"
             f" | {pr['start_alder']} år"

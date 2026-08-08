@@ -31,7 +31,8 @@ import anthropic
 from pdf_parser import parse_pensionsinfo_pdf, format_profil_til_tekst
 from pension_rules import PENSION_REGLER
 from engine import (generer_udbetalingstabel, format_engine_til_llm, SkatParametre,
-                     fordel_pmt_default, format_fordeling_til_llm, generer_scenarier)
+                     fordel_pmt_default, format_fordeling_til_llm, generer_scenarier,
+                     analyser_forsikring)
 
 app = FastAPI(title="PensionsAnalytiker")
 
@@ -70,7 +71,7 @@ def _normalize_kommune(s: str) -> str:
 
 KOMMUNESKAT_2025: dict[str, float] = {
     # Hovedstaden
-    "kobenhavn": 23.5, "frederiksberg": 22.8, "albertslund": 25.4,
+    "kobenhavn": 23.7, "frederiksberg": 22.9, "albertslund": 25.4,
     "allerrod": 24.6, "ballerup": 25.4, "brondby": 25.9,
     "dragor": 25.9, "egedal": 25.8, "fredensborg": 25.7,
     "frederikssund": 25.8, "fureso": 24.1, "gentofte": 22.0,
@@ -255,8 +256,17 @@ Hvis inflation er oplyst: vis Real/mdr-kolonnen (2025-købekraft) efter Netto/md
 
 **Tabel 4** — Scenarieanalyse: hvis tilgængelig, vis den direkte. Forklar at Base-scenariet (brugerens valgte afkast) svarer til Tabel 1–3, og at pesimistisk/optimistisk er afkast ±2%.
 
+Vis ALTID denne linje direkte efter Tabel 1 og Tabel 3: *Beregnet af deterministisk engine — konsultér en certificeret pensionsrådgiver for konkrete beslutninger.* Forklar at Base-scenariet (brugerens valgte afkast) svarer til Tabel 1–3, og at pesimistisk/optimistisk er afkast ±2%.
+
+## FORSIKRINGSANALYSE — VEJLEDNING
+Når FORSIKRINGSANALYSE-blokken er tilgængelig i konteksten:
+- Vis altid forsikringsstatus KORT i den komplette analyse (1-3 linjer)
+- Fremhæv ⚠-advarsler — de indikerer potentielle huller i dækningen
+- Anbefal specifik handling (fx kontakt forsikringsrådgiver) ved manglende dækning
+- Estimeringerne er baseret på indbetalinger som proxy — ikke eksakte beregninger
+
 ## NØGLESATSER 2025
-- Ratepension loft: 63.100 kr/år | Aldersopsparing: 9.100 kr/år (58.900 kr under 5 år til pension)
+- Ratepension loft: 63.100 kr/år | Aldersopsparing: 9.100 kr/år (60.900 kr under 7 år til folkepensionsalder, PBL §16)
 - AM-bidrag: 8% | Bundskat: 12,01% | Topskatgrænse: 588.900 kr PI | Topskat: 15%
 - Folkepension: 7.955 kr/mdr | ATP: ca. 1.825 kr/mdr | PAL-skat: 15,3%
 - Pensionstillæg max (enlig): 8.891 kr/mdr — modregnes 30,9% af S-indkomst over 98.400 kr/år
@@ -278,6 +288,7 @@ def _engine_cache_key(session: dict) -> str:
         "kapital_skat_type":  params.get("kapital_skat_type"),
         "inflation_pct":      params.get("inflation_pct"),
         "produkt_start_aldre": json.dumps(params.get("produkt_start_aldre", {}), sort_keys=True),
+        "loenvaekst_pct":     params.get("loenvaekst_pct"),
         "profil_id":          id(profil),
     }
     return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
@@ -395,6 +406,19 @@ def _get_dynamic_context(session_id: str) -> str:
 
     engine_tekst = _kør_engine(session_id)
 
+    # Forsikringsanalyse
+    forsikring_tekst = ""
+    if profil:
+        fa = analyser_forsikring(profil, params)
+        lines = []
+        for a in fa["advarsler"]:
+            lines.append(f"⚠ {a}")
+        for a in fa["analyser"]:
+            lines.append(f"- {a}")
+        if fa["estimer_bruttolonn"]:
+            lines.append(f"- Estimeret bruttoløn (proxy): {fa['estimer_bruttolonn']:,.0f} kr/år".replace(",", "."))
+        forsikring_tekst = "\n".join(lines)
+
     netto_indbetaling = params.get("netto_indbetaling")
     if not profil:
         spm6_fordeling = "*(Ingen rapport uploadet — Spørgsmål 6 ikke relevant)*"
@@ -405,12 +429,14 @@ def _get_dynamic_context(session_id: str) -> str:
         spm6_fordeling = format_fordeling_til_llm(fordeling) if fordeling else \
             "*(Ingen multi-produkt firmapension fundet — Spørgsmål 6 ikke relevant)*"
 
+    forsikring_blok = (f"## FORSIKRINGSANALYSE\n{forsikring_tekst}\n\n" if forsikring_tekst else "")
     return (
         f"## TIDLIGSTE PENSIONSALDER\n{tidligste} år\n\n"
-        f"## SPM6_FORDELING\n{spm6_fordeling}\n\n"
-        f"## BEREGNEDE PARAMETRE\n{parametre_tekst}\n\n"
-        f"## BEREGNET PENSIONSANALYSE\n{engine_tekst}\n\n"
-        f"## PENSIONSPROFIL\n{profil_tekst}\n"
+        + forsikring_blok
+        + f"## SPM6_FORDELING\n{spm6_fordeling}\n\n"
+        + f"## BEREGNEDE PARAMETRE\n{parametre_tekst}\n\n"
+        + f"## BEREGNET PENSIONSANALYSE\n{engine_tekst}\n\n"
+        + f"## PENSIONSPROFIL\n{profil_tekst}\n"
     )
 
 
@@ -833,6 +859,7 @@ class Parametre(BaseModel):
     inflation_pct: float | None = None
     kirkeskat_pct: float | None = None
     produkt_start_aldre: dict | None = None
+    loenvaekst_pct: float | None = None
 
 
 @app.post("/api/parametre")
@@ -850,6 +877,7 @@ async def gem_parametre(req: Parametre):
     if req.inflation_pct is not None:        p["inflation_pct"] = req.inflation_pct
     if req.kirkeskat_pct is not None:        p["kirkeskat_pct"] = req.kirkeskat_pct
     if req.produkt_start_aldre is not None:  p["produkt_start_aldre"] = req.produkt_start_aldre
+    if req.loenvaekst_pct is not None:        p["loenvaekst_pct"] = req.loenvaekst_pct
 
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")
@@ -876,6 +904,28 @@ async def get_history(session_id: str):
     if session_id not in sessions:
         raise HTTPException(404, "Session ikke fundet")
     return {"messages": sessions[session_id]["messages"]}
+
+@app.get("/api/session/{session_id}/engine")
+async def get_engine_data(session_id: str):
+    if session_id not in sessions:
+        raise HTTPException(404, "Session ikke fundet")
+    result = sessions[session_id].get("engine_output")
+    if not result:
+        return JSONResponse({"error": "Ingen beregning endnu"}, status_code=404)
+    params = sessions[session_id].get("beregningsparametre", {})
+    # Return only what's needed for charting (avoid huge nested objects)
+    return JSONResponse({
+        "tabel": result["tabel"],
+        "produkter": result["produkter"],
+        "engangsbeloeb": result.get("engangsbeloeb", []),
+        "fp_alder": result["fp_alder"],
+        "pensionsalder": result["pensionsalder"],
+        "tabel_start": result["tabel_start"],
+        "parametre": result["parametre"],
+        "jaevn_netto_mdr": result.get("jaevn_netto_mdr", 0),
+        "produkt_start_aldre": params.get("produkt_start_aldre", {}),
+    })
+
 
 
 @app.get("/api/session/{session_id}/raw")

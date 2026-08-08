@@ -387,7 +387,43 @@
       border-top: 1px solid #e8edf2;
       background: #f7fafc;
     }
+/* ── Chart panel ── */
+#chart-panel {
+  background: #f0f5fb;
+  border-bottom: 2px solid #b8cfe8;
+  flex-shrink: 0;
+}
+#chart-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 24px; background: #dceaf8; cursor: pointer; user-select: none;
+}
+#chart-panel-header:hover { background: #cfe0f5; }
+#chart-panel-header .ctitle { font-size: 0.82rem; font-weight: 600; color: #1a3a5c; }
+#chart-panel-toggle { font-size: 0.78rem; color: #5578a0; }
+#chart-panel-body { padding: 16px 24px 18px; }
+.chart-wrap { position: relative; height: 260px; margin-bottom: 12px; }
+
+/* Timeline */
+.tl-wrap { margin-top: 10px; }
+.tl-label { font-size: 0.76rem; color: #5578a0; margin-bottom: 6px; font-weight: 600; }
+.tl-track-area { position: relative; user-select: none; }
+.tl-scale { display: flex; justify-content: space-between; font-size: 0.68rem; color: #8aa0b8; margin-bottom: 4px; padding: 0 0; }
+.tl-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tl-row-label { font-size: 0.74rem; color: #3a5a78; width: 160px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-track { flex: 1; height: 18px; background: #e2ecf8; border-radius: 4px; position: relative; cursor: pointer; }
+.tl-bar { position: absolute; height: 100%; border-radius: 4px; cursor: ew-resize; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; color: rgba(255,255,255,0.9); font-weight: 600; overflow: hidden; white-space: nowrap; min-width: 6px; }
+.tl-handle { position: absolute; top: 0; width: 8px; height: 100%; background: rgba(0,0,0,0.25); cursor: ew-resize; border-radius: 3px; }
+.tl-handle.start { left: 0; border-radius: 4px 0 0 4px; }
+.tl-handle.end { right: 0; border-radius: 0 4px 4px 0; }
+.chart-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.chart-btn { border: none; border-radius: 6px; padding: 6px 14px; font-size: 0.82rem; cursor: pointer; font-family: inherit; }
+.chart-btn.primary { background: #1a3a5c; color: white; }
+.chart-btn.primary:hover { background: #2a5080; }
+.chart-btn.secondary { background: white; border: 1px solid #c8d8e8; color: #1a3a5c; }
+.chart-btn.secondary:hover { background: #f0f5fb; }
+#chart-status { font-size: 0.76rem; color: #5578a0; }
   </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -447,6 +483,24 @@
   </div>
   <div id="parametre-panel-body">
     <!-- Formular injiceres her af buildInterviewForm() -->
+  </div>
+</div>
+
+<div id="chart-panel" style="display:none">
+  <div id="chart-panel-header" onclick="toggleChartPanel()">
+    <span class="ctitle">&#x1F4CA; Udbetalingsdiagram</span>
+    <span id="chart-panel-toggle">&#x25BC; Skjul</span>
+  </div>
+  <div id="chart-panel-body">
+    <div class="chart-wrap">
+      <canvas id="pension-chart"></canvas>
+    </div>
+    <div class="tl-wrap" id="timeline-container"></div>
+    <div class="chart-actions">
+      <button class="chart-btn primary" onclick="refreshChartFromTimeline()">&#x21BB; Genberegn</button>
+      <button class="chart-btn secondary" onclick="gemAnalyse()">&#x2193; Gem analyse</button>
+      <span id="chart-status"></span>
+    </div>
   </div>
 </div>
 
@@ -1180,8 +1234,8 @@ Upload derefter PDF'en her øverst til højre.`,
     // ── Gem parametre i session så engine kan køre ────────────────────────────
     // Kommuneskat-lookup (2025-satser, ca.-værdier)
     const KOMMUNESKAT = {
-      'københavn': 23.5, 'kobenhavn': 23.5,
-      'frederiksberg': 22.8,
+      'københavn': 23.7, 'kobenhavn': 23.7,
+      'frederiksberg': 22.9,
       'gentofte': 22.0,
       'lyngby': 22.9, 'lyngbytaarbæk': 22.9, 'lyngbytaarbaek': 22.9,
       'gladsaxe': 23.8, 'gladsakse': 23.8,
@@ -1381,6 +1435,10 @@ Upload derefter PDF'en her øverst til højre.`,
       }
     } finally {
       isStreaming = false;
+      // After streaming completes, if it was an analysis, load the chart
+      if (isAnalysis) {
+        setTimeout(() => loadAndRenderChart(), 500);
+      }
       setInputLocked(false);
     }
   }
@@ -1594,6 +1652,400 @@ Upload derefter PDF'en her øverst til højre.`,
       sendMessage();
     }
   });
+
+
+// ── Pension chart ────────────────────────────────────────────────────────────────────────────────────
+
+const CHART_COLORS = [
+  '#2563eb', '#16a34a', '#9333ea', '#dc2626', '#ea580c',
+  '#0891b2', '#db2777', '#65a30d', '#7c3aed', '#b45309',
+];
+const FP_COLOR  = '#f97316';
+const ATP_COLOR = '#eab308';
+let _chartInstance = null;
+let _chartData = null;
+let _chartPanelOpen = true;
+let _tlDrag = null;  // active drag state
+
+function toggleChartPanel() {
+  _chartPanelOpen = !_chartPanelOpen;
+  document.getElementById('chart-panel-body').style.display = _chartPanelOpen ? '' : 'none';
+  document.getElementById('chart-panel-toggle').textContent = _chartPanelOpen ? '▼ Skjul' : '▶ Vis';
+}
+
+async function loadAndRenderChart() {
+  const res = await fetch(`/api/session/${sessionId}/engine`).catch(() => null);
+  if (!res || !res.ok) return;
+  _chartData = await res.json();
+  renderChart(_chartData);
+  renderTimeline(_chartData);
+  document.getElementById('chart-panel').style.display = '';
+}
+
+function renderChart(data) {
+  const tabel      = data.tabel;
+  const produkter  = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
+  const engangs    = data.engangsbeloeb || [];
+  const fpAlder    = data.fp_alder;
+  const labels     = tabel.map(r => r.alder);
+
+  const datasets = [];
+  produkter.forEach((prod, idx) => {
+    const color = CHART_COLORS[idx % CHART_COLORS.length];
+    datasets.push({
+      label: `${prod.selskab} – ${prod.produkttype}`,
+      data: tabel.map(row => {
+        const pd = row.produkter?.[prod.key];
+        return pd ? Math.round(pd.mdr_netto || 0) : 0;
+      }),
+      backgroundColor: color + 'cc',
+      borderColor: color,
+      borderWidth: 1,
+      stack: 'a',
+      _color: color,
+      _key: prod.key,
+    });
+  });
+
+  // Pensionstillaeg
+  datasets.push({
+    label: 'Pensionstillaeg',
+    data: tabel.map(r => Math.round(r.tillaeg_mdr || 0)),
+    backgroundColor: '#fb923ccc',
+    borderColor: '#fb923c',
+    borderWidth: 1,
+    stack: 'a',
+  });
+
+  datasets.push({
+    label: 'Folkepension',
+    data: tabel.map(r => Math.round(r.fp_mdr_netto || 0)),
+    backgroundColor: FP_COLOR + 'cc',
+    borderColor: FP_COLOR,
+    borderWidth: 1,
+    stack: 'a',
+  });
+  datasets.push({
+    label: 'ATP',
+    data: tabel.map(r => Math.round(r.atp_mdr_netto || 0)),
+    backgroundColor: ATP_COLOR + 'cc',
+    borderColor: ATP_COLOR,
+    borderWidth: 1,
+    stack: 'a',
+  });
+
+  // Jaevn linje
+  const jaevn = data.jaevn_netto_mdr || 0;
+  if (jaevn > 0) {
+    const pensStart = data.pensionsalder;
+    datasets.push({
+      type: 'line',
+      label: 'Jaevn netto/mdr',
+      data: tabel.map(r => r.alder >= pensStart ? jaevn : null),
+      borderColor: '#1a3a5c',
+      borderWidth: 2,
+      borderDash: [6, 3],
+      pointRadius: 0,
+      fill: false,
+      stack: undefined,
+      order: -1,
+    });
+  }
+
+  const ctx = document.getElementById('pension-chart').getContext('2d');
+  if (_chartInstance) _chartInstance.destroy();
+
+  _chartInstance = new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: {
+          stacked: true,
+          title: { display: true, text: 'Alder', font: { size: 11 } },
+          ticks: { font: { size: 10 } },
+        },
+        y: {
+          stacked: true,
+          title: { display: true, text: 'Netto kr/mdr', font: { size: 11 } },
+          ticks: {
+            font: { size: 10 },
+            callback: v => v.toLocaleString('da-DK'),
+          },
+          beginAtZero: true,
+        },
+      },
+      plugins: {
+        legend: {
+          position: 'top',
+          labels: { font: { size: 10 }, boxWidth: 12, padding: 8 },
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.parsed.y;
+              if (!v) return null;
+              return ` ${ctx.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr/mdr`;
+            },
+            footer: items => {
+              const total = items.filter(i => i.dataset.stack === 'a').reduce((s, i) => s + (i.parsed.y || 0), 0);
+              return total > 0 ? `I alt: ${Math.round(total).toLocaleString('da-DK')} kr/mdr` : '';
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+// ── Timeline ──────────────────────────────────────────────────────────────────────────
+
+function renderTimeline(data) {
+  const container = document.getElementById('timeline-container');
+  if (!container) return;
+
+  const produkter = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
+  const engangs   = data.engangsbeloeb || [];
+  const tabelStart = data.tabel_start;
+  const fpAlder    = data.fp_alder;
+  const pensionEnd = data.pensionsalder + (data.parametre?.udbetaling_aar || 30);
+
+  const ageMin = Math.min(tabelStart, 55);
+  const ageMax = Math.max(pensionEnd + 5, fpAlder + 5);
+  const span   = ageMax - ageMin;
+
+  function pct(age) { return Math.max(0, Math.min(100, ((age - ageMin) / span) * 100)); }
+  function ageFrac(frac) { return Math.round(ageMin + frac * span); }
+
+  // Scale markers
+  const scaleMarks = [];
+  const step = span > 30 ? 10 : 5;
+  for (let a = Math.ceil(ageMin / step) * step; a <= ageMax; a += step) {
+    scaleMarks.push(`<span style="position:absolute;left:${pct(a)}%;transform:translateX(-50%)">${a}</span>`);
+  }
+
+  let html = `<div class="tl-label">Juster udbetalingstidspunkter</div>
+  <div class="tl-track-area">
+    <div style="position:relative;height:16px;margin-bottom:2px;margin-left:168px">${scaleMarks.join('')}</div>`;
+
+  const allProds = [...produkter, ...engangs];
+  allProds.forEach((prod, idx) => {
+    const color = prod.udb_type === 'engangsbeloeb'
+      ? CHART_COLORS[(produkter.length + idx) % CHART_COLORS.length]
+      : CHART_COLORS[idx % CHART_COLORS.length];
+    const startAge = prod.start_alder;
+    const stopAge  = prod.stopper_ved_alder ?? ageMax;
+    const isEngangs = prod.udb_type === 'engangsbeloeb';
+    const label    = `${prod.selskab} – ${prod.produkttype}`.slice(0, 28);
+
+    const leftPct  = pct(startAge);
+    const widthPct = Math.max(1, pct(stopAge) - leftPct);
+    const barLabel = isEngangs ? `${startAge}` : `${startAge}–${stopAge}`;
+
+    html += `<div class="tl-row" data-key="${escapeAttr(prod.key)}" data-idx="${idx}">
+      <div class="tl-row-label" title="${label}">${label}</div>
+      <div class="tl-track" id="tl-track-${idx}"
+           data-agemin="${ageMin}" data-agemax="${ageMax}" data-span="${span}"
+           data-start="${startAge}" data-stop="${isEngangs ? startAge + 1 : stopAge}"
+           data-is-engangs="${isEngangs}" data-key="${escapeAttr(prod.key)}">
+        <div class="tl-bar" id="tl-bar-${idx}"
+             style="left:${leftPct}%;width:${widthPct}%;background:${color}"
+             title="${label}: ${barLabel} år">
+          ${!isEngangs ? '<div class="tl-handle start" onmousedown="tlDragStart(event,'+idx+',\'start\')"></div>' : ''}
+          <span style="padding:0 4px;pointer-events:none">${barLabel}</span>
+          ${!isEngangs ? '<div class="tl-handle end" onmousedown="tlDragStart(event,'+idx+',\'end\')"></div>' : ''}
+        </div>
+      </div>
+    </div>`;
+  });
+
+  // Folkepension marker
+  html += `<div class="tl-row">
+    <div class="tl-row-label" style="color:#f97316">Folkepension</div>
+    <div class="tl-track" style="pointer-events:none">
+      <div class="tl-bar" style="left:${pct(fpAlder)}%;width:${100 - pct(fpAlder)}%;background:${FP_COLOR}cc">
+        <span style="padding:0 4px">${fpAlder}→</span>
+      </div>
+    </div>
+  </div>`;
+
+  html += `</div>`;  // tl-track-area
+  container.innerHTML = html;
+
+  // Touch support
+  container.addEventListener('touchstart', e => {
+    const handle = e.target.closest('.tl-handle');
+    if (handle) {
+      e.preventDefault();
+      const idx = parseInt(handle.closest('.tl-row').dataset.idx);
+      const type = handle.classList.contains('start') ? 'start' : 'end';
+      tlDragStart({ clientX: e.touches[0].clientX, preventDefault: ()=>{} }, idx, type);
+    }
+  }, { passive: false });
+}
+
+function tlDragStart(e, idx, handleType) {
+  e.preventDefault && e.preventDefault();
+  const track = document.getElementById(`tl-track-${idx}`);
+  if (!track) return;
+  const rect = track.getBoundingClientRect();
+  _tlDrag = {
+    idx,
+    handleType,
+    track,
+    rect,
+    ageMin:   parseInt(track.dataset.agemin),
+    ageMax:   parseInt(track.dataset.agemax),
+    span:     parseInt(track.dataset.span),
+    start:    parseInt(track.dataset.start),
+    stop:     parseInt(track.dataset.stop),
+    isEngangs: track.dataset.isEngangs === 'true',
+    key:      track.dataset.key,
+  };
+
+  const moveHandler = (ev) => {
+    if (!_tlDrag) return;
+    const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+    const frac = Math.max(0, Math.min(1, (clientX - _tlDrag.rect.left) / _tlDrag.rect.width));
+    const age  = Math.max(_tlDrag.ageMin, Math.min(_tlDrag.ageMax, Math.round(_tlDrag.ageMin + frac * _tlDrag.span)));
+
+    if (_tlDrag.handleType === 'start') {
+      _tlDrag.start = Math.min(age, _tlDrag.stop - 1);
+    } else {
+      _tlDrag.stop = Math.max(age, _tlDrag.start + 1);
+    }
+    tlUpdateBar(_tlDrag);
+  };
+
+  const upHandler = () => {
+    if (!_tlDrag) return;
+    const d = _tlDrag;
+    _tlDrag = null;
+    document.removeEventListener('mousemove', moveHandler);
+    document.removeEventListener('mouseup', upHandler);
+    document.removeEventListener('touchmove', moveHandler);
+    document.removeEventListener('touchend', upHandler);
+    tlApplyChanges(d);
+  };
+
+  document.addEventListener('mousemove', moveHandler);
+  document.addEventListener('mouseup', upHandler);
+  document.addEventListener('touchmove', moveHandler, { passive: false });
+  document.addEventListener('touchend', upHandler);
+}
+
+function tlUpdateBar(d) {
+  const track = d.track;
+  track.dataset.start = d.start;
+  track.dataset.stop  = d.stop;
+
+  const ageMin = d.ageMin, span = d.span;
+  function pct(age) { return Math.max(0, Math.min(100, ((age - ageMin) / span) * 100)); }
+
+  const bar = document.getElementById(`tl-bar-${d.idx}`);
+  if (!bar) return;
+  const leftPct  = pct(d.start);
+  const widthPct = Math.max(1, pct(d.stop) - leftPct);
+  bar.style.left  = leftPct + '%';
+  bar.style.width = widthPct + '%';
+  bar.title = `${d.start}–${d.stop} år`;
+  const span_el = bar.querySelector('span');
+  if (span_el) span_el.textContent = d.isEngangs ? `${d.start}` : `${d.start}–${d.stop}`;
+}
+
+async function tlApplyChanges(d) {
+  if (!_chartData) return;
+  const status = document.getElementById('chart-status');
+  status.textContent = 'Genberegner...';
+
+  // Collect all current start ages from timeline tracks
+  const produktStartAldre = {};
+  document.querySelectorAll('.tl-track[data-key]').forEach(track => {
+    const key = track.dataset.key;
+    if (!key) return;
+    const start = parseInt(track.dataset.start);
+    if (!isNaN(start)) produktStartAldre[key] = start;
+  });
+
+  // Also update the form fields if they exist
+  document.querySelectorAll('[data-key]').forEach(inp => {
+    const key = inp.dataset.key;
+    if (key && produktStartAldre[key] !== undefined) {
+      inp.value = produktStartAldre[key];
+    }
+  });
+
+  await fetch('/api/parametre', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      produkt_start_aldre: produktStartAldre,
+    }),
+  });
+
+  // Re-fetch engine data and redraw
+  const res = await fetch(`/api/session/${sessionId}/engine`).catch(() => null);
+  if (res && res.ok) {
+    _chartData = await res.json();
+    renderChart(_chartData);
+    renderTimeline(_chartData);
+    status.textContent = '✓ Opdateret';
+    setTimeout(() => { status.textContent = ''; }, 2000);
+  }
+}
+
+async function refreshChartFromTimeline() {
+  if (!sessionId) return;
+  const status = document.getElementById('chart-status');
+  status.textContent = 'Genberegner...';
+
+  // Collect start ages from timeline
+  const produktStartAldre = {};
+  document.querySelectorAll('.tl-track[data-key]').forEach(track => {
+    const key = track.dataset.key;
+    if (!key) return;
+    const start = parseInt(track.dataset.start);
+    if (!isNaN(start)) produktStartAldre[key] = start;
+  });
+
+  if (Object.keys(produktStartAldre).length > 0) {
+    await fetch('/api/parametre', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, produkt_start_aldre: produktStartAldre }),
+    });
+  }
+
+  const res = await fetch(`/api/session/${sessionId}/engine`).catch(() => null);
+  if (res && res.ok) {
+    _chartData = await res.json();
+    renderChart(_chartData);
+    renderTimeline(_chartData);
+    status.textContent = '✓ Opdateret';
+    setTimeout(() => { status.textContent = ''; }, 2000);
+  }
+}
+
+function gemAnalyse() {
+  // Collect all assistant messages as text
+  const messages = document.querySelectorAll('.message.assistant .bubble');
+  if (!messages.length) return;
+  let text = 'PENSIONSANALYSE\n================\n\n';
+  messages.forEach(b => {
+    text += (b.dataset.raw || b.textContent) + '\n\n---\n\n';
+  });
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'pensionsanalyse.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
   init();
 </script>

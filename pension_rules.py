@@ -6,7 +6,7 @@ Opdateret til 2025/2026.
 PENSION_REGLER = {
     "satser_2025": {
         "ratepension_loft": 63_100,
-        "aldersopsparing_loft_naer_pension": 58_900,  # under 5 år til pensionsalder
+        "aldersopsparing_loft_naer_pension": 60_900,  # under 7 år til folkepensionsalder (PBL §16)
         "aldersopsparing_loft_normal": 9_100,
         "pal_skat_pct": 15.3,
         "amb_pct": 8.0,
@@ -33,7 +33,7 @@ PENSION_REGLER = {
             "beskrivelse": "Afløste kapitalpension. Ingen fradragsret, men afgiftsfri udbetaling (kun PAL). Loft: 9.100 kr/år (eller 58.900 kr hvis under 5 år til pension).",
             "skat_ved_udbetaling": "Afgiftsfri (F)",
             "loft_normal_2025": 9_100,
-            "loft_naer_pension_2025": 58_900,
+            "loft_naer_pension_2025": 60_900,
         },
         "kapitalpension": {
             "beskrivelse": "Lukket for nye indbetalinger siden 2013. Eksisterende depoter bevares. Udbetales som engangsbeløb med 40% afgift (kan nedsættes).",

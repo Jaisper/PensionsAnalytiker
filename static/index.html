@@ -956,15 +956,28 @@ Upload derefter PDF'en her øverst til højre.`,
       </tr>`;
     }
 
-    // Q9: Frie investeringsaktiver — vis altid (relevant for komplet formueanalyse)
+    // Q9: Fri formue — vis altid (beregnes separat med kapitalbeskatning)
     rows += `
       <tr>
-        <td class="ql"><strong>9.</strong> Frie investeringsaktiver
-          <div class="qdesc">Aktier, obligationer og øvrig opsparing uden for pensionsordninger — relevant for den samlede formueanalyse</div>
+        <td class="ql"><strong>9.</strong> Fri formue (aktier/obligationer/opsparing)
+          <div class="qdesc">Beløb investeret uden for pensionsordninger — beregnes separat med kapitalbeskatning</div>
         </td>
         <td class="qi">
           <input type="number" id="iq9" placeholder="0" min="0" step="50000">
           <span class="unit">kr.</span>
+        </td>
+      </tr>
+      <tr id="iq9b_row" style="display:none">
+        <td class="ql"><strong>9b.</strong> Kapitalbeskatning
+          <div class="qdesc">Effektiv skat på afkastet af fri formue</div>
+        </td>
+        <td class="qi">
+          <select id="iq9b">
+            <option value="33">Obligationer/opsparing (~33%)</option>
+            <option value="28" selected>Aktier, mix (effektiv ~28%)</option>
+            <option value="17">Lagerbeskat indeksfond (~17%)</option>
+            <option value="42">Aktier, høj indkomst (42%)</option>
+          </select>
         </td>
       </tr>`;
 
@@ -988,6 +1001,11 @@ Upload derefter PDF'en her øverst til højre.`,
     document.getElementById('parametre-panel-body').style.display = '';
     document.getElementById('parametre-panel-toggle').textContent = '▼ Skjul';
     setTimeout(() => document.getElementById('iq1')?.focus(), 80);
+    // Q9b: vis kapitalbeskatning-valg når fri formue > 0
+    document.getElementById('iq9')?.addEventListener('input', function() {
+      const row = document.getElementById('iq9b_row');
+      if (row) row.style.display = parseFloat(this.value) > 0 ? '' : 'none';
+    });
     return null;
   }
 
@@ -1218,8 +1236,9 @@ Upload derefter PDF'en her øverst til højre.`,
     }
 
     const frieMidler = parseFloat(v('iq9'));
+    const frieSkat   = parseFloat(document.getElementById('iq9b')?.value || '28');
     if (frieMidler > 0) {
-      parts.push(`9. Frie investeringsaktiver: ${Math.round(frieMidler).toLocaleString('da-DK')} kr.`);
+      parts.push(`9. Fri formue: ${Math.round(frieMidler).toLocaleString('da-DK')} kr. (kapitalbeskatning: ${frieSkat}%)`);
     }
 
     const msg = 'Mine svar:\n' + parts.join('\n');
@@ -1300,6 +1319,8 @@ Upload derefter PDF'en her øverst til højre.`,
         inflation_pct:        inflationVal,
         kirkeskat_pct:        kirkeskatPct,
         produkt_start_aldre:  Object.keys(produktStartAldre).length ? produktStartAldre : undefined,
+        fri_formue:                  frieMidler > 0 ? frieMidler : undefined,
+        fri_formue_kapital_skat_pct: frieMidler > 0 ? frieSkat   : undefined,
       }),
     });
 
@@ -1752,6 +1773,43 @@ function renderChart(data) {
     });
   }
 
+  // Fri formue linje (separat — kapitalindkomstskat)
+  const ff = data.fri_formue_analyse;
+  if (ff && ff.mdr_netto > 0) {
+    const pensStart = data.pensionsalder;
+    const ffEnd = pensStart + ff.udbetaling_aar;
+    datasets.push({
+      type: 'line',
+      label: `Fri formue (${ff.mdr_netto.toLocaleString('da-DK')} kr/mdr)`,
+      data: tabel.map(r => (r.alder >= pensStart && r.alder < ffEnd) ? ff.mdr_netto : null),
+      borderColor: '#0f766e',
+      backgroundColor: 'transparent',
+      borderWidth: 2.5,
+      borderDash: [8, 4],
+      pointRadius: 0,
+      fill: false,
+      stack: undefined,
+      order: -2,
+    });
+    // Kumuleret pension + fri formue total
+    datasets.push({
+      type: 'line',
+      label: 'Total inkl. fri formue',
+      data: tabel.map(r => {
+        if (r.alder < pensStart || r.alder >= ffEnd) return null;
+        return (r.total_netto_mdr || 0) + ff.mdr_netto;
+      }),
+      borderColor: '#1e293b',
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
+      borderDash: [3, 3],
+      pointRadius: 0,
+      fill: false,
+      stack: undefined,
+      order: -3,
+    });
+  }
+
   const ctx = document.getElementById('pension-chart').getContext('2d');
   if (_chartInstance) _chartInstance.destroy();
 
@@ -1871,6 +1929,23 @@ function renderTimeline(data) {
       </div>
     </div>
   </div>`;
+
+  // Fri formue strip
+  const ff2 = data.fri_formue_analyse;
+  if (ff2 && ff2.mdr_netto > 0) {
+    const ffStart = data.pensionsalder;
+    const ffStop  = ffStart + ff2.udbetaling_aar;
+    const ffLeftPct  = pct(ffStart);
+    const ffWidthPct = Math.max(1, pct(ffStop) - ffLeftPct);
+    html += `<div class="tl-row">
+      <div class="tl-row-label" style="color:#0f766e">Fri formue</div>
+      <div class="tl-track" style="pointer-events:none">
+        <div class="tl-bar" style="left:${ffLeftPct}%;width:${ffWidthPct}%;background:#0f766ecc">
+          <span style="padding:0 4px">${ff2.mdr_netto.toLocaleString('da-DK')} kr/mdr</span>
+        </div>
+      </div>
+    </div>`;
+  }
 
   html += `</div>`;  // tl-track-area
   container.innerHTML = html;

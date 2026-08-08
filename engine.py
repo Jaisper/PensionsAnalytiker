@@ -567,6 +567,49 @@ def generer_scenarier(profil: dict, parametre: dict, skat_params: Optional[SkatP
     return results
 
 
+def beregn_fri_formue_tabel(
+    fri_formue: float,
+    r_gross: float,
+    udbetaling_aar: int,
+    pensionsalder: int,
+    alder_nu: int,
+    kapital_skat_pct: float = 33.0,
+) -> dict:
+    """
+    Beregner fri formues vækst frem til pension og månedlig netto-udbetaling.
+    Bruger netto-afkast: r_net = r_gross * (1 − kapital_skat_pct/100).
+    Annuitetsudbetaling over udbetaling_aar år.
+    """
+    r_net = r_gross * (1 - kapital_skat_pct / 100)
+    n     = max(0, pensionsalder - alder_nu)
+    fv    = beregn_fv(fri_formue, 0.0, r_net, n)
+    mdr_netto = beregn_maanedlig_annuitet(fv, r_net, udbetaling_aar)
+
+    tabel = []
+    resterende = fv
+    for i in range(udbetaling_aar):
+        alder        = pensionsalder + i
+        renter       = resterende * r_net
+        udbetalt_aar = mdr_netto * 12
+        resterende   = resterende + renter - udbetalt_aar
+        tabel.append({
+            "alder":          alder,
+            "mdr_netto":      round(mdr_netto),
+            "formue_ultimo":  round(max(0.0, resterende)),
+        })
+
+    return {
+        "fri_formue_nu":   round(fri_formue),
+        "fv_ved_pension":  round(fv),
+        "r_gross_pct":     round(r_gross * 100, 2),
+        "r_net_pct":       round(r_net * 100, 2),
+        "kapital_skat_pct": kapital_skat_pct,
+        "mdr_netto":       round(mdr_netto),
+        "udbetaling_aar":  udbetaling_aar,
+        "tabel":           tabel,
+    }
+
+
 # ── Indbetalingsfordeling ─────────────────────────────────────────────────────
 
 _PRODUKTTYPE_SORT = [("rate", 0), ("livsvarig", 1), ("livrente", 1), ("aldersopsparing", 2)]

@@ -32,7 +32,7 @@ from pdf_parser import parse_pensionsinfo_pdf, format_profil_til_tekst
 from pension_rules import PENSION_REGLER
 from engine import (generer_udbetalingstabel, format_engine_til_llm, SkatParametre,
                      fordel_pmt_default, format_fordeling_til_llm, generer_scenarier,
-                     analyser_forsikring)
+                     analyser_forsikring, beregn_fri_formue_tabel)
 
 app = FastAPI(title="PensionsAnalytiker")
 
@@ -258,6 +258,14 @@ Hvis inflation er oplyst: vis Real/mdr-kolonnen (2025-købekraft) efter Netto/md
 
 Vis ALTID denne linje direkte efter Tabel 1 og Tabel 3: *Beregnet af deterministisk engine — konsultér en certificeret pensionsrådgiver for konkrete beslutninger.* Forklar at Base-scenariet (brugerens valgte afkast) svarer til Tabel 1–3, og at pesimistisk/optimistisk er afkast ±2%.
 
+## FRI FORMUE — VEJLEDNING
+Når FRI FORMUE ANALYSE er tilgængelig i konteksten:
+- Vis fri formue som SEPARAT fra pension — forskellig skattstruktur (kapitalindkomstskat, ikke S-indkomst)
+- Nævn at fri formue IKKE modregnes i pensionstillaeg (modsat S-indkomst fra pension)
+- Sammenlign: fri formue månedlig netto vs. pension månedlig netto
+- Fri formue er fleksibel (kan hæves når som helst) men giver ingen fradragsret
+- Kombination: pension + fri formue = samlet månedlig rådighedsbeløb
+
 ## FORSIKRINGSANALYSE — VEJLEDNING
 Når FORSIKRINGSANALYSE-blokken er tilgængelig i konteksten:
 - Vis altid forsikringsstatus KORT i den komplette analyse (1-3 linjer)
@@ -289,6 +297,8 @@ def _engine_cache_key(session: dict) -> str:
         "inflation_pct":      params.get("inflation_pct"),
         "produkt_start_aldre": json.dumps(params.get("produkt_start_aldre", {}), sort_keys=True),
         "loenvaekst_pct":     params.get("loenvaekst_pct"),
+        "fri_formue":         params.get("fri_formue"),
+        "fri_formue_skat":    params.get("fri_formue_kapital_skat_pct"),
         "profil_id":          id(profil),
     }
     return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
@@ -365,6 +375,20 @@ def _kør_engine(session_id: str) -> str:
         )
         result = generer_udbetalingstabel(profil_kopi, params, skat)
         result["scenarier"] = generer_scenarier(copy.deepcopy(profil_kopi), params, skat)
+        fri_formue = params.get("fri_formue")
+        if fri_formue and fri_formue > 0:
+            alder_nu = int((session.get("profil") or {}).get("person", {}).get("alder") or 0)
+            skat_pct = float(params.get("fri_formue_kapital_skat_pct") or 33.0)
+            result["fri_formue_analyse"] = beregn_fri_formue_tabel(
+                fri_formue=float(fri_formue),
+                r_gross=float(params.get("afkast_pct", 4.0)) / 100,
+                udbetaling_aar=int(params.get("udbetaling_aar", 30)),
+                pensionsalder=int(params["pensionsalder"]),
+                alder_nu=alder_nu,
+                kapital_skat_pct=skat_pct,
+            )
+        else:
+            result["fri_formue_analyse"] = None
         session["engine_output"] = result
         result_text = format_engine_til_llm(result)
         session["_engine_cache_key"]  = cache_key
@@ -430,9 +454,26 @@ def _get_dynamic_context(session_id: str) -> str:
             "*(Ingen multi-produkt firmapension fundet — Spørgsmål 6 ikke relevant)*"
 
     forsikring_blok = (f"## FORSIKRINGSANALYSE\n{forsikring_tekst}\n\n" if forsikring_tekst else "")
+
+    fri_formue_blok = ""
+    ff = (session.get("engine_output") or {}).get("fri_formue_analyse")
+    if ff:
+        fri_formue_blok = (
+            f"## FRI FORMUE ANALYSE\n"
+            f"Fri formue nu: {ff['fri_formue_nu']:,.0f} kr. | "
+            f"Vækst til pension: {ff['fv_ved_pension']:,.0f} kr.\n"
+            f"Brutto afkast: {ff['r_gross_pct']:.1f}% | Kapitalbeskatning: {ff['kapital_skat_pct']:.0f}% | "
+            f"Netto afkast: {ff['r_net_pct']:.1f}%\n"
+            f"Månedlig netto-udbetaling (annuitet over {ff['udbetaling_aar']} år): "
+            f"{ff['mdr_netto']:,.0f} kr/mdr\n"
+            f"(Fri formue beskattes som kapitalindkomst — ikke S-indkomst. "
+            f"Tæller IKKE med i topskat-grundlag for pension.)\n\n"
+        ).replace(",", ".")
+
     return (
         f"## TIDLIGSTE PENSIONSALDER\n{tidligste} år\n\n"
         + forsikring_blok
+        + fri_formue_blok
         + f"## SPM6_FORDELING\n{spm6_fordeling}\n\n"
         + f"## BEREGNEDE PARAMETRE\n{parametre_tekst}\n\n"
         + f"## BEREGNET PENSIONSANALYSE\n{engine_tekst}\n\n"
@@ -860,6 +901,8 @@ class Parametre(BaseModel):
     kirkeskat_pct: float | None = None
     produkt_start_aldre: dict | None = None
     loenvaekst_pct: float | None = None
+    fri_formue: float | None = None
+    fri_formue_kapital_skat_pct: float | None = None
 
 
 @app.post("/api/parametre")
@@ -878,6 +921,8 @@ async def gem_parametre(req: Parametre):
     if req.kirkeskat_pct is not None:        p["kirkeskat_pct"] = req.kirkeskat_pct
     if req.produkt_start_aldre is not None:  p["produkt_start_aldre"] = req.produkt_start_aldre
     if req.loenvaekst_pct is not None:        p["loenvaekst_pct"] = req.loenvaekst_pct
+    if req.fri_formue is not None:                    p["fri_formue"] = req.fri_formue
+    if req.fri_formue_kapital_skat_pct is not None:   p["fri_formue_kapital_skat_pct"] = req.fri_formue_kapital_skat_pct
 
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")
@@ -924,6 +969,7 @@ async def get_engine_data(session_id: str):
         "parametre": result["parametre"],
         "jaevn_netto_mdr": result.get("jaevn_netto_mdr", 0),
         "produkt_start_aldre": params.get("produkt_start_aldre", {}),
+        "fri_formue_analyse": result.get("fri_formue_analyse"),
     })
 
 

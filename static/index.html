@@ -718,11 +718,18 @@ Upload derefter PDF'en her øverst til højre.`,
         `<em style="color:#c44">Formular-fejl: ${formErr.message}</em>`;
     }
 
-    // Guide-besked i chat der peger på formularen
+    // Guide-besked i chat med diagnostik
     if (formOk) {
+      const panel   = document.getElementById('parametre-panel');
+      const pBody   = document.getElementById('parametre-panel-body');
+      const cs      = panel ? window.getComputedStyle(panel) : null;
+      const diagInfo = panel
+        ? `display:${cs.display} vis:${cs.visibility} h:${panel.offsetHeight}px y:${panel.getBoundingClientRect().top.toFixed(0)}`
+        : 'panel=NULL';
       const guideEl = addMessage('assistant', '');
       guideEl.querySelector('.bubble').innerHTML =
-        '<p>&#x261D; Udfyld beregningsparametrene i panelet ovenfor og klik <strong>Start analyse</strong>.</p>';
+        `<p>&#x261D; Udfyld beregningsparametrene i panelet ovenfor og klik <strong>Start analyse</strong>.</p>` +
+        `<p style="font-size:0.72rem;color:#888">[diag: ${diagInfo}]</p>`;
     }
 
     // 3. Injicer ét gyldigt user→assistant-par i AI-historik så API-krav om

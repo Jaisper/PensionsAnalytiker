@@ -1025,8 +1025,8 @@ Upload derefter PDF'en her øverst til højre.`,
       <button class="iform-submit" id="iform-submit-btn" onclick="submitInterviewForm()">Start analyse &#x2192;</button>
     </div>`;
     const panel = document.getElementById('parametre-panel');
-    panel.style.display = '';
-    document.getElementById('parametre-panel-body').style.display = '';
+    panel.style.display = 'block';
+    document.getElementById('parametre-panel-body').style.display = 'block';
     document.getElementById('parametre-panel-toggle').textContent = '▼ Skjul';
     setTimeout(() => document.getElementById('iq1')?.focus(), 80);
     // Q9b: vis kapitalbeskatning-valg når fri formue > 0
@@ -1113,7 +1113,7 @@ Upload derefter PDF'en her øverst til højre.`,
   let _parametrePanelOpen = true;
   function toggleParametrePanel() {
     _parametrePanelOpen = !_parametrePanelOpen;
-    document.getElementById('parametre-panel-body').style.display = _parametrePanelOpen ? '' : 'none';
+    document.getElementById('parametre-panel-body').style.display = _parametrePanelOpen ? 'block' : 'none';
     document.getElementById('parametre-panel-toggle').textContent = _parametrePanelOpen ? '\u25BC Skjul' : '\u25B6 Vis';
   }
 

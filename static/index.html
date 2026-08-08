@@ -728,24 +728,29 @@ Upload derefter PDF'en her øverst til højre.`,
         </td>
       </tr>`;
 
-    // Per-produkt start-aldre: loebende produkter (ikke kapital/aldersopsparing/ATP/FP)
-    const _loebendeKeys = computeProductKeys(profil);
-    if (_loebendeKeys.length > 0) {
+    // Per-produkt start-aldre: ALLE produkter inkl. kapital/aldersopsparing
+    const _alleKeys = computeProductKeys(profil);
+    if (_alleKeys.length > 0) {
       const defaultAlder = Math.max(tidligst, 62);
-      const startRows = _loebendeKeys.map(({key, selskab, ptype}, idx) => `
-        <tr style="border:none">
+      const startRows = _alleKeys.map(({key, selskab, ptype, isEngangs}, idx) => {
+        // Kapital/aldersopsparing: brug profil-info om tidligste udbetaling hvis tilgængeligt
+        const hint = isEngangs
+          ? `<span style="font-size:0.72rem;color:#9ab0c8;margin-left:4px">engangsbeløb</span>`
+          : '';
+        return `<tr style="border:none">
           <td style="padding:3px 2px;font-size:0.82rem;color:#4a6a80;padding-right:10px;min-width:180px">
-            ${selskab} – ${ptype}</td>
+            ${selskab} – ${ptype}${hint}</td>
           <td style="padding:3px 0;white-space:nowrap">
-            <input type="number" id="iq_start_${idx}" value="${defaultAlder}" min="55" max="80"
-              data-key="${escapeAttr(key)}" style="width:70px">
+            <input type="number" id="iq_start_${idx}" value="${defaultAlder}" min="55" max="85"
+              data-key="${escapeAttr(key)}" data-is-engangs="${isEngangs}" style="width:70px">
             <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">år</span>
           </td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('');
       rows += `
       <tr>
-        <td class="ql"><strong>4b.</strong> Startaldere per produkt
-          <div class="qdesc">Du kan udsætte opstart af individuelle ordninger (fx vente med livsvarig til folkepensionsalder)</div>
+        <td class="ql"><strong>4b.</strong> Udbetaling starter (per produkt)
+          <div class="qdesc">Sæt individuelle aldersgrænser per ordning — ældre kapitalpensioner kan fx udbetales fra 60 år mens du stadig arbejder</div>
         </td>
         <td class="qi">
           <table style="border-collapse:collapse">${startRows}</table>
@@ -898,8 +903,8 @@ Upload derefter PDF'en her øverst til højre.`,
     return null;
   }
 
-  // Compute engine product keys matching engine.py logic
-  function computeProductKeys(profil) {
+  // Compute engine product keys matching engine.py logic (alle produkttyper inkl. kapital/aldersopsparing)
+  function computeProductKeys(profil, { loebende = true, engangs = true } = {}) {
     const keyCounter = {};
     const result = [];
     for (const prod of (profil?.pensionsprodukter || [])) {
@@ -908,11 +913,13 @@ Upload derefter PDF'en her øverst til højre.`,
       const ptLow   = ptype.toLowerCase();
       const selLow  = selskab.toLowerCase();
       if (selLow.includes('atp') || ptLow.includes('atp') || ptLow.includes('folkepension')) continue;
-      if (ptLow.includes('kapital') || ptLow.includes('aldersopsparing')) continue;
+      const isEngangs = ptLow.includes('kapital') || ptLow.includes('aldersopsparing');
+      if (isEngangs && !engangs)  continue;
+      if (!isEngangs && !loebende) continue;
       const baseKey = `${selskab}_${ptype}`;
       keyCounter[baseKey] = (keyCounter[baseKey] || 0) + 1;
       const key = keyCounter[baseKey] === 1 ? baseKey : `${baseKey}_${keyCounter[baseKey]}`;
-      result.push({ key, selskab, ptype, prod });
+      result.push({ key, selskab, ptype, prod, isEngangs });
     }
     return result;
   }
@@ -931,10 +938,16 @@ Upload derefter PDF'en her øverst til højre.`,
     const pa = parseInt(document.getElementById('iq3')?.value || '0');
     if (!pa) return;
     document.querySelectorAll('[id^="iq_start_"]').forEach(inp => {
-      // Only auto-fill if value equals previous pensionsalder or is default
       const cur = parseInt(inp.value || '0');
-      if (!cur || cur < pa) inp.value = pa;
-      else if (cur === inp._lastPa) inp.value = pa;
+      // Auto-fill loebende produkter til pensionsalder hvis de ikke er sat lavere bevidst.
+      // Engangs-produkter (kapital/aldersopsparing) auto-fills KUN hvis de er > pensionsalder.
+      const isEngangs = inp.dataset.isEngangs === 'true';
+      if (!cur || cur === (inp._lastPa || pa)) {
+        inp.value = pa;
+      } else if (!isEngangs && cur < pa) {
+        // Loebende kan ikke starte før pensionsalder (uden explicit ønske)
+        // — behold brugerens valg
+      }
       inp._lastPa = pa;
     });
   }
@@ -1068,7 +1081,7 @@ Upload derefter PDF'en her øverst til højre.`,
       }
     }
 
-    // Per-produkt start-aldre
+    // Per-produkt start-aldre (alle produkter)
     const loebendeKeys = computeProductKeys(profil);
     const produktStartAldre = {};
     if (loebendeKeys.length > 0) {

@@ -314,15 +314,11 @@ def generer_udbetalingstabel(
         _key_tæller[base_key] += 1
         key = base_key if _key_tæller[base_key] == 1 else f"{base_key}_{_key_tæller[base_key]}"
 
-        # Per-produkt start-alder (loebende produkter kan udskydes)
-        if "kapital" in ptype_l or "aldersopsparing" in ptype_l:
-            # Engangsbeloeb starter altid ved pensionsalder
-            produkt_start_alder = pensionsalder
-        else:
-            produkt_start_alder = max(
-                pensionsalder,
-                int(produkt_start_aldre_param.get(key, pensionsalder))
-            )
+        # Per-produkt start-alder — alle produkttyper kan have individuel start-alder.
+        # Eksplicit override i produkt_start_aldre_param bruges direkte (ingen gulv).
+        # Uden override: default = pensionsalder.
+        override = produkt_start_aldre_param.get(key)
+        produkt_start_alder = int(override) if override is not None else pensionsalder
 
         n_i = max(0, produkt_start_alder - alder_nu)
         fv  = beregn_fv(pv, pmt, r, n_i)
@@ -354,6 +350,9 @@ def generer_udbetalingstabel(
     engangsbeloeb = [p for p in produkter if p["udb_type"] == "engangsbeloeb"]
     loebende      = [p for p in produkter if p["udb_type"] != "engangsbeloeb"]
 
+    # Tabellen starter ved det tidligste produkts start-alder (kan være før pensionsalder)
+    tabel_start = min([pensionsalder] + [p["start_alder"] for p in produkter]) if produkter else pensionsalder
+
     atp_prod = next(
         (p for p in pensionsprodukter if "atp" in (p.get("selskab") or "").lower()), None
     )
@@ -371,7 +370,7 @@ def generer_udbetalingstabel(
 
     # ── År-for-år tabel ───────────────────────────────────────────────────────
     tabel = []
-    for alder in range(pensionsalder, pensionsalder + udbetaling_aar + 1):
+    for alder in range(tabel_start, pensionsalder + udbetaling_aar + 1):
         har_fp = alder >= fp_alder
 
         # S-indkomst dette år — kun aktive produkter
@@ -457,19 +456,23 @@ def generer_udbetalingstabel(
             "over_topskat":    over_topskat,
         })
 
-    # ── Jævn fordeling ───────────────────────────────────────────────────────
+    # ── Jævn fordeling — kun over selve pensionsårene ────────────────────────
+    # Pre-pensionsår (kapital/aldersopsparing udbetalt mens man stadig arbejder)
+    # indgår IKKE i den jævne fordeling — bruger modtager løn i disse år.
+    # Engangsprovenuet fra pre-pensionsprodukter lægges til buffer fra dag 1.
     BUFFER_SKAT = 0.40
     r_buffer = r * (1 - BUFFER_SKAT)
 
-    n_aar = max(1, len(tabel))
-    pv_normal      = sum(row["total_netto_aar"] / (1 + r_buffer) ** (i + 1)
-                         for i, row in enumerate(tabel))
+    pension_rækker = [row for row in tabel if row["alder"] >= pensionsalder]
+    n_aar = max(1, len(pension_rækker))
+    pv_normal       = sum(row["total_netto_aar"] / (1 + r_buffer) ** (i + 1)
+                          for i, row in enumerate(pension_rækker))
     annuitet_faktor = sum(1 / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
     jaevn_netto_mdr = (engangs_netto_total + pv_normal) / annuitet_faktor / 12
 
     jaevn_tabel = []
     buffer = engangs_netto_total
-    for row in tabel:
+    for row in pension_rækker:
         buffer      *= (1 + r_buffer)
         normal_mdr   = row["total_netto_mdr"]
         fra_buffer   = jaevn_netto_mdr - normal_mdr
@@ -490,11 +493,13 @@ def generer_udbetalingstabel(
         "jaevn_netto_mdr": round(jaevn_netto_mdr),
         "fp_alder":        fp_alder,
         "pensionsalder":   pensionsalder,
+        "tabel_start":     tabel_start,
         "advarsler":       advarsler,
         "parametre": {
             "r":               r,
             "n":               n,
             "pensionsalder":   pensionsalder,
+            "tabel_start":     tabel_start,
             "udbetaling_aar":  udbetaling_aar,
             "fp_alder":        fp_alder,
             "kommuneskat_pct": skat_params.kommuneskat * 100,
@@ -849,19 +854,23 @@ def format_engine_til_llm(result: dict) -> str:
     header = f"| Alder | {header_cols} | Brutto/år | Netto/mdr{real_col} | Note |"
     sep    = "|---|" + "|---|" * n_prod_cols + "---|---" + ("|---" if has_real else "") + "|---|"
 
-    fp_idx  = next((i for i, r in enumerate(tabel) if r["alder"] >= fp_alder), None)
-    vis_idx = set(range(min(5, len(tabel))))
-    vis_idx |= set(range(max(0, len(tabel) - 3), len(tabel)))
+    fp_idx      = next((i for i, r in enumerate(tabel) if r["alder"] >= fp_alder), None)
+    pension_idx = next((i for i, r in enumerate(tabel) if r["alder"] >= p["pensionsalder"]), 0)
+    vis_idx = set(range(min(3, len(tabel))))                          # første rækker (pre-pension)
+    vis_idx |= {max(0, pension_idx - 1), pension_idx}                # pensionsstart-overgang
+    vis_idx |= set(range(max(0, len(tabel) - 3), len(tabel)))        # slutrækker
     if fp_idx is not None:
         vis_idx |= {max(0, fp_idx - 1), fp_idx, min(fp_idx + 1, len(tabel) - 1)}
-    start_alder = tabel[0]["alder"] if tabel else 0
-    for pr in loebende:
+    tabel_start_alder = tabel[0]["alder"] if tabel else 0
+    # Alle produkter — inkl. engangsprodukter der starter før pensionsalder
+    for pr in (loebende + engang):
         if pr.get("start_alder", p["pensionsalder"]) != p["pensionsalder"]:
-            stop_i = pr["start_alder"] - start_alder
-            vis_idx |= {max(0, stop_i - 1), min(stop_i, len(tabel) - 1)}
-        if pr["stopper_ved_alder"] is not None:
-            stop_i = pr["stopper_ved_alder"] - start_alder
-            vis_idx |= {max(0, stop_i - 1), min(stop_i, len(tabel) - 1)}
+            idx_i = pr["start_alder"] - tabel_start_alder
+            vis_idx |= {max(0, idx_i - 1), min(idx_i, len(tabel) - 1)}
+        stopper = pr.get("stopper_ved_alder")
+        if stopper is not None:
+            idx_s = stopper - tabel_start_alder
+            vis_idx |= {max(0, idx_s - 1), min(idx_s, len(tabel) - 1)}
     vis_idx = sorted(vis_idx)
 
     L += [
@@ -894,6 +903,8 @@ def format_engine_til_llm(result: dict) -> str:
         brutto_aar += fp_b_aar + atp_b_aar
 
         note_parts = []
+        if row["alder"] < p["pensionsalder"]:
+            note_parts.append("Arbejder stadig")
         engangs_dette = row.get("engangs_netto", 0.0)
         if engangs_dette:
             note_parts.append(f"Engangsbeløb: +{engangs_dette:,.0f} kr.".replace(",", "."))

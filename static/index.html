@@ -1977,7 +1977,7 @@ function renderTimeline(data) {
              title="${isEngangs ? `Træk for at rykke · ${barLabel} år` : `Venstre kant: juster start · Højre kant: juster slut · Midten: flyt · ${barLabel} år`}"
              onmousedown="tlBarDown(event,${idx})"
              ontouchstart="tlBarTouch(event,${idx})">
-          <span style="padding:0 18px;pointer-events:none;overflow:hidden">${barLabel}</span>
+          <span class="tl-bar-label" style="padding:0 18px;pointer-events:none;overflow:hidden">${barLabel}</span>
         </div>
       </div>
     </div>`;

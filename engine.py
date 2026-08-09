@@ -479,12 +479,11 @@ def generer_udbetalingstabel(
             "over_topskat":    over_topskat,
         })
 
-    # ── Jævn fordeling — kun over selve pensionsårene ────────────────────────
-    # Pre-pensionsår (kapital/aldersopsparing udbetalt mens man stadig arbejder)
-    # indgår IKKE i den jævne fordeling — bruger modtager løn i disse år.
-    # Engangsprovenuet fra pre-pensionsprodukter lægges til buffer fra dag 1.
-    BUFFER_SKAT = 0.40
-    r_buffer = r * (1 - BUFFER_SKAT)
+    # ── Engangsbeløb som frie midler — buffer over hele pensionsperioden ─────────
+    # Provenuet placeres som fri kapital og forrentes med afkast minus kapitalafgift.
+    # Default: 27% skat på afkast (aktiedepot under progressionsgrænsen).
+    buffer_skat_pct = float(parametre.get("engangs_buffer_skat_pct", 27.0)) / 100
+    r_buffer = r * (1 - buffer_skat_pct)
 
     pension_rækker = [row for row in tabel if row["alder"] >= pensionsalder]
     n_aar = max(1, len(pension_rækker))
@@ -493,26 +492,20 @@ def generer_udbetalingstabel(
     annuitet_faktor = sum(1 / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
     jaevn_netto_mdr = (engangs_netto_total + pv_normal) / annuitet_faktor / 12
 
-    engangs_buffer_aar = parametre.get("engangs_buffer_aar")
-
     jaevn_tabel = []
     buffer = engangs_netto_total
-    for i, row in enumerate(pension_rækker):
-        buffer      *= (1 + r_buffer)
-        normal_mdr   = row["total_netto_mdr"]
-        fra_buffer   = jaevn_netto_mdr - normal_mdr
-        buffer      -= fra_buffer * 12
-        # Zero out buffer contribution after engangs_buffer_aar years
-        if engangs_buffer_aar is not None and engangs_netto_total > 0 and i >= engangs_buffer_aar:
-            fra_buffer_vis = 0
-        else:
-            fra_buffer_vis = round(max(0, fra_buffer))
+    for row in pension_rækker:
+        buffer     *= (1 + r_buffer)
+        normal_mdr  = row["total_netto_mdr"]
+        diff_mdr    = jaevn_netto_mdr - normal_mdr   # + → buffer supplerer, − → overskud til buffer
+        buffer     -= diff_mdr * 12
         jaevn_tabel.append({
             "alder":       row["alder"],
             "normal_mdr":  round(normal_mdr),
             "jaevn_mdr":   round(jaevn_netto_mdr),
-            "fra_buffer":  fra_buffer_vis,
-            "buffer_rest": round(max(0.0, buffer)),
+            "fra_buffer":  round(max(0.0,  diff_mdr)),   # beløb trukket fra buffer (supplement)
+            "til_buffer":  round(max(0.0, -diff_mdr)),   # beløb lagt til buffer (overskud)
+            "buffer_rest": round(buffer),
         })
 
     return {
@@ -526,18 +519,18 @@ def generer_udbetalingstabel(
         "tabel_start":     tabel_start,
         "advarsler":       advarsler,
         "parametre": {
-            "r":               r,
-            "n":               n,
-            "pensionsalder":   pensionsalder,
-            "tabel_start":     tabel_start,
-            "udbetaling_aar":  udbetaling_aar,
-            "fp_alder":        fp_alder,
-            "kommuneskat_pct": skat_params.kommuneskat * 100,
-            "kirkeskat_pct":   skat_params.kirkeskat * 100,
-            "enlig":           skat_params.enlig,
-            "inflation_pct":   inflation_pct * 100,
-            "loenvaekst_pct":  loenvaekst_pct * 100,
-            "engangs_buffer_aar": engangs_buffer_aar,
+            "r":                     r,
+            "n":                     n,
+            "pensionsalder":         pensionsalder,
+            "tabel_start":           tabel_start,
+            "udbetaling_aar":        udbetaling_aar,
+            "fp_alder":              fp_alder,
+            "kommuneskat_pct":       skat_params.kommuneskat * 100,
+            "kirkeskat_pct":         skat_params.kirkeskat * 100,
+            "enlig":                 skat_params.enlig,
+            "inflation_pct":         inflation_pct * 100,
+            "loenvaekst_pct":        loenvaekst_pct * 100,
+            "engangs_buffer_skat_pct": buffer_skat_pct * 100,
         },
     }
 

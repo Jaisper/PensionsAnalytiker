@@ -1790,20 +1790,34 @@ function renderChart(data) {
     });
   });
 
-  // Engangsbeløb buffer-bidrag (kr/mdr fra engangsprovenu der udjævner pensionen)
+  // Engangsbeløb som frie midler — buffer supplement og overskud per år
   const jaevnTabel = data.jaevn_tabel || [];
-  if (jaevnTabel.some(r => r.fra_buffer > 0)) {
+  if (jaevnTabel.some(r => (r.fra_buffer || 0) > 0 || (r.til_buffer || 0) > 0)) {
     datasets.push({
-      label: 'Engangsbeløb (buffer)',
+      label: 'Frie midler (supplement)',
       data: tabel.map(row => {
         const jr = jaevnTabel.find(r => r.alder === row.alder);
-        return jr ? Math.max(0, jr.fra_buffer) : 0;
+        return jr ? (jr.fra_buffer || 0) : 0;
       }),
       backgroundColor: '#a78bfacc',
       borderColor: '#a78bfa',
       borderWidth: 1,
       stack: 'a',
     });
+    // Vis overskudsår negativt (under x-aks) — pensionsindkomst overstiger jævn-niveau
+    if (jaevnTabel.some(r => (r.til_buffer || 0) > 0)) {
+      datasets.push({
+        label: 'Til buffer (overskud)',
+        data: tabel.map(row => {
+          const jr = jaevnTabel.find(r => r.alder === row.alder);
+          return jr ? -(jr.til_buffer || 0) : 0;
+        }),
+        backgroundColor: '#34d39966',
+        borderColor: '#34d399',
+        borderWidth: 1,
+        stack: 'b',  // separat stack så den ikke adderes med pension-søjlerne
+      });
+    }
   }
 
   // Pensionstillaeg
@@ -1967,7 +1981,6 @@ function renderTimeline(data) {
   <div class="tl-track-area">
     <div style="position:relative;height:16px;margin-bottom:2px;margin-left:168px">${scaleMarks.join('')}</div>`;
 
-  const bufferAar = data.engangs_buffer_aar ?? data.parametre?.udbetaling_aar ?? 20;
   const allProds = [...produkter, ...engangs];
   allProds.forEach((prod, idx) => {
     const isEngangs = prod.udb_type === 'engangsbeloeb';
@@ -1975,17 +1988,18 @@ function renderTimeline(data) {
       ? CHART_COLORS[(produkter.length + engangs.indexOf(prod)) % CHART_COLORS.length]
       : CHART_COLORS[idx % CHART_COLORS.length];
     const startAge = prod.start_alder;
-    const stopAge  = isEngangs ? startAge + bufferAar : (prod.stopper_ved_alder ?? ageMax);
+    // Engangsbeløb: smal markør (2 år bredde) der kun kan flyttes (ingen stræk)
+    const stopAge  = isEngangs ? startAge + 2 : (prod.stopper_ved_alder ?? ageMax);
     const label    = `${prod.selskab} – ${prod.produkttype}`.slice(0, 28);
 
     const leftPct  = pct(startAge);
     const widthPct = Math.max(1, pct(stopAge) - leftPct);
-    const barLabel = isEngangs ? `${startAge}–${stopAge}` : `${startAge}–${stopAge}`;
+    const barLabel = isEngangs ? `${startAge} (frie midler)` : `${startAge}–${stopAge}`;
 
-    const minDragAge = Math.max(60, fpAlder - 5);  // PALFP: tidligst 5 år før folkepension, gulv 60
+    const minDragAge = Math.max(60, fpAlder - 5);  // PALFP: 5 år før folkepension, gulv 60
     const barTitle = isEngangs
-      ? `Midten: flyt udbetaling · Højre kant: juster bufferperiode · ${barLabel} år`
-      : `Venstre kant: juster start · Højre kant: juster slut · Midten: flyt · ${barLabel} år`;
+      ? `Træk for at rykke udbetalingstidspunkt · buffer løber hele pensionsperioden · ${startAge} år`
+      : `Venstre kant: juster start · Højre kant: juster slut · Midten: flyt · ${startAge}–${stopAge} år`;
 
     html += `<div class="tl-row" data-key="${escapeAttr(prod.key)}" data-idx="${idx}">
       <div class="tl-row-label" title="${label}">${label}</div>
@@ -1997,7 +2011,7 @@ function renderTimeline(data) {
         <div class="tl-bar" id="tl-bar-${idx}" data-idx="${idx}"
              style="left:${leftPct}%;width:${widthPct}%;background:${color}"
              title="${barTitle}">
-          <span class="tl-bar-label" style="padding:0 18px;pointer-events:none;overflow:hidden">${barLabel}</span>
+          <span class="tl-bar-label" style="padding:0 4px;pointer-events:none;overflow:hidden;font-size:0.6rem">${startAge}</span>
         </div>
       </div>
     </div>`;
@@ -2033,17 +2047,27 @@ function renderTimeline(data) {
   html += `</div>`;  // tl-track-area
   container.innerHTML = html;
 
-  // Event delegation — single listener on container handles all bar mousedown/touchstart
-  container.onmousedown = (e) => {
+  // Event delegation — capture-phase listeners på container (overlever innerHTML-reset)
+  const _tlHandleDown = (e) => {
     const bar = e.target.closest('.tl-bar[data-idx]');
     if (!bar) return;
+    e.stopPropagation();
     tlBarDown(e, parseInt(bar.dataset.idx));
   };
-  container.ontouchstart = (e) => {
+  const _tlHandleTouch = (e) => {
     const bar = e.target.closest('.tl-bar[data-idx]');
     if (!bar) return;
     tlBarTouch(e, parseInt(bar.dataset.idx));
   };
+  // Fjern evt. gamle listeners inden re-binding
+  if (container._tlHandleDown) {
+    container.removeEventListener('mousedown',  container._tlHandleDown,  true);
+    container.removeEventListener('touchstart', container._tlHandleTouch, true);
+  }
+  container._tlHandleDown  = _tlHandleDown;
+  container._tlHandleTouch = _tlHandleTouch;
+  container.addEventListener('mousedown',  _tlHandleDown,  true);
+  container.addEventListener('touchstart', _tlHandleTouch, { capture: true, passive: false });
 }
 
 function tlBarDown(e, idx) {
@@ -2056,8 +2080,7 @@ function tlBarDown(e, idx) {
   const zone   = Math.min(24, rect.width * 0.22);
   let handleType;
   if (track.dataset.isEngangs === 'true') {
-    // Engangsbeløb: højre kant = juster bufferperiode, resten = flyt start
-    handleType = (xInBar > rect.width - zone) ? 'end' : 'move';
+    handleType = 'move';  // kun flyt — buffer løber automatisk hele perioden
   } else if (rect.width < 30) {
     handleType = 'move';
   } else if (xInBar < zone) {
@@ -2081,7 +2104,7 @@ function tlBarTouch(e, idx) {
   const zone   = Math.min(24, rect.width * 0.22);
   let handleType;
   if (track.dataset.isEngangs === 'true') {
-    handleType = (xInBar > rect.width - zone) ? 'end' : 'move';
+    handleType = 'move';
   } else if (rect.width < 30) {
     handleType = 'move';
   } else if (xInBar < zone) {
@@ -2193,16 +2216,10 @@ async function tlApplyChanges(d) {
     }
   });
 
-  // If user dragged end of an engangsbeloeb bar, update buffer years
-  const body = { session_id: sessionId, produkt_start_aldre: produktStartAldre };
-  if (d.isEngangs) {
-    body.engangs_buffer_aar = d.stop - d.start;
-  }
-
   await fetch('/api/parametre', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ session_id: sessionId, produkt_start_aldre: produktStartAldre }),
   });
 
   // Re-fetch engine data and redraw

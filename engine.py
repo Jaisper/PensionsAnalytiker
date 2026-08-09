@@ -485,19 +485,45 @@ def generer_udbetalingstabel(
     buffer_skat_pct = float(parametre.get("engangs_buffer_skat_pct", 27.0)) / 100
     r_buffer = r * (1 - buffer_skat_pct)
 
+    # Vækst af buffer i pre-pensionstid (fra tidligste engangsbeloeb til pensionsalder)
+    earliest_engangs = min((p["start_alder"] for p in engangsbeloeb), default=pensionsalder)
+    pre_pension_aar  = max(0, pensionsalder - earliest_engangs)
+    buffer_ved_pension = engangs_netto_total * (1 + r_buffer) ** pre_pension_aar
+
     pension_rækker = [row for row in tabel if row["alder"] >= pensionsalder]
     n_aar = max(1, len(pension_rækker))
     pv_normal       = sum(row["total_netto_aar"] / (1 + r_buffer) ** (i + 1)
                           for i, row in enumerate(pension_rækker))
     annuitet_faktor = sum(1 / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
-    jaevn_netto_mdr = (engangs_netto_total + pv_normal) / annuitet_faktor / 12
+    jaevn_netto_mdr = (buffer_ved_pension + pv_normal) / annuitet_faktor / 12
 
+    # Pre-pensionstabel: buffer vokser stille og roligt, ingen udbetaling
     jaevn_tabel = []
     buffer = engangs_netto_total
+    for row in [r for r in tabel if earliest_engangs <= r["alder"] < pensionsalder]:
+        buffer *= (1 + r_buffer)   # buffer vokser, ingen udbetaling endnu
+        alder = row["alder"]
+        years_from_now = max(0, alder - alder_nu) if alder_nu else 0
+        deflator = (1 + inflation_pct) ** years_from_now if inflation_pct > 0 else 1.0
+        jaevn_tabel.append({
+            "alder":              alder,
+            "fase":               "pre_pension",
+            "normal_mdr":         0,
+            "normal_mdr_real":    None,
+            "jaevn_mdr":          0,
+            "jaevn_mdr_real":     None,
+            "fra_buffer":         0,
+            "fra_buffer_real":    None,
+            "til_buffer":         0,
+            "buffer_afkast_mdr":  round(buffer * r_buffer / 12),   # månedligt afkast tilgængeligt
+            "buffer_rest":        round(buffer),
+            "buffer_rest_real":   round(buffer / deflator) if inflation_pct > 0 else None,
+        })
+
     for row in pension_rækker:
         buffer     *= (1 + r_buffer)
         normal_mdr  = row["total_netto_mdr"]
-        diff_mdr    = jaevn_netto_mdr - normal_mdr   # + → buffer supplerer, − → overskud til buffer
+        diff_mdr    = jaevn_netto_mdr - normal_mdr
         buffer     -= diff_mdr * 12
         alder = row["alder"]
         years_from_now = max(0, alder - alder_nu) if alder_nu else 0
@@ -505,16 +531,18 @@ def generer_udbetalingstabel(
         fra_buf = max(0.0,  diff_mdr)
         til_buf = max(0.0, -diff_mdr)
         jaevn_tabel.append({
-            "alder":           alder,
-            "normal_mdr":      round(normal_mdr),
-            "normal_mdr_real": round(normal_mdr / deflator) if inflation_pct > 0 else None,
-            "jaevn_mdr":       round(jaevn_netto_mdr),
-            "jaevn_mdr_real":  round(jaevn_netto_mdr / deflator) if inflation_pct > 0 else None,
-            "fra_buffer":      round(fra_buf),
-            "fra_buffer_real": round(fra_buf / deflator) if inflation_pct > 0 else None,
-            "til_buffer":      round(til_buf),
-            "buffer_rest":     round(buffer),
-            "buffer_rest_real": round(buffer / deflator) if inflation_pct > 0 else None,
+            "alder":              alder,
+            "fase":               "pension",
+            "normal_mdr":         round(normal_mdr),
+            "normal_mdr_real":    round(normal_mdr / deflator) if inflation_pct > 0 else None,
+            "jaevn_mdr":          round(jaevn_netto_mdr),
+            "jaevn_mdr_real":     round(jaevn_netto_mdr / deflator) if inflation_pct > 0 else None,
+            "fra_buffer":         round(fra_buf),
+            "fra_buffer_real":    round(fra_buf / deflator) if inflation_pct > 0 else None,
+            "til_buffer":         round(til_buf),
+            "buffer_afkast_mdr":  0,
+            "buffer_rest":        round(buffer),
+            "buffer_rest_real":   round(buffer / deflator) if inflation_pct > 0 else None,
         })
 
     return {
@@ -1126,12 +1154,13 @@ def format_engine_til_llm(result: dict) -> str:
         (f"Engangsbeløb netto ({engangs_total:,.0f} kr) bruges som frie midler/buffer. "
          f"Buffer forrentes med {r_buf_pct:.1f}% p.a. efter {buf_skat_pct:.0f}% kapitalafgift.").replace(",", ".") if engangs_total else "",
     ]
+    pension_jt = [row for row in jaevn_tabel if row.get("fase") == "pension"]
     if use_real:
         L += [
             "| Alder | Normal (nutidskr) | Jævn (nutidskr) | Fra buffer (nutidskr) | Buffer rest (nutidskr) |",
             "|---|---|---|---|---|",
         ]
-        for row in jaevn_tabel:
+        for row in pension_jt:
             L.append(
                 f"| {row['alder']} "
                 f"| {(row['normal_mdr_real'] or 0):,.0f} "
@@ -1144,7 +1173,7 @@ def format_engine_til_llm(result: dict) -> str:
             "| Alder | Normal netto/mdr | Jævn netto/mdr | Fra buffer/mdr | Buffer rest |",
             "|---|---|---|---|---|",
         ]
-        for row in jaevn_tabel:
+        for row in pension_jt:
             L.append(
                 f"| {row['alder']} "
                 f"| {row['normal_mdr']:,.0f} "

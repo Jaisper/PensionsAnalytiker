@@ -1793,22 +1793,26 @@ function renderChart(data) {
     });
   });
 
-  // Engangsbeløb som frie midler — buffer supplement og overskud per år
-  if (jaevnTabel.some(r => (r.fra_buffer || 0) > 0 || (r.til_buffer || 0) > 0)) {
-    const bufSupplKey  = useReal ? 'fra_buffer_real' : 'fra_buffer';
-    const bufOverskudKey = 'til_buffer';  // til_buffer har ingen real-variant (vises ikke i real-mode)
+  // Frie midler — pre-pension: månedligt bufferafkast; pension: supplement til jævn indkomst
+  const hasBuffer = jaevnTabel.some(r => (r.fra_buffer || 0) > 0 || (r.buffer_afkast_mdr || 0) > 0);
+  if (hasBuffer) {
+    const supplKey = useReal ? 'fra_buffer_real' : 'fra_buffer';
     datasets.push({
-      label: useReal ? `Frie midler/supplement (nutidskr)` : 'Frie midler (supplement)',
+      label: useReal ? 'Frie midler (nutidskr)' : 'Frie midler',
       data: tabel.map(row => {
         const jr = jaevnTabel.find(r => r.alder === row.alder);
-        return jr ? (jr[bufSupplKey] || 0) : 0;
+        if (!jr) return 0;
+        // Pre-pension: vis bufferens månedlige afkast; pension: vis supplement
+        return jr.fase === 'pre_pension'
+          ? (jr.buffer_afkast_mdr || 0)
+          : (jr[supplKey] || 0);
       }),
       backgroundColor: '#a78bfacc',
       borderColor: '#a78bfa',
       borderWidth: 1,
       stack: 'a',
     });
-    // Overskudsår (pension > jævn niveau) vises som grøn søjle under x-aksen
+    // Overskudsår (pension > jævn niveau) under x-aksen
     if (!useReal && jaevnTabel.some(r => (r.til_buffer || 0) > 0)) {
       datasets.push({
         label: 'Til buffer (overskud)',
@@ -2149,6 +2153,15 @@ function tlDragStart(e, idx, handleType) {
     key:       track.dataset.key,
   };
 
+  // Gem klik-offset så baren ikke hopper ved første klik
+  if (handleType === 'move') {
+    const initFrac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const initAge  = Math.round(_tlDrag.ageMin + initFrac * _tlDrag.span);
+    _tlDrag.clickOffset = initAge - _tlDrag.start;
+  } else {
+    _tlDrag.clickOffset = 0;
+  }
+
   const moveHandler = (ev) => {
     if (!_tlDrag) return;
     const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
@@ -2156,9 +2169,9 @@ function tlDragStart(e, idx, handleType) {
     const age  = Math.max(_tlDrag.ageMin, Math.min(_tlDrag.ageMax, Math.round(_tlDrag.ageMin + frac * _tlDrag.span)));
 
     if (_tlDrag.handleType === 'move') {
-      // Engangsbeløb: flyt hele baren — begge ender rykker samme antal år
       const dur = _tlDrag.stop - _tlDrag.start;
-      const newStart = Math.max(_tlDrag.minAge, Math.min(_tlDrag.ageMax - dur, age));
+      const rawStart = age - _tlDrag.clickOffset;   // kompenser for klik-position i baren
+      const newStart = Math.max(_tlDrag.minAge, Math.min(_tlDrag.ageMax - dur, rawStart));
       _tlDrag.start = newStart;
       _tlDrag.stop  = newStart + dur;
     } else if (_tlDrag.handleType === 'start') {

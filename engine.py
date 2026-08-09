@@ -386,10 +386,15 @@ def generer_udbetalingstabel(
     else:
         atp_mdr = ATP_MDR_STANDARD
 
-    engangs_netto_total = sum(
-        pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
-        for pr in engangsbeloeb
-    )
+    # Opdel engangsbeloeb: pre-pension (start <= pensionsalder) vs post-pension
+    pre_engangs  = [p for p in engangsbeloeb if p["start_alder"] <= pensionsalder]
+    post_engangs = [p for p in engangsbeloeb if p["start_alder"] >  pensionsalder]
+
+    def _engangs_netto(pr):
+        return pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
+
+    engangs_netto_total = sum(_engangs_netto(pr) for pr in engangsbeloeb)  # bruges stadig i tabel
+    pre_engangs_netto   = sum(_engangs_netto(pr) for pr in pre_engangs)
 
     # ── År-for-år tabel ───────────────────────────────────────────────────────
     tabel = []
@@ -485,21 +490,26 @@ def generer_udbetalingstabel(
     buffer_skat_pct = float(parametre.get("engangs_buffer_skat_pct", 27.0)) / 100
     r_buffer = r * (1 - buffer_skat_pct)
 
-    # Vækst af buffer i pre-pensionstid (fra tidligste engangsbeloeb til pensionsalder)
-    earliest_engangs = min((p["start_alder"] for p in engangsbeloeb), default=pensionsalder)
+    # Vækst af buffer i pre-pensionstid — kun pre-pension engangsbeloeb
+    earliest_engangs = min((p["start_alder"] for p in pre_engangs), default=pensionsalder)
     pre_pension_aar  = max(0, pensionsalder - earliest_engangs)
-    buffer_ved_pension = engangs_netto_total * (1 + r_buffer) ** pre_pension_aar
+    buffer_ved_pension = pre_engangs_netto * (1 + r_buffer) ** pre_pension_aar
 
     pension_rækker = [row for row in tabel if row["alder"] >= pensionsalder]
     n_aar = max(1, len(pension_rækker))
     pv_normal       = sum(row["total_netto_aar"] / (1 + r_buffer) ** (i + 1)
                           for i, row in enumerate(pension_rækker))
+    # Post-pension engangsbeloeb diskonteres tilbage til pensionsalder
+    pv_post_engangs = sum(
+        _engangs_netto(pr) / (1 + r_buffer) ** (pr["start_alder"] - pensionsalder)
+        for pr in post_engangs
+    )
     annuitet_faktor = sum(1 / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
-    jaevn_netto_mdr = (buffer_ved_pension + pv_normal) / annuitet_faktor / 12
+    jaevn_netto_mdr = (buffer_ved_pension + pv_normal + pv_post_engangs) / annuitet_faktor / 12
 
-    # Pre-pensionstabel: buffer vokser stille og roligt, ingen udbetaling
+    # Pre-pensionstabel: kun pre-pension engangsbeloeb vokser, ingen udbetaling
     jaevn_tabel = []
-    buffer = engangs_netto_total
+    buffer = pre_engangs_netto
     for row in [r for r in tabel if earliest_engangs <= r["alder"] < pensionsalder]:
         buffer *= (1 + r_buffer)   # buffer vokser, ingen udbetaling endnu
         alder = row["alder"]
@@ -522,6 +532,10 @@ def generer_udbetalingstabel(
 
     for row in pension_rækker:
         buffer     *= (1 + r_buffer)
+        # Post-pension engangsbeloeb tilføjes bufferen i udbetalingsåret
+        for pr in post_engangs:
+            if row["alder"] == pr["start_alder"]:
+                buffer += _engangs_netto(pr)
         normal_mdr  = row["total_netto_mdr"]
         diff_mdr    = jaevn_netto_mdr - normal_mdr
         buffer     -= diff_mdr * 12
@@ -1133,10 +1147,13 @@ def format_engine_til_llm(result: dict) -> str:
             f"fordelt over 12 måneder = ca. {mdr_12:,.0f} kr/mdr ekstra i udbetalingsåret.*".replace(",", "."),
         ]
 
-    # Skatteeksempel — brug første pensionsår (ikke pre-pension engangsudbet år)
+    # Skatteeksempel — brug første år med faktisk loebende udbetaling (rate/livrente)
     if tabel:
         pensionsalder_val = result["pensionsalder"]
-        skatte_row = next((r for r in tabel if r["alder"] >= pensionsalder_val), tabel[0])
+        skatte_row = next(
+            (r for r in tabel if any(d["mdr_brutto"] > 0 for d in r["produkter"].values())),
+            next((r for r in tabel if r["alder"] >= pensionsalder_val), tabel[0])
+        )
         L += ["", _format_skatteeksempel(skatte_row, loebende, result["parametre"], fp_alder)]
 
     # Tabel 3 — Jævn fordeling

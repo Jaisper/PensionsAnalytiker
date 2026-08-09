@@ -2012,7 +2012,7 @@ function renderTimeline(data) {
     const widthPct = Math.max(1, pct(stopAge) - leftPct);
     const barLabel = isEngangs ? `${startAge} (frie midler)` : `${startAge}–${stopAge}`;
 
-    const minDragAge = Math.max(60, fpAlder - 5);  // PALFP: 5 år før folkepension, gulv 60
+    const minDragAge = 60;  // absolut gulv — konsistent med panel-inputs
     const barTitle = isEngangs
       ? `Træk for at rykke udbetalingstidspunkt · buffer løber hele pensionsperioden · ${startAge} år`
       : `Venstre kant: juster start · Højre kant: juster slut · Midten: flyt · ${startAge}–${stopAge} år`;

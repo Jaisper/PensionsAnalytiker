@@ -823,7 +823,17 @@ def _parse_mine_svar(message: str, session: dict) -> None:
         m = re.search(pattern, text)
         if m:
             try:
-                return cast(m.group(1).replace(".", "").replace(",", "."))
+                raw = m.group(1)
+                # Afgør decimal-separator: hvis begge findes er den sidst forekommende decimal
+                if "." in raw and "," in raw:
+                    if raw.rfind(".") > raw.rfind(","):
+                        raw = raw.replace(",", "")          # komma = tusindtals-sep
+                    else:
+                        raw = raw.replace(".", "").replace(",", ".")  # punktum = tusindtals-sep
+                elif "," in raw:
+                    raw = raw.replace(",", ".")             # kun komma → dansk decimal
+                # kun punktum (eller ingen): brug direkte
+                return cast(raw)
             except ValueError:
                 pass
         return None

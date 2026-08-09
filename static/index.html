@@ -1766,11 +1766,14 @@ async function loadAndRenderChart() {
 }
 
 function renderChart(data) {
-  const tabel      = data.tabel;
-  const produkter  = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
-  const engangs    = data.engangsbeloeb || [];
-  const fpAlder    = data.fp_alder;
-  const labels     = tabel.map(r => r.alder);
+  const tabel        = data.tabel;
+  const produkter    = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
+  const engangs      = data.engangsbeloeb || [];
+  const fpAlder      = data.fp_alder;
+  const labels       = tabel.map(r => r.alder);
+  const jaevnTabel   = data.jaevn_tabel || [];
+  const inflationPct = data.parametre?.inflation_pct || 0;
+  const useReal      = inflationPct > 0 && jaevnTabel.length > 0 && jaevnTabel[0].jaevn_mdr_real != null;
 
   const datasets = [];
   produkter.forEach((prod, idx) => {
@@ -1791,7 +1794,6 @@ function renderChart(data) {
   });
 
   // Engangsbeløb som frie midler — buffer supplement og overskud per år
-  const jaevnTabel = data.jaevn_tabel || [];
   if (jaevnTabel.some(r => (r.fra_buffer || 0) > 0 || (r.til_buffer || 0) > 0)) {
     const bufSupplKey  = useReal ? 'fra_buffer_real' : 'fra_buffer';
     const bufOverskudKey = 'til_buffer';  // til_buffer har ingen real-variant (vises ikke i real-mode)
@@ -1851,8 +1853,6 @@ function renderChart(data) {
 
   // Jaevn linje — brug real-værdier (nutidspenge) hvis inflation > 0
   const jaevn = data.jaevn_netto_mdr || 0;
-  const inflationPct = data.parametre?.inflation_pct || 0;
-  const useReal = inflationPct > 0 && jaevnTabel.length > 0 && jaevnTabel[0].jaevn_mdr_real != null;
   if (jaevn > 0) {
     const pensStart = data.pensionsalder;
     const jaevnLineData = tabel.map(r => {

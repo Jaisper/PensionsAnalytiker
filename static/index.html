@@ -165,6 +165,17 @@
     .assistant .bubble tr:last-child td { border-bottom: none; }
     .assistant .bubble tr:nth-child(even) td { background: #f4f8fc; }
     .assistant .bubble tr:hover td { background: #eaf2fa; }
+    .assistant .bubble tr.tbl-sep td {
+      padding: 0; height: 2px; background: #c8d8e8; border: none;
+    }
+    .assistant .bubble tr.tbl-sep:hover td { background: #c8d8e8; }
+    .assistant .bubble tr.tbl-total td {
+      font-weight: 700; background: #e8f2fb; color: #0f2a42;
+      border-top: 1px solid #b0c8e0;
+    }
+    .assistant .bubble tr.tbl-total:hover td { background: #daeaf8; }
+    .assistant .bubble tr.tbl-sep + tr td,
+    .assistant .bubble tr.tbl-sep + tr.tbl-total td { background: #f4f8fc; }
 
     /* Kode */
     .assistant .bubble code {
@@ -824,7 +835,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Standard 4% — skriv andet hvis du vil bruge en anden sats</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq2" value="6" min="0" max="15" step="0.1" aria-label="Forventet årligt afkast i procent" oninput="scheduleRefresh(500)">
+          <input type="number" id="iq2" value="6" min="0" max="15" step="0.1" aria-label="Forventet årligt afkast i procent" oninput="scheduleRefresh(500, true)">
           <span class="unit">%</span>
         </td>
       </tr>
@@ -833,7 +844,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Viser real-købekraft (2025-kroner) i udbetalingstabellen</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq2b" value="2" min="0" max="10" step="0.1" aria-label="Inflation i procent" oninput="scheduleRefresh(500)">
+          <input type="number" id="iq2b" value="2" min="0" max="10" step="0.1" aria-label="Inflation i procent" oninput="scheduleRefresh(500, true)">
           <span class="unit">%</span>
         </td>
       </tr>
@@ -843,7 +854,7 @@ Upload derefter PDF'en her øverst til højre.`,
         </td>
         <td class="qi">
           <input type="number" id="iq3" value="${Math.max(tidligst, 62)}" min="60" max="75"
-            oninput="autoFillStartAldre(); scheduleRefresh(500);" aria-label="Ønsket pensionsalder i år">
+            oninput="autoFillStartAldre(); scheduleRefresh(500, true);" aria-label="Ønsket pensionsalder i år">
           <span class="unit">år</span>
         </td>
       </tr>
@@ -852,7 +863,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Standard 30 år — gælder for ratepension og livsvarig</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq4" value="30" min="5" max="40" aria-label="Ønsket udbetalingsperiode i år" oninput="scheduleRefresh(500)">
+          <input type="number" id="iq4" value="30" min="5" max="40" aria-label="Ønsket udbetalingsperiode i år" oninput="scheduleRefresh(500, true)">
           <span class="unit">år</span>
         </td>
       </tr>`;
@@ -1623,15 +1634,15 @@ Upload derefter PDF'en her øverst til højre.`,
 
       // Tabel
       if (line.includes('|') && i + 1 < lines.length && lines[i+1].match(/^\s*\|?[-| :]+\|?\s*$/)) {
+        const headerLine = line;
+        const separatorLine = lines[i + 1];
+        i += 2;
         const tableLines = [];
-        tableLines.push(line);
-        i++; // separator
-        i++;
         while (i < lines.length && lines[i].includes('|')) {
           tableLines.push(lines[i]);
           i++;
         }
-        html += renderTable(tableLines);
+        html += renderTable(headerLine, separatorLine, tableLines);
         continue;
       }
 
@@ -1682,16 +1693,33 @@ Upload derefter PDF'en her øverst til højre.`,
     return html;
   }
 
-  function renderTable(rows) {
-    const cells = r => r.split('|').map(c => c.trim()).filter((c, i, a) => i > 0 || c !== '').filter((c, i, a) => i < a.length - 1 || c !== '');
-    const headers = cells(rows[0]);
+  function renderTable(headerLine, separatorLine, bodyRows) {
+    const splitCells = r => r.split('|').map(c => c.trim()).slice(1).filter((c, i, a) => i < a.length - 1 || c !== '');
+    // Parse column alignment from separator row
+    const sepCells = splitCells(separatorLine);
+    const aligns = sepCells.map(s => {
+      if (/^:.*:$/.test(s)) return 'center';
+      if (/:$/.test(s))     return 'right';
+      if (/^:/.test(s))     return 'left';
+      return '';
+    });
+    const style = (i) => aligns[i] ? ` style="text-align:${aligns[i]}"` : '';
+
+    const headers = splitCells(headerLine);
     let t = '<table><thead><tr>';
-    headers.forEach(h => { t += `<th>${inline(h)}</th>`; });
+    headers.forEach((h, i) => { t += `<th${style(i)}>${inline(h)}</th>`; });
     t += '</tr></thead><tbody>';
-    rows.slice(1).forEach(row => {
-      t += '<tr>';
-      cells(row).forEach(c => { t += `<td>${inline(c)}</td>`; });
-      t += '</tr>';
+
+    const isSepRow = r => /^\s*\|?[\s\-|:]+\|?\s*$/.test(r);
+    bodyRows.forEach(row => {
+      if (isSepRow(row)) {
+        t += `<tr class="tbl-sep"><td colspan="${headers.length}"></td></tr>`;
+      } else {
+        const isTotal = /\*\*/.test(row);
+        t += isTotal ? '<tr class="tbl-total">' : '<tr>';
+        splitCells(row).forEach((c, i) => { t += `<td${style(i)}>${inline(c)}</td>`; });
+        t += '</tr>';
+      }
     });
     return '<div class="table-scroll">' + t + '</tbody></table></div>';
   }
@@ -1745,8 +1773,9 @@ let _tlDrag = null;  // active drag state
 // ── Debounced async engine refresh ───────────────────────────────────────────
 let _refreshTimer = null;
 let _refreshPending = false;
+let _refreshIncludePanel = false;
 
-function _collectPayload() {
+function _collectPayload(includePanel = false) {
   const produktStartAldre = {};
   document.querySelectorAll('.tl-track[data-key]').forEach(track => {
     const key = track.dataset.key;
@@ -1755,14 +1784,16 @@ function _collectPayload() {
     if (!isNaN(start)) produktStartAldre[key] = start;
   });
   const payload = { session_id: sessionId };
-  const iq2  = document.getElementById('iq2');
-  const iq2b = document.getElementById('iq2b');
-  const iq3  = document.getElementById('iq3');
-  const iq4  = document.getElementById('iq4');
-  if (iq2?.value)  payload.afkast_pct    = parseFloat(iq2.value);
-  if (iq2b?.value) payload.inflation_pct = parseFloat(iq2b.value);
-  if (iq3?.value)  payload.pensionsalder  = parseInt(iq3.value);
-  if (iq4?.value)  payload.udbetaling_aar = parseInt(iq4.value);
+  if (includePanel) {
+    const iq2  = document.getElementById('iq2');
+    const iq2b = document.getElementById('iq2b');
+    const iq3  = document.getElementById('iq3');
+    const iq4  = document.getElementById('iq4');
+    if (iq2?.value)  payload.afkast_pct    = parseFloat(iq2.value);
+    if (iq2b?.value) payload.inflation_pct = parseFloat(iq2b.value);
+    if (iq3?.value)  payload.pensionsalder  = parseInt(iq3.value);
+    if (iq4?.value)  payload.udbetaling_aar = parseInt(iq4.value);
+  }
   if (Object.keys(produktStartAldre).length) payload.produkt_start_aldre = produktStartAldre;
   return payload;
 }
@@ -1770,13 +1801,15 @@ function _collectPayload() {
 async function _runEngineRefresh() {
   if (!sessionId) return;
   _refreshPending = false;
+  const includePanel = _refreshIncludePanel;
+  _refreshIncludePanel = false;
   const status = document.getElementById('chart-status');
   if (status) status.textContent = '⟳';
 
   await fetch('/api/parametre', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(_collectPayload()),
+    body: JSON.stringify(_collectPayload(includePanel)),
   }).catch(() => null);
 
   const res = await fetch(`/api/session/${sessionId}/engine`).catch(() => null);
@@ -1791,8 +1824,9 @@ async function _runEngineRefresh() {
 }
 
 // Skedul en genberegning med debounce (standard 300ms, 0ms = øjeblikkelig)
-function scheduleRefresh(delayMs = 300) {
+function scheduleRefresh(delayMs = 300, includePanel = false) {
   if (!sessionId || !_chartData) return;
+  if (includePanel) _refreshIncludePanel = true;
   clearTimeout(_refreshTimer);
   _refreshPending = true;
   const status = document.getElementById('chart-status');
@@ -1851,22 +1885,8 @@ function renderChart(data) {
     });
   });
 
-  // Engangsudbetalinger — vis som spike i udbetalingsåret som måneds-ækvivalent (÷12)
-  // Bruger separat stack 'b' så de ikke forstyrrer den løbende indkomst
-  engangs.forEach((prod, ei) => {
-    const engColor = CHART_COLORS[(produkter.length + ei) % CHART_COLORS.length];
-    const engNetto = prod.skat_type === 'A' ? Math.round(prod.fv * 0.60) : Math.round(prod.fv || 0);
-    if (engNetto <= 0) return;
-    datasets.push({
-      label: `${prod.selskab} – ${prod.produkttype} (engangsbet. ${engNetto.toLocaleString('da-DK')} kr)`,
-      data: tabel.map(row => row.alder === prod.start_alder ? Math.round(engNetto / 12) : 0),
-      backgroundColor: engColor + '88',
-      borderColor: engColor,
-      borderWidth: 2,
-      stack: 'b',
-      _key: prod.key,
-    });
-  });
+  // Engangsudbetalinger vises IKKE som separat spike — pengene indgår allerede
+  // i "Frie midler" (fra_buffer) via buffer. Tidslinjen viser hvornår beløbet ankommer.
 
   // Frie midler — pre-pension: månedligt bufferafkast; pension: supplement til jævn indkomst
   const hasBuffer = jaevnTabel.some(r => (r.fra_buffer || 0) > 0 || (r.buffer_afkast_mdr || 0) > 0);
@@ -2085,11 +2105,16 @@ function renderTimeline(data) {
 
     const leftPct  = pct(startAge);
     const widthPct = Math.max(1, pct(stopAge) - leftPct);
-    const barLabel = isEngangs ? `${startAge} (frie midler)` : `${startAge}–${stopAge}`;
+    const engNetto = isEngangs
+      ? (prod.skat_type === 'A' ? Math.round((prod.fv || 0) * 0.60) : Math.round(prod.fv || 0))
+      : 0;
+    const barLabel = isEngangs
+      ? `${startAge} år · ${engNetto.toLocaleString('da-DK')} kr`
+      : `${startAge}–${stopAge}`;
 
     const minDragAge = 60;  // absolut gulv — konsistent med panel-inputs
     const barTitle = isEngangs
-      ? `Træk for at rykke udbetalingstidspunkt · buffer løber hele pensionsperioden · ${startAge} år`
+      ? `Engangsudbetaling ${engNetto.toLocaleString('da-DK')} kr netto · træk for at rykke tidspunkt`
       : `Venstre kant: juster start · Højre kant: juster slut · Midten: flyt · ${startAge}–${stopAge} år`;
 
     html += `<div class="tl-row" data-key="${escapeAttr(prod.key)}" data-idx="${idx}">
@@ -2307,7 +2332,7 @@ function tlApplyChanges(d) {
 }
 
 function refreshChartFromTimeline() {
-  scheduleRefresh(0);  // Genberegn-knap: øjeblikkelig
+  scheduleRefresh(0, true);  // Genberegn-knap: inkluder panel-parametre
 }
 
 function gemAnalyse() {

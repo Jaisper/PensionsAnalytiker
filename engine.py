@@ -538,11 +538,13 @@ def generer_udbetalingstabel(
                 buffer += _engangs_netto(pr)
         normal_mdr  = row["total_netto_mdr"]
         diff_mdr    = jaevn_netto_mdr - normal_mdr
+        buffer_pre_draw = buffer
         buffer     -= diff_mdr * 12
         alder = row["alder"]
         years_from_now = max(0, alder - alder_nu) if alder_nu else 0
         deflator = (1 + inflation_pct) ** years_from_now if inflation_pct > 0 else 1.0
-        fra_buf = max(0.0,  diff_mdr)
+        # Vis kun fra_buffer når der faktisk er kapital i bufferen at hente fra
+        fra_buf = max(0.0,  diff_mdr) if buffer_pre_draw > 0 else 0.0
         til_buf = max(0.0, -diff_mdr)
         jaevn_tabel.append({
             "alder":              alder,

@@ -499,13 +499,22 @@ def generer_udbetalingstabel(
         normal_mdr  = row["total_netto_mdr"]
         diff_mdr    = jaevn_netto_mdr - normal_mdr   # + → buffer supplerer, − → overskud til buffer
         buffer     -= diff_mdr * 12
+        alder = row["alder"]
+        years_from_now = max(0, alder - alder_nu) if alder_nu else 0
+        deflator = (1 + inflation_pct) ** years_from_now if inflation_pct > 0 else 1.0
+        fra_buf = max(0.0,  diff_mdr)
+        til_buf = max(0.0, -diff_mdr)
         jaevn_tabel.append({
-            "alder":       row["alder"],
-            "normal_mdr":  round(normal_mdr),
-            "jaevn_mdr":   round(jaevn_netto_mdr),
-            "fra_buffer":  round(max(0.0,  diff_mdr)),   # beløb trukket fra buffer (supplement)
-            "til_buffer":  round(max(0.0, -diff_mdr)),   # beløb lagt til buffer (overskud)
-            "buffer_rest": round(buffer),
+            "alder":           alder,
+            "normal_mdr":      round(normal_mdr),
+            "normal_mdr_real": round(normal_mdr / deflator) if inflation_pct > 0 else None,
+            "jaevn_mdr":       round(jaevn_netto_mdr),
+            "jaevn_mdr_real":  round(jaevn_netto_mdr / deflator) if inflation_pct > 0 else None,
+            "fra_buffer":      round(fra_buf),
+            "fra_buffer_real": round(fra_buf / deflator) if inflation_pct > 0 else None,
+            "til_buffer":      round(til_buf),
+            "buffer_rest":     round(buffer),
+            "buffer_rest_real": round(buffer / deflator) if inflation_pct > 0 else None,
         })
 
     return {
@@ -1103,25 +1112,44 @@ def format_engine_til_llm(result: dict) -> str:
     # Tabel 3 — Jævn fordeling
     jaevn_mdr = result.get("jaevn_netto_mdr", 0)
     engangs_total = sum(pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"] for pr in engang)
-    r_buf_pct = p["r"] * (1 - 0.40) * 100
+    buf_skat_pct = p.get("engangs_buffer_skat_pct", 27.0)
+    r_buf_pct = p["r"] * (1 - buf_skat_pct / 100) * 100
+    inflation_vis = p.get("inflation_pct", 0)
+    use_real = inflation_vis > 0
+    real_note = f" (nutidsværdi, {inflation_vis:.1f}% inflation)" if use_real else ""
     L += [
         "",
-        f"### TABEL 3 — JÆVN FORDELING NETTO",
-        f"Jævn netto/mdr over hele perioden: **{jaevn_mdr:,.0f} kr/mdr**".replace(",", "."),
-        (f"Engangsbeløb netto ({engangs_total:,.0f} kr) bruges som buffer fra år 1. "
-         f"Buffer forrentes med {r_buf_pct:.1f}% p.a. efter 40% kapitalindkomstskat.").replace(",", ".") if engangs_total else "",
-        "| Alder | Normal netto/mdr | Jævn netto/mdr | Fra buffer/mdr | Buffer rest |",
-        "|---|---|---|---|---|",
+        f"### TABEL 3 — JÆVN FORDELING NETTO{real_note}",
+        f"Jævn netto/mdr (nominelt): **{jaevn_mdr:,.0f} kr/mdr**".replace(",", "."),
+        (f"Engangsbeløb netto ({engangs_total:,.0f} kr) bruges som frie midler/buffer. "
+         f"Buffer forrentes med {r_buf_pct:.1f}% p.a. efter {buf_skat_pct:.0f}% kapitalafgift.").replace(",", ".") if engangs_total else "",
     ]
-    for row in jaevn_tabel:
-        fra_b = row["fra_buffer"]
-        L.append(
-            f"| {row['alder']} "
-            f"| {row['normal_mdr']:,.0f} "
-            f"| {row['jaevn_mdr']:,.0f} "
-            f"| {fra_b:+,.0f} "
-            f"| {row['buffer_rest']:,.0f} |".replace(",", ".")
-        )
+    if use_real:
+        L += [
+            "| Alder | Normal (nutidskr) | Jævn (nutidskr) | Fra buffer (nutidskr) | Buffer rest (nutidskr) |",
+            "|---|---|---|---|---|",
+        ]
+        for row in jaevn_tabel:
+            L.append(
+                f"| {row['alder']} "
+                f"| {(row['normal_mdr_real'] or 0):,.0f} "
+                f"| {(row['jaevn_mdr_real'] or 0):,.0f} "
+                f"| {(row['fra_buffer_real'] or 0):+,.0f} "
+                f"| {(row['buffer_rest_real'] or 0):,.0f} |".replace(",", ".")
+            )
+    else:
+        L += [
+            "| Alder | Normal netto/mdr | Jævn netto/mdr | Fra buffer/mdr | Buffer rest |",
+            "|---|---|---|---|---|",
+        ]
+        for row in jaevn_tabel:
+            L.append(
+                f"| {row['alder']} "
+                f"| {row['normal_mdr']:,.0f} "
+                f"| {row['jaevn_mdr']:,.0f} "
+                f"| {row['fra_buffer']:+,.0f} "
+                f"| {row['buffer_rest']:,.0f} |".replace(",", ".")
+            )
 
     L += [
         "",

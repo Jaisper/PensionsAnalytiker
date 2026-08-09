@@ -1793,19 +1793,21 @@ function renderChart(data) {
   // Engangsbeløb som frie midler — buffer supplement og overskud per år
   const jaevnTabel = data.jaevn_tabel || [];
   if (jaevnTabel.some(r => (r.fra_buffer || 0) > 0 || (r.til_buffer || 0) > 0)) {
+    const bufSupplKey  = useReal ? 'fra_buffer_real' : 'fra_buffer';
+    const bufOverskudKey = 'til_buffer';  // til_buffer har ingen real-variant (vises ikke i real-mode)
     datasets.push({
-      label: 'Frie midler (supplement)',
+      label: useReal ? `Frie midler/supplement (nutidskr)` : 'Frie midler (supplement)',
       data: tabel.map(row => {
         const jr = jaevnTabel.find(r => r.alder === row.alder);
-        return jr ? (jr.fra_buffer || 0) : 0;
+        return jr ? (jr[bufSupplKey] || 0) : 0;
       }),
       backgroundColor: '#a78bfacc',
       borderColor: '#a78bfa',
       borderWidth: 1,
       stack: 'a',
     });
-    // Vis overskudsår negativt (under x-aks) — pensionsindkomst overstiger jævn-niveau
-    if (jaevnTabel.some(r => (r.til_buffer || 0) > 0)) {
+    // Overskudsår (pension > jævn niveau) vises som grøn søjle under x-aksen
+    if (!useReal && jaevnTabel.some(r => (r.til_buffer || 0) > 0)) {
       datasets.push({
         label: 'Til buffer (overskud)',
         data: tabel.map(row => {
@@ -1815,7 +1817,7 @@ function renderChart(data) {
         backgroundColor: '#34d39966',
         borderColor: '#34d399',
         borderWidth: 1,
-        stack: 'b',  // separat stack så den ikke adderes med pension-søjlerne
+        stack: 'b',
       });
     }
   }
@@ -1847,14 +1849,24 @@ function renderChart(data) {
     stack: 'a',
   });
 
-  // Jaevn linje
+  // Jaevn linje — brug real-værdier (nutidspenge) hvis inflation > 0
   const jaevn = data.jaevn_netto_mdr || 0;
+  const inflationPct = data.parametre?.inflation_pct || 0;
+  const useReal = inflationPct > 0 && jaevnTabel.length > 0 && jaevnTabel[0].jaevn_mdr_real != null;
   if (jaevn > 0) {
     const pensStart = data.pensionsalder;
+    const jaevnLineData = tabel.map(r => {
+      if (r.alder < pensStart) return null;
+      if (useReal) {
+        const jr = jaevnTabel.find(jr => jr.alder === r.alder);
+        return jr?.jaevn_mdr_real ?? null;
+      }
+      return jaevn;
+    });
     datasets.push({
       type: 'line',
-      label: 'Jaevn netto/mdr',
-      data: tabel.map(r => r.alder >= pensStart ? jaevn : null),
+      label: useReal ? `Jævn netto/mdr (nutidskr, ${inflationPct.toFixed(1)}% inflation)` : 'Jævn netto/mdr',
+      data: jaevnLineData,
       borderColor: '#1a3a5c',
       borderWidth: 2,
       borderDash: [6, 3],

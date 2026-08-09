@@ -824,7 +824,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Standard 4% — skriv andet hvis du vil bruge en anden sats</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq2" value="6" min="0" max="15" step="0.1" aria-label="Forventet årligt afkast i procent">
+          <input type="number" id="iq2" value="6" min="0" max="15" step="0.1" aria-label="Forventet årligt afkast i procent" oninput="scheduleRefresh(500)">
           <span class="unit">%</span>
         </td>
       </tr>
@@ -833,7 +833,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Viser real-købekraft (2025-kroner) i udbetalingstabellen</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq2b" value="2" min="0" max="10" step="0.1" aria-label="Inflation i procent">
+          <input type="number" id="iq2b" value="2" min="0" max="10" step="0.1" aria-label="Inflation i procent" oninput="scheduleRefresh(500)">
           <span class="unit">%</span>
         </td>
       </tr>
@@ -843,7 +843,7 @@ Upload derefter PDF'en her øverst til højre.`,
         </td>
         <td class="qi">
           <input type="number" id="iq3" value="${Math.max(tidligst, 62)}" min="60" max="75"
-            oninput="autoFillStartAldre()" aria-label="Ønsket pensionsalder i år">
+            oninput="autoFillStartAldre(); scheduleRefresh(500);" aria-label="Ønsket pensionsalder i år">
           <span class="unit">år</span>
         </td>
       </tr>
@@ -852,7 +852,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Standard 30 år — gælder for ratepension og livsvarig</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq4" value="30" min="5" max="40" aria-label="Ønsket udbetalingsperiode i år">
+          <input type="number" id="iq4" value="30" min="5" max="40" aria-label="Ønsket udbetalingsperiode i år" oninput="scheduleRefresh(500)">
           <span class="unit">år</span>
         </td>
       </tr>`;
@@ -1742,6 +1742,64 @@ let _chartData = null;
 let _chartPanelOpen = true;
 let _tlDrag = null;  // active drag state
 
+// ── Debounced async engine refresh ───────────────────────────────────────────
+let _refreshTimer = null;
+let _refreshPending = false;
+
+function _collectPayload() {
+  const produktStartAldre = {};
+  document.querySelectorAll('.tl-track[data-key]').forEach(track => {
+    const key = track.dataset.key;
+    if (!key) return;
+    const start = parseInt(track.dataset.start);
+    if (!isNaN(start)) produktStartAldre[key] = start;
+  });
+  const payload = { session_id: sessionId };
+  const iq2  = document.getElementById('iq2');
+  const iq2b = document.getElementById('iq2b');
+  const iq3  = document.getElementById('iq3');
+  const iq4  = document.getElementById('iq4');
+  if (iq2?.value)  payload.afkast_pct    = parseFloat(iq2.value);
+  if (iq2b?.value) payload.inflation_pct = parseFloat(iq2b.value);
+  if (iq3?.value)  payload.pensionsalder  = parseInt(iq3.value);
+  if (iq4?.value)  payload.udbetaling_aar = parseInt(iq4.value);
+  if (Object.keys(produktStartAldre).length) payload.produkt_start_aldre = produktStartAldre;
+  return payload;
+}
+
+async function _runEngineRefresh() {
+  if (!sessionId) return;
+  _refreshPending = false;
+  const status = document.getElementById('chart-status');
+  if (status) status.textContent = '⟳';
+
+  await fetch('/api/parametre', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(_collectPayload()),
+  }).catch(() => null);
+
+  const res = await fetch(`/api/session/${sessionId}/engine`).catch(() => null);
+  if (res?.ok) {
+    _chartData = await res.json();
+    renderChart(_chartData);
+    renderTimeline(_chartData);
+    if (status) { status.textContent = '✓'; setTimeout(() => { if (status.textContent === '✓') status.textContent = ''; }, 1500); }
+  } else {
+    if (status) { status.textContent = '⚠'; setTimeout(() => { status.textContent = ''; }, 3000); }
+  }
+}
+
+// Skedul en genberegning med debounce (standard 300ms, 0ms = øjeblikkelig)
+function scheduleRefresh(delayMs = 300) {
+  if (!sessionId || !_chartData) return;
+  clearTimeout(_refreshTimer);
+  _refreshPending = true;
+  const status = document.getElementById('chart-status');
+  if (status && delayMs > 0) status.textContent = '…';
+  _refreshTimer = setTimeout(_runEngineRefresh, delayMs);
+}
+
 function toggleChartPanel() {
   _chartPanelOpen = !_chartPanelOpen;
   document.getElementById('chart-panel-body').style.display = _chartPanelOpen ? 'block' : 'none';
@@ -1789,6 +1847,23 @@ function renderChart(data) {
       borderWidth: 1,
       stack: 'a',
       _color: color,
+      _key: prod.key,
+    });
+  });
+
+  // Engangsudbetalinger — vis som spike i udbetalingsåret som måneds-ækvivalent (÷12)
+  // Bruger separat stack 'b' så de ikke forstyrrer den løbende indkomst
+  engangs.forEach((prod, ei) => {
+    const engColor = CHART_COLORS[(produkter.length + ei) % CHART_COLORS.length];
+    const engNetto = prod.skat_type === 'A' ? Math.round(prod.fv * 0.60) : Math.round(prod.fv || 0);
+    if (engNetto <= 0) return;
+    datasets.push({
+      label: `${prod.selskab} – ${prod.produkttype} (engangsbet. ${engNetto.toLocaleString('da-DK')} kr)`,
+      data: tabel.map(row => row.alder === prod.start_alder ? Math.round(engNetto / 12) : 0),
+      backgroundColor: engColor + '88',
+      borderColor: engColor,
+      borderWidth: 2,
+      stack: 'b',
       _key: prod.key,
     });
   });
@@ -2219,75 +2294,20 @@ function tlUpdateBar(d) {
 
 }
 
-async function tlApplyChanges(d) {
+function tlApplyChanges(d) {
   if (!_chartData) return;
-  const status = document.getElementById('chart-status');
-  status.textContent = 'Genberegner...';
-
-  // Collect all current start ages from timeline tracks
-  const produktStartAldre = {};
-  document.querySelectorAll('.tl-track[data-key]').forEach(track => {
-    const key = track.dataset.key;
-    if (!key) return;
-    const start = parseInt(track.dataset.start);
-    if (!isNaN(start)) produktStartAldre[key] = start;
-  });
-
-  // Also update the form fields if they exist
-  document.querySelectorAll('[data-key]').forEach(inp => {
-    const key = inp.dataset.key;
-    if (key && produktStartAldre[key] !== undefined) {
-      inp.value = produktStartAldre[key];
-    }
-  });
-
-  await fetch('/api/parametre', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, produkt_start_aldre: produktStartAldre }),
-  });
-
-  // Re-fetch engine data and redraw
-  const res = await fetch(`/api/session/${sessionId}/engine`).catch(() => null);
-  if (res && res.ok) {
-    _chartData = await res.json();
-    renderChart(_chartData);
-    renderTimeline(_chartData);
-    status.textContent = '✓ Opdateret';
-    setTimeout(() => { status.textContent = ''; }, 2000);
-  }
-}
-
-async function refreshChartFromTimeline() {
-  if (!sessionId) return;
-  const status = document.getElementById('chart-status');
-  status.textContent = 'Genberegner...';
-
-  // Collect start ages from timeline
-  const produktStartAldre = {};
-  document.querySelectorAll('.tl-track[data-key]').forEach(track => {
-    const key = track.dataset.key;
-    if (!key) return;
-    const start = parseInt(track.dataset.start);
-    if (!isNaN(start)) produktStartAldre[key] = start;
-  });
-
-  if (Object.keys(produktStartAldre).length > 0) {
-    await fetch('/api/parametre', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, produkt_start_aldre: produktStartAldre }),
+  // Synk panel-inputs med den nye position
+  const key = d.key;
+  if (key) {
+    document.querySelectorAll(`[data-key]`).forEach(inp => {
+      if (inp.dataset.key === key && inp.tagName === 'INPUT') inp.value = d.start;
     });
   }
+  scheduleRefresh(0);  // øjeblikkelig efter drag — ingen debounce-forsinkelse
+}
 
-  const res = await fetch(`/api/session/${sessionId}/engine`).catch(() => null);
-  if (res && res.ok) {
-    _chartData = await res.json();
-    renderChart(_chartData);
-    renderTimeline(_chartData);
-    status.textContent = '✓ Opdateret';
-    setTimeout(() => { status.textContent = ''; }, 2000);
-  }
+function refreshChartFromTimeline() {
+  scheduleRefresh(0);  // Genberegn-knap: øjeblikkelig
 }
 
 function gemAnalyse() {

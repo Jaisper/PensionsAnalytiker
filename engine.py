@@ -1105,9 +1105,11 @@ def format_engine_til_llm(result: dict) -> str:
             f"fordelt over 12 måneder = ca. {mdr_12:,.0f} kr/mdr ekstra i udbetalingsåret.*".replace(",", "."),
         ]
 
-    # Skatteeksempel år 1
+    # Skatteeksempel — brug første pensionsår (ikke pre-pension engangsudbet år)
     if tabel:
-        L += ["", _format_skatteeksempel(tabel[0], loebende, result["parametre"], fp_alder)]
+        pensionsalder_val = result["pensionsalder"]
+        skatte_row = next((r for r in tabel if r["alder"] >= pensionsalder_val), tabel[0])
+        L += ["", _format_skatteeksempel(skatte_row, loebende, result["parametre"], fp_alder)]
 
     # Tabel 3 — Jævn fordeling
     jaevn_mdr = result.get("jaevn_netto_mdr", 0)

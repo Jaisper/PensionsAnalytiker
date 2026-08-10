@@ -1062,6 +1062,7 @@ Upload derefter PDF'en her øverst til højre.`,
     panel.style.display = 'block';
     document.getElementById('parametre-panel-body').style.display = 'block';
     document.getElementById('parametre-panel-toggle').textContent = '▼ Skjul';
+    autoFillQ6Pmt();
     setTimeout(() => document.getElementById('iq1')?.focus(), 80);
     // Q9b: vis kapitalbeskatning-valg når fri formue > 0
     document.getElementById('iq9')?.addEventListener('input', function() {

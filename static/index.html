@@ -826,7 +826,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Det beløb du/din arbejdsgiver indbetaler netto til selve opsparingen per måned${iq1Hint}</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq1" value="" min="0" step="100" oninput="autoFillQ6Pmt()" aria-label="Månedlig netto-indbetaling i kroner">
+          <input type="number" id="iq1" value="12500" min="0" step="100" oninput="autoFillQ6Pmt()" aria-label="Månedlig netto-indbetaling i kroner">
           <span class="unit">kr/mdr</span>
         </td>
       </tr>
@@ -835,7 +835,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Standard 4% — skriv andet hvis du vil bruge en anden sats</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq2" value="6" min="0" max="15" step="0.1" aria-label="Forventet årligt afkast i procent" oninput="scheduleRefresh(500, true)">
+          <input type="number" id="iq2" value="8" min="0" max="15" step="0.1" aria-label="Forventet årligt afkast i procent" oninput="scheduleRefresh(500, true)">
           <span class="unit">%</span>
         </td>
       </tr>
@@ -1012,7 +1012,7 @@ Upload derefter PDF'en her øverst til højre.`,
           <div class="qdesc">Din pensionsopsparing er af en størrelse hvor topskat kan være relevant — bruges til at beregne om du betaler topskat nu og ved pension, samt optimere indbetalinger</div>
         </td>
         <td class="qi">
-          <input type="number" id="iq8" placeholder="fx 750000" min="0" step="10000">
+          <input type="number" id="iq8" value="1000000" min="0" step="10000">
           <span class="unit">kr/år</span>
         </td>
       </tr>`;

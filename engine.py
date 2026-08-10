@@ -505,7 +505,9 @@ def generer_udbetalingstabel(
         for pr in post_engangs
     )
     annuitet_faktor = sum(1 / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
-    jaevn_netto_mdr = (buffer_ved_pension + pv_normal + pv_post_engangs) / annuitet_faktor / 12
+    # Post-pension engangsbeloeb indgår IKKE i jaevn_netto_mdr — de kan ikke leveres
+    # som buffer-supplement før de ankommer; de tilføjes bufferen ved udbetalingsalderen.
+    jaevn_netto_mdr = (buffer_ved_pension + pv_normal) / annuitet_faktor / 12
 
     # Pre-pensionstabel: kun pre-pension engangsbeloeb vokser, ingen udbetaling
     jaevn_tabel = []

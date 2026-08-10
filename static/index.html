@@ -1951,15 +1951,17 @@ function renderChart(data) {
   });
 
   // Jaevn linje — brug real-værdier (nutidspenge) hvis inflation > 0
+  // Vises kun i år hvor bufferen faktisk kan levere (buffer_rest >= 0),
+  // ellers svæver linjen meningsløst over søjlerne.
   const jaevn = data.jaevn_netto_mdr || 0;
-  if (jaevn > 0) {
+  if (jaevn > 0 && hasBuffer) {
     const pensStart = data.pensionsalder;
     const jaevnLineData = tabel.map(r => {
       if (r.alder < pensStart) return null;
-      if (useReal) {
-        const jr = jaevnTabel.find(jr => jr.alder === r.alder);
-        return jr?.jaevn_mdr_real ?? null;
-      }
+      const jr = jaevnTabel.find(jr => jr.alder === r.alder);
+      // Null linjen når buffer er negativ og ingen supplement kan leveres
+      if (jr && (jr.buffer_rest || 0) < 0 && (jr.fra_buffer || 0) === 0) return null;
+      if (useReal) return jr?.jaevn_mdr_real ?? null;
       return jaevn;
     });
     datasets.push({
@@ -1994,13 +1996,17 @@ function renderChart(data) {
       stack: undefined,
       order: -2,
     });
-    // Kumuleret pension + fri formue total
+    // Jævn pension + fri formue — viser det samlede jævne månedlige niveau
     datasets.push({
       type: 'line',
-      label: 'Total inkl. fri formue',
+      label: `Jævn inkl. fri formue (${(jaevn + ff.mdr_netto).toLocaleString('da-DK')} kr/mdr)`,
       data: tabel.map(r => {
         if (r.alder < pensStart || r.alder >= ffEnd) return null;
-        return (r.total_netto_mdr || 0) + ff.mdr_netto;
+        if (useReal) {
+          const jr = jaevnTabel.find(j => j.alder === r.alder);
+          return jr?.jaevn_mdr_real != null ? jr.jaevn_mdr_real + ff.mdr_netto : null;
+        }
+        return jaevn + ff.mdr_netto;
       }),
       borderColor: '#1e293b',
       backgroundColor: 'transparent',

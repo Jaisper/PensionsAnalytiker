@@ -937,7 +937,7 @@ Upload derefter PDF'en her øverst til højre.`,
       const sal_rows = multiProds.map((p, i) => {
         const actual  = p.opsparing          ? Math.round(p.opsparing / 1000) * 1000          : null;
         const estSal  = p.estimated_saldo    ? Math.round(p.estimated_saldo / 1000) * 1000    : null;
-        const prefill = actual ?? estSal ?? '';
+        const prefill = actual ?? estSal ?? 1000000;
         const hintVal = estSal ?? null;
         const hint = hintVal
           ? `<span style="font-size:0.75rem;color:#9ab0c8;margin-left:5px">(est. ${hintVal.toLocaleString('da-DK')} kr.)</span>`

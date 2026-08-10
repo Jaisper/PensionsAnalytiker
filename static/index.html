@@ -1185,7 +1185,7 @@ Upload derefter PDF'en her øverst til højre.`,
     const aarligVal = iq1Val * 12;  // konverter månedlig → årlig til fordeling
     const inputs = document.querySelectorAll('[id^="iq6pmt_"]');
     if (!inputs.length) return;
-    const RATE_LOFT = 63100;
+    const RATE_LOFT = 68700; // 2026-loft for fradragsberettiget ratepension
     let resterende = aarligVal;
     inputs.forEach(input => {
       const pt = (input.dataset.ptype || '');

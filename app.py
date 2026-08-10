@@ -699,7 +699,7 @@ def build_oversigt_tabel(profil: dict) -> str:
             for sp in sub:
                 spt = sp.get("produkttype") or ""
                 per = sp.get("aldersperioder") or {}
-                sub_opsp = sp.get("opsparing")
+                sub_opsp = sp.get("opsparing") or sp.get("estimated_saldo")
                 sub_saldo_s = f"{sub_opsp:,.0f} kr.".replace(",", ".") if sub_opsp else "—"
                 private_rækker.append(f"| {selskab} |   ↳ {spt} | {sub_saldo_s} | {beм(spt, per, kort=True)} |")
         else:
@@ -749,7 +749,7 @@ def build_oversigt_tabel(profil: dict) -> str:
 
     tabel  = "**Dine pensionsordninger**\n\n"
     tabel += "| Selskab | Produkttype | Saldo | Bemærkning |\n"
-    tabel += "|---|---|---|---|\n"
+    tabel += "|---|---|---:|---|\n"
     tabel += "\n".join(rækker)
     return tabel
 

@@ -397,8 +397,15 @@ def generer_udbetalingstabel(
     pre_engangs_netto   = sum(_engangs_netto(pr) for pr in pre_engangs)
 
     # ── År-for-år tabel ───────────────────────────────────────────────────────
+    # Tabellen skal dække alle produkters fulde udbetalingsperiode —
+    # en ratepension der starter sent (fx 78) kan stoppe efter pensionsalder+udbetaling_aar
+    latest_stopper = max(
+        [p["stopper_ved_alder"] for p in produkter if p.get("stopper_ved_alder") is not None],
+        default=pensionsalder + udbetaling_aar
+    )
+    tabel_slut = max(pensionsalder + udbetaling_aar, latest_stopper)
     tabel = []
-    for alder in range(tabel_start, pensionsalder + udbetaling_aar + 1):
+    for alder in range(tabel_start, tabel_slut + 1):
         har_fp = alder >= fp_alder
 
         # S-indkomst dette år — kun aktive produkter
@@ -999,7 +1006,7 @@ def format_engine_til_llm(result: dict) -> str:
     L += [
         "### TABEL 1 — FREMTIDSVÆRDI OG UDBETALING",
         "| Ordning | Skat | Start | Saldo nu | FV ved start | Brutto/mdr | Brutto/år | Netto/mdr | Varighed |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for pr in loebende:
         first = next(
@@ -1056,7 +1063,7 @@ def format_engine_til_llm(result: dict) -> str:
     real_col     = " | Real/mdr" if has_real else ""
     engangs_hdr  = " | Engangsbeløb netto" if has_engangs else ""
     header = f"| Alder | {header_cols}{engangs_hdr} | Brutto/år | Netto/mdr{real_col} | Note |"
-    sep    = "|---|" + "|---|" * n_prod_cols + ("|---|" if has_engangs else "") + "---|---" + ("|---" if has_real else "") + "|---|"
+    sep    = "|---:|" + "|---:|" * n_prod_cols + ("|---:|" if has_engangs else "") + "---:|---:" + ("|---:" if has_real else "") + "|---|"
 
     fp_idx      = next((i for i, r in enumerate(tabel) if r["alder"] >= fp_alder), None)
     pension_idx = next((i for i, r in enumerate(tabel) if r["alder"] >= p["pensionsalder"]), 0)
@@ -1179,7 +1186,7 @@ def format_engine_til_llm(result: dict) -> str:
     if use_real:
         L += [
             "| Alder | Normal (nutidskr) | Jævn (nutidskr) | Fra buffer (nutidskr) | Buffer rest (nutidskr) |",
-            "|---|---|---|---|---|",
+            "|---:|---:|---:|---:|---:|",
         ]
         for row in pension_jt:
             L.append(
@@ -1192,7 +1199,7 @@ def format_engine_til_llm(result: dict) -> str:
     else:
         L += [
             "| Alder | Normal netto/mdr | Jævn netto/mdr | Fra buffer/mdr | Buffer rest |",
-            "|---|---|---|---|---|",
+            "|---:|---:|---:|---:|---:|",
         ]
         for row in pension_jt:
             L.append(
@@ -1214,7 +1221,7 @@ def format_engine_til_llm(result: dict) -> str:
             "",
             "### TABEL 4 — SCENARIEANALYSE (pessimistisk / base / optimistisk afkast)",
             "| Scenarie | Afkast | Netto/mdr ved pensionsstart | Netto/mdr ved folkepension | Jævn netto/mdr |",
-            "|---|---|---|---|---|",
+            "|---|---:|---:|---:|---:|",
         ]
         for s in scenarier:
             L.append(

@@ -664,21 +664,34 @@ def build_oversigt_tabel(profil: dict) -> str:
     private_rækker = []
     total_opsp = 0
 
+    vist_prod_keys: set[tuple] = set()  # (aftalenr, selskab) der allerede er vist
+
     for a in ord_:
         if a.get("kun_forsikring"):
             continue
         selskab = a.get("selskab") or "?"
         if "ATP" in selskab:
             continue
-        opsp = a.get("opsparing")
-        if not opsp:
-            continue
         ptype = a.get("produkttype") or ""
         nr    = a.get("aftalenr") or ""
+
+        sub = get_prods(nr, selskab)
+
+        opsp = a.get("opsparing")
+        if not opsp:
+            # Fallback: brug summen af sub-produkternes saldi hvis ordningen mangler total
+            opsp = sum(sp.get("opsparing") or 0 for sp in sub) or None
+        if not opsp:
+            continue
+
         total_opsp += opsp
         saldo_s = f"{opsp:,.0f} kr.".replace(",", ".")
 
-        sub = get_prods(nr, selskab)
+        vist_prod_keys.add((nr, selskab.lower()))
+        for sp in sub:
+            sp_nr = str(sp.get("aftalenr") or "")
+            vist_prod_keys.add((sp_nr, (sp.get("selskab") or selskab).lower()))
+
         if len(sub) > 1:
             private_rækker.append(
                 f"| {selskab} | **Firmapension** (samlet) | **{saldo_s}** | Samlet saldo for {len(sub)} produkter |"
@@ -695,6 +708,25 @@ def build_oversigt_tabel(profil: dict) -> str:
             inv = a.get("investeringsform") or ""
             display_ptype = inv if inv and inv.lower() not in (ptype or "").lower() and ptype.lower() not in inv.lower() else ptype
             private_rækker.append(f"| {selskab} | {display_ptype} | {saldo_s} | {beм(ptype, per1)} |")
+
+    # Produkter i pensionsprodukter der ikke er dækket af nogen ordning-rad
+    for p in prods:
+        if "ATP" in (p.get("selskab") or ""):
+            continue
+        if p.get("udb_type") == "engangsbeloeb" or "aldersopsparing" in (p.get("produkttype") or "").lower() or "kapital" in (p.get("produkttype") or "").lower():
+            pass  # alle produkttyper med saldo er relevante
+        p_nr  = str(p.get("aftalenr") or "")
+        p_sel = (p.get("selskab") or "").lower()
+        if (p_nr, p_sel) in vist_prod_keys:
+            continue
+        p_opsp = p.get("opsparing") or 0
+        if not p_opsp:
+            continue
+        p_ptype = p.get("produkttype") or ""
+        p_saldo = f"{p_opsp:,.0f} kr.".replace(",", ".")
+        total_opsp += p_opsp
+        per = p.get("aldersperioder") or {}
+        private_rækker.append(f"| {p.get('selskab') or '?'} | {p_ptype} | {p_saldo} | {beм(p_ptype, per)} |")
 
     atp_prod = next((p for p in prods if "ATP" in (p.get("selskab") or "")), None)
     if atp_prod:

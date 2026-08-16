@@ -1183,52 +1183,55 @@ def format_engine_til_llm(result: dict) -> str:
     r_buf_pct = p["r"] * (1 - buf_skat_pct / 100) * 100
     inflation_vis = p.get("inflation_pct", 0)
     use_real = inflation_vis > 0
-    real_note = f" (nutidsværdi, {inflation_vis:.1f}% inflation)" if use_real else ""
     pension_jt = [row for row in jaevn_tabel if row.get("fase") == "pension"]
     jaevn_mdr_real = (
         pension_jt[0]["jaevn_mdr_real"]
         if use_real and pension_jt and pension_jt[0].get("jaevn_mdr_real") is not None
         else None
     )
-    L += [
-        "",
-        f"### TABEL 3 — JÆVN FORDELING NETTO{real_note}",
-        f"Jævn netto/mdr (nominelt, første pensionsår): **{jaevn_mdr:,.0f} kr/mdr**".replace(",", "."),
-        (f"Beløbet stiger nominelt {inflation_vis:.1f}% p.a. med inflationen, så købekraften er konstant "
-         f"**{jaevn_mdr_real:,.0f} kr/mdr** i nutidskroner gennem hele pensionsperioden.".replace(",", ".")
-         if jaevn_mdr_real is not None else ""),
-        (f"Engangsbeløb netto ({engangs_total:,.0f} kr) bruges som frie midler/buffer. "
-         f"Buffer forrentes med {r_buf_pct:.1f}% p.a. efter {buf_skat_pct:.0f}% kapitalafgift.").replace(",", ".") if engangs_total else "",
-    ]
-    if use_real:
-        L += [
-            "| Alder | Normal (nutidskr) | Jævn (nutidskr) | Fra buffer (nutidskr) | Buffer rest (nutidskr) |",
-            "|---:|---:|---:|---:|---:|",
-        ]
-        for row in pension_jt:
-            L.append(
-                f"| {row['alder']} "
-                f"| {(row['normal_mdr_real'] or 0):,.0f} "
-                f"| {(row['jaevn_mdr_real'] or 0):,.0f} "
-                f"| {(row['fra_buffer_real'] or 0):+,.0f} "
-                f"| {(row['buffer_rest_real'] or 0):,.0f} |".replace(",", ".")
-            )
-    else:
-        L += [
-            "| Alder | Normal netto/mdr | Jævn netto/mdr | Fra buffer/mdr | Buffer rest |",
-            "|---:|---:|---:|---:|---:|",
-        ]
-        for row in pension_jt:
-            L.append(
-                f"| {row['alder']} "
-                f"| {row['normal_mdr']:,.0f} "
-                f"| {row['jaevn_mdr']:,.0f} "
-                f"| {row['fra_buffer']:+,.0f} "
-                f"| {row['buffer_rest']:,.0f} |".replace(",", ".")
-            )
+    udbetalt_nu = jaevn_mdr_real if jaevn_mdr_real is not None else jaevn_mdr
 
     L += [
         "",
+        "### TABEL 3 — JÆVN MÅNEDLIG UDBETALING",
+        ("Uden udjævning svinger din udbetaling år for år, fx fordi ratepensioner udløber eller nye "
+         "produkter starter. Med jævn fordeling bruges engangsbeløb (fx aldersopsparing) som en buffer: "
+         "i år hvor du normalt ville få mere end det jævne niveau, lægges overskuddet i bufferen; i år "
+         "hvor du ville få mindre, henter du forskellen fra bufferen. Resultatet er ét fast, "
+         "forudsigeligt beløb hver måned gennem hele pensionen."),
+        "",
+        f"**Det beløb du får udbetalt hver måned er: {kr(udbetalt_nu)} kr/mdr**",
+        (f"— opgivet i dagens købekraft ({inflation_vis:.1f}% inflation p.a.). Det faktiske kronebeløb på "
+         f"kontoen starter ved {kr(jaevn_mdr)} kr/mdr i første pensionsår og stiger hvert år med "
+         f"inflationen, så din købekraft forbliver den samme hele vejen igennem."
+         if use_real else " (fast kronebeløb hver måned — ingen inflation er indregnet)."),
+        (f"Bufferen fyldes op af engangsbeløb netto ({kr(engangs_total)} kr) og forrentes med "
+         f"{r_buf_pct:.1f}% p.a. efter {buf_skat_pct:.0f}% kapitalafgift.") if engangs_total else "",
+        "",
+        "| Alder | Uden udjævning | Du får udbetalt | Buffer denne måned | Buffer i alt |",
+        "|---:|---:|---:|---:|---:|",
+    ]
+    for row in pension_jt:
+        if use_real:
+            normal_v = row["normal_mdr_real"] or 0
+            jaevn_v  = row["jaevn_mdr_real"] or 0
+            rest_v   = row["buffer_rest_real"] or 0
+        else:
+            normal_v = row["normal_mdr"]
+            jaevn_v  = row["jaevn_mdr"]
+            rest_v   = row["buffer_rest"]
+        buffer_bevaegelse = jaevn_v - normal_v  # + = hentet fra buffer, − = lagt i buffer
+        L.append(
+            f"| {row['alder']} "
+            f"| {normal_v:,.0f} "
+            f"| {jaevn_v:,.0f} "
+            f"| {buffer_bevaegelse:+,.0f} "
+            f"| {rest_v:,.0f} |".replace(",", ".")
+        )
+
+    L += [
+        "",
+        "(\"Buffer denne måned\": positivt tal = du henter ekstra fra bufferen; negativt tal = overskud lægges i bufferen.)",
         "INSTRUKTION: Kopiér Tabel 3 direkte — MÅ IKKE rekonstruere eller beregne buffer selv.",
     ]
 

@@ -216,6 +216,8 @@ def generer_udbetalingstabel(
 
     # Per-produkt start-aldre: {key: start_alder} — loebende produkter kan starte sent
     produkt_start_aldre_param: dict[str, int] = parametre.get("produkt_start_aldre", {})
+    # Per-produkt buffer-deltagelse: {key: bool} — engangsbeloeb indgaar som buffer med mindre fravalgt
+    produkt_i_buffer_param: dict[str, bool] = parametre.get("produkt_i_buffer", {})
 
     person   = profil.get("person", {})
     alder_nu = int(person.get("alder") or 0)
@@ -368,6 +370,7 @@ def generer_udbetalingstabel(
             "mdr_brutto": mdr_brutto, "stopper_ved_alder": stopper,
             "start_alder": produkt_start_alder,
             "key": key,
+            "i_buffer": bool(produkt_i_buffer_param.get(key, True)),
         })
 
     engangsbeloeb = [p for p in produkter if p["udb_type"] == "engangsbeloeb"]
@@ -386,9 +389,13 @@ def generer_udbetalingstabel(
     else:
         atp_mdr = ATP_MDR_STANDARD
 
-    # Opdel engangsbeloeb: pre-pension (start <= pensionsalder) vs post-pension
-    pre_engangs  = [p for p in engangsbeloeb if p["start_alder"] <= pensionsalder]
-    post_engangs = [p for p in engangsbeloeb if p["start_alder"] >  pensionsalder]
+    # Opdel engangsbeloeb: pre-pension (start <= pensionsalder) vs post-pension.
+    # Kun produkter med i_buffer=True (default) indgaar i buffer-udjaevningen —
+    # fravalgte engangsbeloeb udbetales stadig (se "tabel"/"engangsbeloeb"), men
+    # bruges ikke til at udjaevne den jaevne udbetaling.
+    engangs_i_buffer = [p for p in engangsbeloeb if p.get("i_buffer", True)]
+    pre_engangs  = [p for p in engangs_i_buffer if p["start_alder"] <= pensionsalder]
+    post_engangs = [p for p in engangs_i_buffer if p["start_alder"] >  pensionsalder]
 
     def _engangs_netto(pr):
         return pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
@@ -1178,7 +1185,21 @@ def format_engine_til_llm(result: dict) -> str:
 
     # Tabel 3 — Jævn fordeling
     jaevn_mdr = result.get("jaevn_netto_mdr", 0)
-    engangs_total = sum(pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"] for pr in engang)
+
+    def _engangs_netto_pr(pr):
+        return pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
+
+    engang_i_buffer    = [pr for pr in engang if pr.get("i_buffer", True)]
+    engang_ekskluderet = [pr for pr in engang if not pr.get("i_buffer", True)]
+    engangs_total      = sum(_engangs_netto_pr(pr) for pr in engang_i_buffer)
+    ekskluderet_note = (
+        "Fravalgt som buffer (udbetales direkte det år beløbet frigives, indgår ikke i tabellen "
+        "herunder): " + ", ".join(
+            f"{pr['selskab']} – {pr['produkttype']} ({kr(_engangs_netto_pr(pr))} kr)"
+            for pr in engang_ekskluderet
+        ) + "."
+        if engang_ekskluderet else ""
+    )
     buf_skat_pct = p.get("engangs_buffer_skat_pct", 27.0)
     r_buf_pct = p["r"] * (1 - buf_skat_pct / 100) * 100
     inflation_vis = p.get("inflation_pct", 0)
@@ -1218,8 +1239,10 @@ def format_engine_til_llm(result: dict) -> str:
         real_line,
         (f"Bufferen fyldes op af engangsbeløb netto ({kr(engangs_total)} kr) og forrentes med "
          f"{r_buf_pct:.1f}% p.a. efter {buf_skat_pct:.0f}% kapitalafgift.") if engangs_total else "",
-        "",
     ]
+    if ekskluderet_note:
+        L.append(ekskluderet_note)
+    L.append("")
     if jaevn_mdr_real is not None:
         L += [
             "| Alder | Udbetalt (faktisk, kr/mdr) | Svarer til i dagens kr/mdr | Buffer i alt |",

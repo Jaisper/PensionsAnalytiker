@@ -296,6 +296,7 @@ def _engine_cache_key(session: dict) -> str:
         "kapital_skat_type":  params.get("kapital_skat_type"),
         "inflation_pct":      params.get("inflation_pct"),
         "produkt_start_aldre": json.dumps(params.get("produkt_start_aldre", {}), sort_keys=True),
+        "produkt_i_buffer":   json.dumps(params.get("produkt_i_buffer", {}), sort_keys=True),
         "loenvaekst_pct":     params.get("loenvaekst_pct"),
         "fri_formue":         params.get("fri_formue"),
         "fri_formue_skat":    params.get("fri_formue_kapital_skat_pct"),
@@ -424,6 +425,9 @@ def _get_dynamic_context(session_id: str) -> str:
             lines.append(f"- Inflation (realværdi): {params['inflation_pct']}%")
         if params.get("produkt_start_aldre"):
             lines.append(f"- Per-produkt start-aldre: {params['produkt_start_aldre']}")
+        _buf_fravalg = [k for k, v in (params.get("produkt_i_buffer") or {}).items() if v is False]
+        if _buf_fravalg:
+            lines.append(f"- Engangsbeløb fravalgt som buffer: {', '.join(_buf_fravalg)}")
         parametre_tekst = "\n".join(lines)
     else:
         parametre_tekst = "Ikke indsamlet endnu — start interview."
@@ -959,6 +963,7 @@ class Parametre(BaseModel):
     inflation_pct: float | None = None
     kirkeskat_pct: float | None = None
     produkt_start_aldre: dict | None = None
+    produkt_i_buffer: dict | None = None
     loenvaekst_pct: float | None = None
     fri_formue: float | None = None
     fri_formue_kapital_skat_pct: float | None = None
@@ -980,6 +985,7 @@ async def gem_parametre(req: Parametre):
     if req.inflation_pct is not None:        p["inflation_pct"] = req.inflation_pct
     if req.kirkeskat_pct is not None:        p["kirkeskat_pct"] = req.kirkeskat_pct
     if req.produkt_start_aldre is not None:  p["produkt_start_aldre"] = req.produkt_start_aldre
+    if req.produkt_i_buffer is not None:     p["produkt_i_buffer"] = req.produkt_i_buffer
     if req.loenvaekst_pct is not None:        p["loenvaekst_pct"] = req.loenvaekst_pct
     if req.fri_formue is not None:                    p["fri_formue"] = req.fri_formue
     if req.fri_formue_kapital_skat_pct is not None:   p["fri_formue_kapital_skat_pct"] = req.fri_formue_kapital_skat_pct
@@ -1035,6 +1041,7 @@ async def get_engine_data(session_id: str):
         "jaevn_netto_mdr": result.get("jaevn_netto_mdr", 0),
         "jaevn_tabel": result.get("jaevn_tabel", []),
         "produkt_start_aldre": params.get("produkt_start_aldre", {}),
+        "produkt_i_buffer":   params.get("produkt_i_buffer", {}),
         "fri_formue_analyse": result.get("fri_formue_analyse"),
     })
 

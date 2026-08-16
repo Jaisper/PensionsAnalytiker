@@ -877,20 +877,29 @@ Upload derefter PDF'en her øverst til højre.`,
         const hint = isEngangs
           ? `<span style="font-size:0.72rem;color:#9ab0c8;margin-left:4px">engangsbeløb</span>`
           : '';
+        const bufferToggle = isEngangs
+          ? `<label style="font-size:0.78rem;color:#4a6a80;margin-left:12px;cursor:pointer;white-space:nowrap">
+               <input type="checkbox" id="iq_buffer_${idx}" data-key="${escapeAttr(key)}" checked
+                 style="vertical-align:middle;margin-right:3px" onchange="scheduleRefresh(300, true)">
+               Indgår i buffer
+             </label>`
+          : '';
         return `<tr style="border:none">
           <td style="padding:3px 2px;font-size:0.82rem;color:#4a6a80;padding-right:10px;min-width:180px">
             ${selskab} – ${ptype}${hint}</td>
           <td style="padding:3px 0;white-space:nowrap">
             <input type="number" id="iq_start_${idx}" value="${defaultAlder}" min="60" max="85"
               data-key="${escapeAttr(key)}" data-is-engangs="${isEngangs}" style="width:70px">
-            <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">år</span>
+            <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">år</span>${bufferToggle}
           </td>
         </tr>`;
       }).join('');
       rows += `
       <tr>
         <td class="ql"><strong>4b.</strong> Udbetaling starter (per produkt)
-          <div class="qdesc">Sæt individuelle aldersgrænser per ordning — ældre kapitalpensioner kan fx udbetales fra 60 år mens du stadig arbejder</div>
+          <div class="qdesc">Sæt individuelle aldersgrænser per ordning — ældre kapitalpensioner kan fx udbetales fra 60 år mens du stadig arbejder.
+            Engangsbeløb (aldersopsparing/kapitalpension) bruges som udgangspunkt til at udjævne udbetalingen over hele pensionen (se Tabel 3) —
+            fjern fluebenet "Indgår i buffer" hvis beløbet i stedet skal udbetales direkte det år, det frigives.</div>
         </td>
         <td class="qi">
           <table style="border-collapse:collapse">${startRows}</table>
@@ -1278,15 +1287,23 @@ Upload derefter PDF'en her øverst til højre.`,
     // Per-produkt start-aldre (alle produkter)
     const loebendeKeys = computeProductKeys(profil);
     const produktStartAldre = {};
+    const produktIBuffer = {};
     if (loebendeKeys.length > 0) {
       const pensionsalderVal2 = parseInt(v('iq3')) || 65;
       const startAldreLinjer = [];
-      loebendeKeys.forEach(({key, selskab, ptype}, idx) => {
+      loebendeKeys.forEach(({key, selskab, ptype, isEngangs}, idx) => {
         const startAlder = parseInt(document.getElementById(`iq_start_${idx}`)?.value || pensionsalderVal2);
         produktStartAldre[key] = startAlder;
         startAldreLinjer.push(`${selskab} – ${ptype}: ${startAlder} år`);
+        if (isEngangs) {
+          produktIBuffer[key] = document.getElementById(`iq_buffer_${idx}`)?.checked !== false;
+        }
       });
       parts.push(`4b. Start-aldre: ${startAldreLinjer.join(', ')}`);
+      const bufferFravalg = Object.entries(produktIBuffer).filter(([, v]) => !v).map(([k]) => k);
+      if (bufferFravalg.length) {
+        parts.push(`4c. Engangsbeløb IKKE i buffer (udbetales direkte): ${bufferFravalg.join(', ')}`);
+      }
     }
 
     const kommune = v('iq7');
@@ -1382,6 +1399,7 @@ Upload derefter PDF'en her øverst til højre.`,
         inflation_pct:        inflationVal,
         kirkeskat_pct:        kirkeskatPct,
         produkt_start_aldre:  Object.keys(produktStartAldre).length ? produktStartAldre : undefined,
+        produkt_i_buffer:     Object.keys(produktIBuffer).length ? produktIBuffer : undefined,
         fri_formue:                  frieMidler > 0 ? frieMidler : undefined,
         fri_formue_kapital_skat_pct: frieMidler > 0 ? frieSkat   : undefined,
       }),
@@ -1784,6 +1802,11 @@ function _collectPayload(includePanel = false) {
     const start = parseInt(track.dataset.start);
     if (!isNaN(start)) produktStartAldre[key] = start;
   });
+  const produktIBuffer = {};
+  document.querySelectorAll('[id^="iq_buffer_"]').forEach(inp => {
+    const key = inp.dataset.key;
+    if (key) produktIBuffer[key] = inp.checked;
+  });
   const payload = { session_id: sessionId };
   if (includePanel) {
     const iq2  = document.getElementById('iq2');
@@ -1796,6 +1819,7 @@ function _collectPayload(includePanel = false) {
     if (iq4?.value)  payload.udbetaling_aar = parseInt(iq4.value);
   }
   if (Object.keys(produktStartAldre).length) payload.produkt_start_aldre = produktStartAldre;
+  if (Object.keys(produktIBuffer).length)    payload.produkt_i_buffer    = produktIBuffer;
   return payload;
 }
 

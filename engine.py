@@ -511,9 +511,15 @@ def generer_udbetalingstabel(
         _engangs_netto(pr) / (1 + r_buffer) ** (pr["start_alder"] - pensionsalder)
         for pr in post_engangs
     )
-    annuitet_faktor = sum(1 / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
+    # Voksende annuitet: den jævne udbetaling stiger nominelt med inflationen hvert år,
+    # så den er konstant i nutidskroner (ellers udhules den reelt af inflation over tid).
+    # Uden inflation (growth=1) svarer dette til den tidligere flade annuitet.
+    growth = 1 + inflation_pct
+    annuitet_faktor = sum(growth ** i / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
     # Post-pension engangsbeloeb indgår IKKE i jaevn_netto_mdr — de kan ikke leveres
     # som buffer-supplement før de ankommer; de tilføjes bufferen ved udbetalingsalderen.
+    # jaevn_netto_mdr er den nominelle udbetaling i det FØRSTE pensionsår; den vokser
+    # herefter med inflation ned gennem jaevn_tabel (se løkken nedenfor).
     jaevn_netto_mdr = (buffer_ved_pension + pv_normal) / annuitet_faktor / 12
 
     # Pre-pensionstabel: kun pre-pension engangsbeloeb vokser, ingen udbetaling
@@ -539,14 +545,17 @@ def generer_udbetalingstabel(
             "buffer_rest_real":   round(buffer / deflator) if inflation_pct > 0 else None,
         })
 
-    for row in pension_rækker:
+    for i, row in enumerate(pension_rækker):
         buffer     *= (1 + r_buffer)
         # Post-pension engangsbeloeb tilføjes bufferen i udbetalingsåret
         for pr in post_engangs:
             if row["alder"] == pr["start_alder"]:
                 buffer += _engangs_netto(pr)
-        normal_mdr  = row["total_netto_mdr"]
-        diff_mdr    = jaevn_netto_mdr - normal_mdr
+        normal_mdr       = row["total_netto_mdr"]
+        # Nominel jævn-ydelse dette pensionsår: vokser med inflationen fra første pensionsår,
+        # så resultatet er konstant i nutidskroner (jaevn_mdr_real nedenfor).
+        jaevn_mdr_nominel = jaevn_netto_mdr * growth ** i
+        diff_mdr    = jaevn_mdr_nominel - normal_mdr
         buffer_pre_draw = buffer
         buffer     -= diff_mdr * 12
         alder = row["alder"]
@@ -560,8 +569,8 @@ def generer_udbetalingstabel(
             "fase":               "pension",
             "normal_mdr":         round(normal_mdr),
             "normal_mdr_real":    round(normal_mdr / deflator) if inflation_pct > 0 else None,
-            "jaevn_mdr":          round(jaevn_netto_mdr),
-            "jaevn_mdr_real":     round(jaevn_netto_mdr / deflator) if inflation_pct > 0 else None,
+            "jaevn_mdr":          round(jaevn_mdr_nominel),
+            "jaevn_mdr_real":     round(jaevn_mdr_nominel / deflator) if inflation_pct > 0 else None,
             "fra_buffer":         round(fra_buf),
             "fra_buffer_real":    round(fra_buf / deflator) if inflation_pct > 0 else None,
             "til_buffer":         round(til_buf),
@@ -1175,14 +1184,22 @@ def format_engine_til_llm(result: dict) -> str:
     inflation_vis = p.get("inflation_pct", 0)
     use_real = inflation_vis > 0
     real_note = f" (nutidsværdi, {inflation_vis:.1f}% inflation)" if use_real else ""
+    pension_jt = [row for row in jaevn_tabel if row.get("fase") == "pension"]
+    jaevn_mdr_real = (
+        pension_jt[0]["jaevn_mdr_real"]
+        if use_real and pension_jt and pension_jt[0].get("jaevn_mdr_real") is not None
+        else None
+    )
     L += [
         "",
         f"### TABEL 3 — JÆVN FORDELING NETTO{real_note}",
-        f"Jævn netto/mdr (nominelt): **{jaevn_mdr:,.0f} kr/mdr**".replace(",", "."),
+        f"Jævn netto/mdr (nominelt, første pensionsår): **{jaevn_mdr:,.0f} kr/mdr**".replace(",", "."),
+        (f"Beløbet stiger nominelt {inflation_vis:.1f}% p.a. med inflationen, så købekraften er konstant "
+         f"**{jaevn_mdr_real:,.0f} kr/mdr** i nutidskroner gennem hele pensionsperioden.".replace(",", ".")
+         if jaevn_mdr_real is not None else ""),
         (f"Engangsbeløb netto ({engangs_total:,.0f} kr) bruges som frie midler/buffer. "
          f"Buffer forrentes med {r_buf_pct:.1f}% p.a. efter {buf_skat_pct:.0f}% kapitalafgift.").replace(",", ".") if engangs_total else "",
     ]
-    pension_jt = [row for row in jaevn_tabel if row.get("fase") == "pension"]
     if use_real:
         L += [
             "| Alder | Normal (nutidskr) | Jævn (nutidskr) | Fra buffer (nutidskr) | Buffer rest (nutidskr) |",

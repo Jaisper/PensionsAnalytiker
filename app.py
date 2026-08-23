@@ -244,13 +244,15 @@ Brug tallene fra "BEREGNET PENSIONSANALYSE" i kontekstblokken.
 
 **Tabel 2** — fast kolonnestruktur (rekonstruér ALLE rækker):
 Hvis inflation er oplyst: vis Real/mdr-kolonnen (2025-købekraft) efter Netto/mdr-kolonnen.
-| Alder | [produkt kr/år] | Folkepension kr/år | ATP kr/år | Brutto/år | Netto/mdr | Note |
+| Alder | [produkt kr/år] | Folkepension kr/år | ATP kr/år | [Engangsbeløb netto] | Brutto/år | Netto/mdr | Note |
 - Alle produktkolonner viser brutto kr/år
-- Brutto/år = sum af alle produktkolonner
-- Netto/mdr = samlet netto månedligt efter AM-bidrag, indkomstskat og topskat
+- Engangsbeløb netto-kolonnen vises KUN hvis engine-outputtet har den (der er mindst ét engangsbeløb-produkt) — ellers udelades den helt
+- Brutto/år = sum af alle produktkolonner (Folkepension + ATP) — IKKE engangsbeløb
+- Netto/mdr = samlet netto månedligt efter AM-bidrag, indkomstskat og topskat — IKKE engangsbeløb
+- Engangsbeløb-kolonnen viser beløbet KUN i det år det udbetales (—/tomt i alle andre år) og må ALDRIG lægges til Brutto/år eller Netto/mdr
 - Note: "Topskat" hvis samlet PI > 588.900 kr; "Modregning -X kr" hvis pensionstillæg reduceres; ellers "—"
 - Folkepension og ATP vises som "—" inden folkepensionsalderen
-- Engangsbeløb vises kun i Tabel 1
+- Engangsbeløb vises i BÅDE Tabel 1 (som samlet FV/netto) og Tabel 2 (år-for-år, hvornår det udbetales) — aldrig kun i Tabel 1
 
 **Skatteeksempel år 1** — vis ALTID afsnittet "SKATTEBEREGNING — EKSEMPEL ÅR 1" direkte efter Tabel 2, ord for ord som det står i engine-outputtet. Ingen udeladelser.
 

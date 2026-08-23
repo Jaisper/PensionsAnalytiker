@@ -2010,8 +2010,10 @@ function renderChart(data) {
       const jr = jaevnTabel.find(jr => jr.alder === r.alder);
       // Null linjen når buffer er negativ og ingen supplement kan leveres
       if (jr && (jr.buffer_rest || 0) < 0 && (jr.fra_buffer || 0) === 0) return null;
+      // Brug jr.jaevn_mdr (ikke det flade jaevn-tal) — niveauet springer op ved
+      // hvert nyt segment (fx når et engangsbeløb ankommer efter pensionsalder).
       if (useReal) return jr?.jaevn_mdr_real ?? null;
-      return jaevn;
+      return jr?.jaevn_mdr ?? jaevn;
     });
     datasets.push({
       type: 'line',

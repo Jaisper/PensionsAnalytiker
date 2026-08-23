@@ -523,11 +523,14 @@ def generer_udbetalingstabel(
     # Uden inflation (growth=1) svarer dette til den tidligere flade annuitet.
     growth = 1 + inflation_pct
     annuitet_faktor = sum(growth ** i / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
-    # Post-pension engangsbeloeb indgår IKKE i jaevn_netto_mdr — de kan ikke leveres
-    # som buffer-supplement før de ankommer; de tilføjes bufferen ved udbetalingsalderen.
+    # Post-pension engangsbeloeb indgår i jaevn_netto_mdr via deres nutidsværdi
+    # (pv_post_engangs) — de er en garanteret fremtidig ressource på linje med
+    # senere års overskydende løbende indkomst (som allerede indgår via pv_normal).
+    # Bufferen kan derfor være midlertidigt negativ før beløbet ankommer; den
+    # udlignes når beløbet rent faktisk tilføjes bufferen ved udbetalingsalderen.
     # jaevn_netto_mdr er den nominelle udbetaling i det FØRSTE pensionsår; den vokser
     # herefter med inflation ned gennem jaevn_tabel (se løkken nedenfor).
-    jaevn_netto_mdr = (buffer_ved_pension + pv_normal) / annuitet_faktor / 12
+    jaevn_netto_mdr = (buffer_ved_pension + pv_normal + pv_post_engangs) / annuitet_faktor / 12
 
     # Pre-pensionstabel: kun pre-pension engangsbeloeb vokser, ingen udbetaling
     jaevn_tabel = []

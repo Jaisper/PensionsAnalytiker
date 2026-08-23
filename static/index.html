@@ -455,7 +455,7 @@
 .chart-btn.primary:hover { background: #2a5080; }
 .chart-btn.secondary { background: white; border: 1px solid #c8d8e8; color: #1a3a5c; }
 .chart-btn.secondary:hover { background: #f0f5fb; }
-#chart-status { font-size: 0.76rem; color: #5578a0; }
+#chart-status { font-size: 0.82rem; color: #5578a0; font-weight: 600; }
   </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
@@ -1829,7 +1829,7 @@ async function _runEngineRefresh() {
   const includePanel = _refreshIncludePanel;
   _refreshIncludePanel = false;
   const status = document.getElementById('chart-status');
-  if (status) status.textContent = '⟳';
+  if (status) { status.style.color = '#5578a0'; status.textContent = '⟳ Genberegner…'; }
 
   await fetch('/api/parametre', {
     method: 'POST',
@@ -1842,9 +1842,13 @@ async function _runEngineRefresh() {
     _chartData = await res.json();
     renderChart(_chartData);
     renderTimeline(_chartData);
-    if (status) { status.textContent = '✓'; setTimeout(() => { if (status.textContent === '✓') status.textContent = ''; }, 1500); }
+    if (status) {
+      status.style.color = '#16a34a';
+      status.textContent = '✓ Opdateret';
+      setTimeout(() => { if (status.textContent === '✓ Opdateret') status.textContent = ''; }, 2500);
+    }
   } else {
-    if (status) { status.textContent = '⚠'; setTimeout(() => { status.textContent = ''; }, 3000); }
+    if (status) { status.style.color = '#dc2626'; status.textContent = '⚠ Fejl ved genberegning'; setTimeout(() => { status.textContent = ''; }, 4000); }
   }
 }
 
@@ -1910,8 +1914,28 @@ function renderChart(data) {
     });
   });
 
-  // Engangsudbetalinger vises IKKE som separat spike — pengene indgår allerede
-  // i "Frie midler" (fra_buffer) via buffer. Tidslinjen viser hvornår beløbet ankommer.
+  // Engangsudbetalinger der INDGÅR i buffer vises ikke som separat spike — pengene
+  // indgår allerede i "Frie midler" (fra_buffer). Tidslinjen viser hvornår de ankommer.
+  // Fravalgte engangsbeløb (i_buffer === false) udbetales derimod direkte og indgår
+  // ikke i bufferen — de skal derfor vises eksplicit, på egen skjult akse så de ikke
+  // ødelægger kr/mdr-skalaen for de løbende udbetalinger.
+  const engangsDirekte = engangs.filter(e => e.i_buffer === false);
+  engangsDirekte.forEach((prod, i) => {
+    const netto = prod.skat_type === 'A' ? Math.round((prod.fv || 0) * 0.60) : Math.round(prod.fv || 0);
+    const color = '#dc2626';
+    datasets.push({
+      type: 'bar',
+      label: `${prod.selskab} – ${prod.produkttype} (udbetalt direkte, ikke buffer)`,
+      data: tabel.map(row => row.alder === prod.start_alder ? netto : null),
+      backgroundColor: color + 'cc',
+      borderColor: color,
+      borderWidth: 1,
+      yAxisID: 'y1',
+      stack: `direkte${i}`,
+      barThickness: 14,
+      _direkteBeloeb: true,
+    });
+  });
 
   // Frie midler — pre-pension: månedligt bufferafkast; pension: supplement til jævn indkomst
   const hasBuffer = jaevnTabel.some(r => (r.fra_buffer || 0) > 0 || (r.buffer_afkast_mdr || 0) > 0);
@@ -2069,6 +2093,10 @@ function renderChart(data) {
           },
           beginAtZero: true,
         },
+        y1: {
+          display: false,
+          beginAtZero: true,
+        },
       },
       plugins: {
         legend: {
@@ -2080,6 +2108,9 @@ function renderChart(data) {
             label: ctx => {
               const v = ctx.parsed.y;
               if (!v) return null;
+              if (ctx.dataset._direkteBeloeb) {
+                return ` ${ctx.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr (engangsbeløb)`;
+              }
               return ` ${ctx.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr/mdr`;
             },
             footer: items => {
@@ -2130,8 +2161,8 @@ function renderTimeline(data) {
       ? CHART_COLORS[(produkter.length + engangs.indexOf(prod)) % CHART_COLORS.length]
       : CHART_COLORS[idx % CHART_COLORS.length];
     const startAge = prod.start_alder;
-    // Engangsbeløb: smal markør (2 år bredde) der kun kan flyttes (ingen stræk)
-    const stopAge  = isEngangs ? startAge + 2 : (prod.stopper_ved_alder ?? ageMax);
+    // Engangsbeløb: smal markør (1 år bredde) der kun kan flyttes (ingen stræk)
+    const stopAge  = isEngangs ? startAge + 1 : (prod.stopper_ved_alder ?? ageMax);
     const label    = `${prod.selskab} – ${prod.produkttype}`.slice(0, 28);
 
     const leftPct  = pct(startAge);

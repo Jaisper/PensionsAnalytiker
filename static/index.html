@@ -1337,43 +1337,7 @@ Upload derefter PDF'en her øverst til højre.`,
     if (_parametrePanelOpen) toggleParametrePanel();
 
     // ── Gem parametre i session så engine kan køre ────────────────────────────
-    // Kommuneskat-lookup (2025-satser, ca.-værdier)
-    const KOMMUNESKAT = {
-      'københavn': 23.7, 'kobenhavn': 23.7,
-      'frederiksberg': 22.9,
-      'gentofte': 22.0,
-      'lyngby': 22.9, 'lyngbytaarbæk': 22.9, 'lyngbytaarbaek': 22.9,
-      'gladsaxe': 23.8, 'gladsakse': 23.8,
-      'rudersdal': 21.9,
-      'hørsholm': 22.5, 'horsholm': 22.5,
-      'aarhus': 24.5, 'århus': 24.5,
-      'odense': 25.3,
-      'aalborg': 25.4,
-      'esbjerg': 25.6,
-      'randers': 26.0,
-      'kolding': 25.3,
-      'horsens': 25.5,
-      'vejle': 25.5,
-      'roskilde': 26.3,
-      'helsingør': 25.7, 'helsingor': 25.7,
-      'næstved': 26.4, 'naestved': 26.4,
-      'silkeborg': 24.7,
-      'viborg': 24.9,
-      'herning': 25.3,
-      'svendborg': 26.0,
-      'hillerød': 25.8, 'hillerod': 25.8,
-      'holbæk': 26.2, 'holbaek': 26.2,
-      'slagelse': 26.5,
-      'køge': 25.7, 'koge': 25.7,
-      'ringsted': 26.4,
-      'ikast': 25.5,
-      'skanderborg': 24.7,
-      'hedensted': 25.3,
-    };
-    const kommuneKey = (kommune || '').toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')  // fjern accenter
-      .replace(/[^a-z]/g, '');
-    const kommuneskatPct = KOMMUNESKAT[kommuneKey] ?? 25.0;
+    const kommuneskatPct = kommuneskatPctFor(kommune);
 
     // Saml Q6-saldi til override (aktuelle saldi overskriver PDF-saldi)
     const saldiOverrides = [];
@@ -1795,6 +1759,47 @@ let _chartData = null;
 let _chartPanelOpen = true;
 let _tlDrag = null;  // active drag state
 
+// Kommuneskat-lookup (2025-satser, ca.-værdier) — delt mellem submitInterviewForm
+// og _collectPayload, så "Opdater analyse" ikke skal gætte separat.
+const KOMMUNESKAT = {
+  'københavn': 23.7, 'kobenhavn': 23.7,
+  'frederiksberg': 22.9,
+  'gentofte': 22.0,
+  'lyngby': 22.9, 'lyngbytaarbæk': 22.9, 'lyngbytaarbaek': 22.9,
+  'gladsaxe': 23.8, 'gladsakse': 23.8,
+  'rudersdal': 21.9,
+  'hørsholm': 22.5, 'horsholm': 22.5,
+  'aarhus': 24.5, 'århus': 24.5,
+  'odense': 25.3,
+  'aalborg': 25.4,
+  'esbjerg': 25.6,
+  'randers': 26.0,
+  'kolding': 25.3,
+  'horsens': 25.5,
+  'vejle': 25.5,
+  'roskilde': 26.3,
+  'helsingør': 25.7, 'helsingor': 25.7,
+  'næstved': 26.4, 'naestved': 26.4,
+  'silkeborg': 24.7,
+  'viborg': 24.9,
+  'herning': 25.3,
+  'svendborg': 26.0,
+  'hillerød': 25.8, 'hillerod': 25.8,
+  'holbæk': 26.2, 'holbaek': 26.2,
+  'slagelse': 26.5,
+  'køge': 25.7, 'koge': 25.7,
+  'ringsted': 26.4,
+  'ikast': 25.5,
+  'skanderborg': 24.7,
+  'hedensted': 25.3,
+};
+function kommuneskatPctFor(kommune) {
+  const kommuneKey = (kommune || '').toLowerCase()
+    .normalize('NFD').replace(/\p{Diacritic}/gu, '')  // fjern accenter
+    .replace(/[^a-z]/g, '');
+  return KOMMUNESKAT[kommuneKey] ?? 25.0;
+}
+
 // ── Debounced async engine refresh ───────────────────────────────────────────
 let _refreshTimer = null;
 let _refreshPending = false;
@@ -1815,14 +1820,32 @@ function _collectPayload(includePanel = false) {
   });
   const payload = { session_id: sessionId };
   if (includePanel) {
+    // Samme felter som submitInterviewForm sender — så "Opdater analyse" er et
+    // fuldgyldigt alternativ til at genstarte interviewet, ikke kun et delvist.
+    const iq1  = document.getElementById('iq1');
     const iq2  = document.getElementById('iq2');
     const iq2b = document.getElementById('iq2b');
     const iq3  = document.getElementById('iq3');
     const iq4  = document.getElementById('iq4');
+    const iq7  = document.getElementById('iq7');
+    const iq9  = document.getElementById('iq9');
+    const iq9b = document.getElementById('iq9b');
+    if (iq1?.value)  payload.netto_indbetaling = Math.round((parseFloat(iq1.value) || 0) * 12);
     if (iq2?.value)  payload.afkast_pct    = parseFloat(iq2.value);
     if (iq2b?.value) payload.inflation_pct = parseFloat(iq2b.value);
     if (iq3?.value)  payload.pensionsalder  = parseInt(iq3.value);
     if (iq4?.value)  payload.udbetaling_aar = parseInt(iq4.value);
+    if (iq7)         payload.kommuneskat_pct = kommuneskatPctFor(iq7.value);
+    const kirkeskatChecked = document.getElementById('iq_kirkeskat')?.checked ?? true;
+    const kirkeskatInput   = document.getElementById('iq_kirkeskat_pct');
+    if (document.getElementById('iq_kirkeskat')) {
+      payload.kirkeskat_pct = kirkeskatChecked ? (parseFloat(kirkeskatInput?.value) || 0.7) : 0.0;
+    }
+    const frieMidler = parseFloat(iq9?.value);
+    if (frieMidler > 0) {
+      payload.fri_formue = frieMidler;
+      payload.fri_formue_kapital_skat_pct = parseFloat(iq9b?.value) || 28;
+    }
   }
   if (Object.keys(produktStartAldre).length) payload.produkt_start_aldre = produktStartAldre;
   if (Object.keys(produktIBuffer).length)    payload.produkt_i_buffer    = produktIBuffer;
@@ -2454,9 +2477,12 @@ function tlApplyChanges(d) {
 
 // Diagrammet opdaterer sig selv live ved træk/justering, men Tabel 1-3 er tekst
 // AI'en skrev i en tidligere chatbesked — den bliver IKKE automatisk gendannet.
-// Denne knap gemmer de aktuelle indstillinger, opdaterer diagrammet, og beder
-// derefter AI'en om en frisk Tabel 1-3 med PRÆCIS de samme indstillinger, så
-// tekst og diagram matcher igen.
+// Denne knap gemmer de aktuelle indstillinger (inkl. panel-felterne: afkast,
+// inflation, pensionsalder, udbetalingsperiode, indbetaling, kommune, kirkeskat,
+// fri formue — samme felter som "Start analyse"), opdaterer diagrammet, og
+// beder derefter AI'en om en frisk Tabel 1-3 med PRÆCIS de samme indstillinger.
+// Dækker IKKE Q5 (kapitalpension afgiftsfri) eller Q6 (multi-produkt-fordeling)
+// — ændrer du dem, skal du stadig genstarte interviewet.
 async function opdaterAnalyse() {
   if (!sessionId || isStreaming) return;
   const status = document.getElementById('chart-status');

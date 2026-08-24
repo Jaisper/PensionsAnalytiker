@@ -516,32 +516,40 @@ def generer_udbetalingstabel(
     # Uden inflation (growth=1) svarer dette til den tidligere flade annuitet.
     growth = 1 + inflation_pct
 
-    # To-trins (segmenteret) udjævning: hvert post-pension engangsbeløb starter et
-    # NYT segment med sit eget (typisk højere) jævne niveau, beregnet ud fra de
-    # ressourcer der rent faktisk er til rådighed FRA DET TIDSPUNKT (buffer +
-    # nutidsværdi af resten af periodens normale indkomst). Der "lånes" ikke mod
-    # penge der endnu ikke er modtaget — bufferen forbliver ikke-negativ.
-    segment_start_indices = sorted({
-        pr["start_alder"] - pensionsalder for pr in post_engangs
-        if 0 < pr["start_alder"] - pensionsalder < n_aar
-    })
+    # Grundniveau: al løbende/skemalagt indkomst (ratepensioner, livsvarig, folkepension,
+    # ATP) udjævnes over HELE perioden i ét hug — uafhængigt af hvor engangsbeløb
+    # placeres. Et kort tidligt vindue med usædvanligt høj indkomst opblæser derfor
+    # ikke kunstigt niveauet for lige netop de år (hvilket tidligere kunne give et
+    # voldsomt fald igen ved næste engangsbeløb, selvom der reelt kom MERE kapital).
+    pv_normal = sum(
+        r["total_netto_aar"] / (1 + r_buffer) ** (i + 1)
+        for i, r in enumerate(pension_rækker)
+    )
+    annuitet_faktor = sum(growth ** i / (1 + r_buffer) ** (i + 1) for i in range(n_aar))
+    grund_niveau_mdr = (buffer_ved_pension + pv_normal) / annuitet_faktor / 12
 
-    def _segment_niveau_mdr(buffer_ved_segment_start: float, seg_start: int) -> float:
-        seg_end = next((b for b in segment_start_indices if b > seg_start), n_aar)
-        seg_rows = pension_rækker[seg_start:seg_end]
-        pv_normal_seg = sum(
-            r["total_netto_aar"] / (1 + r_buffer) ** (li + 1)
-            for li, r in enumerate(seg_rows)
+    # Hvert post-pension engangsbeløb lægger et SELVSTÆNDIGT tillæg oveni grundniveauet
+    # fra det år det ankommer — beregnet som sin egen annuitet over de resterende år.
+    # Niveauet kan derfor kun stige (aldrig falde) når et nyt engangsbeløb lander, og
+    # der lånes stadig ikke mod et beløb før det rent faktisk er modtaget.
+    def _tillaeg_niveau_mdr(engangs_netto: float, ankomst_idx: int) -> float:
+        rest_aar = n_aar - ankomst_idx
+        if rest_aar <= 0 or engangs_netto <= 0:
+            return 0.0
+        tillaeg_faktor = sum(
+            growth ** li / (1 + r_buffer) ** (li + 1)
+            for li in range(rest_aar)
         )
-        annuitet_faktor_seg = sum(
-            growth ** (seg_start + li) / (1 + r_buffer) ** (li + 1)
-            for li in range(len(seg_rows))
-        )
-        return (buffer_ved_segment_start + pv_normal_seg) / annuitet_faktor_seg / 12
+        return engangs_netto / tillaeg_faktor / 12 if tillaeg_faktor > 0 else 0.0
 
-    # jaevn_netto_mdr er niveauet i det FØRSTE pensionsår (segment 0); det vokser
-    # herefter med inflation og springer op ved hvert nyt segment (se løkken nedenfor).
-    jaevn_netto_mdr = _segment_niveau_mdr(buffer_ved_pension, 0)
+    tillaeg: list[tuple[int, float]] = []  # (ankomst_idx, niveau_mdr)
+    for pr in post_engangs:
+        idx = pr["start_alder"] - pensionsalder
+        if 0 < idx < n_aar:
+            tillaeg.append((idx, _tillaeg_niveau_mdr(_engangs_netto(pr), idx)))
+
+    # jaevn_netto_mdr er niveauet i det FØRSTE pensionsår, før noget tillæg er låst op.
+    jaevn_netto_mdr = grund_niveau_mdr
 
     # Pre-pensionstabel: kun pre-pension engangsbeloeb vokser, ingen udbetaling
     jaevn_tabel = []
@@ -566,20 +574,24 @@ def generer_udbetalingstabel(
             "buffer_rest_real":   round(buffer / deflator) if inflation_pct > 0 else None,
         })
 
-    niveau_mdr = jaevn_netto_mdr
+    aktive_tillaeg: list[tuple[int, float]] = []  # tillæg der er "låst op" til og med denne række
     for i, row in enumerate(pension_rækker):
-        if i in segment_start_indices:
-            # Engangsbeløb ankommer ved starten af dette segment — tilføjes bufferen
-            # (uden ekstra vækst) FØR niveauet for resten af perioden genberegnes.
-            for pr in post_engangs:
-                if row["alder"] == pr["start_alder"]:
-                    buffer += _engangs_netto(pr)
-            niveau_mdr = _segment_niveau_mdr(buffer, i)
+        # Engangsbeløb der ankommer denne alder: tilføjes bufferen, og deres tillæg
+        # aktiveres fra og med denne række.
+        for pr in post_engangs:
+            if row["alder"] == pr["start_alder"]:
+                buffer += _engangs_netto(pr)
+        for idx, tillaeg_mdr in tillaeg:
+            if idx == i:
+                aktive_tillaeg.append((idx, tillaeg_mdr))
         buffer *= (1 + r_buffer)
         normal_mdr       = row["total_netto_mdr"]
-        # Nominel jævn-ydelse dette pensionsår: vokser med inflationen fra første pensionsår,
-        # så resultatet er konstant i nutidskroner (jaevn_mdr_real nedenfor) inden for segmentet.
-        jaevn_mdr_nominel = niveau_mdr * growth ** i
+        # Nominel jævn-ydelse dette pensionsår: grundniveau + evt. aktive tillæg,
+        # hver vokser nominelt med inflationen fra deres eget startår, så resultatet
+        # er konstant i nutidskroner (jaevn_mdr_real nedenfor).
+        jaevn_mdr_nominel = grund_niveau_mdr * growth ** i + sum(
+            t_mdr * growth ** (i - idx) for idx, t_mdr in aktive_tillaeg
+        )
         diff_mdr    = jaevn_mdr_nominel - normal_mdr
         buffer_pre_draw = buffer
         buffer     -= diff_mdr * 12

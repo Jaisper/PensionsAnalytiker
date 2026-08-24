@@ -1923,7 +1923,12 @@ function renderChart(data) {
   const labels       = tabel.map(r => r.alder);
   const jaevnTabel   = data.jaevn_tabel || [];
   const inflationPct = data.parametre?.inflation_pct || 0;
-  const useReal      = inflationPct > 0 && jaevnTabel.length > 0 && jaevnTabel[0].jaevn_mdr_real != null;
+  // Brug en "pension"-fase-række til at afgøre om real-tal findes — jaevnTabel[0]
+  // er en "pre_pension"-række (og har derfor ALTID jaevn_mdr_real=null) så snart
+  // et engangsbeløb ligger før pensionsalderen, hvilket ellers slog nutidskr-
+  // visningen fra ved en fejltagelse.
+  const useReal      = inflationPct > 0 &&
+    jaevnTabel.some(r => r.fase === 'pension' && r.jaevn_mdr_real != null);
   // Søjlerne viser de FAKTISK udbetalte (nominelle) kroner — de stiger med
   // inflationen over tid, ligesom "Udbetalt (faktisk, kr/mdr)" i Tabel 3. Den
   // stiplede linje viser derimod nutidskroner (konstant købekraft) som reference

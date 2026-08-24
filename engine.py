@@ -919,7 +919,11 @@ def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder:
     alder     = row["alder"]
     har_fp    = alder >= fp_alder
     kom_pct   = parametre.get("kommuneskat_pct", 25.0)
-    basis_pct = (BUNDSKAT + kom_pct / 100 + KIRKESKAT_DEFAULT) * 100
+    # Brug den faktisk konfigurerede kirkeskat — ikke standardværdien. Ellers
+    # regner eksemplet forkert (uden at vise det) for alle der har en anden
+    # kirkeskat-sats end 0,7%, eller har fravalgt kirkeskat helt.
+    kirke_pct = parametre.get("kirkeskat_pct", KIRKESKAT_DEFAULT * 100) / 100
+    basis_pct = (BUNDSKAT + kom_pct / 100 + kirke_pct) * 100
 
     def kr(v: float) -> str:
         return f"{v:,.0f}".replace(",", ".")
@@ -950,7 +954,7 @@ def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder:
     pi_med_am       = s_brutto_med_am * (1 - AM_BIDRAG)
     pi_uden_am      = fp_b + atp_b
     total_pi        = pi_med_am + pi_uden_am
-    basis_skat      = total_pi * (BUNDSKAT + kom_pct / 100 + KIRKESKAT_DEFAULT)
+    basis_skat      = total_pi * (BUNDSKAT + kom_pct / 100 + kirke_pct)
 
     topskat = 0.0
     over_top = max(0.0, total_pi - TOPSKAT_GRAENSE_PI)

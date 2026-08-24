@@ -531,7 +531,7 @@
     </div>
     <div class="tl-wrap" id="timeline-container"></div>
     <div class="chart-actions">
-      <button class="chart-btn primary" onclick="refreshChartFromTimeline()">&#x21BB; Genberegn</button>
+      <button class="chart-btn primary" onclick="opdaterAnalyse()">&#x21BB; Opdater analyse (Tabel 1-3)</button>
       <button class="chart-btn secondary" onclick="gemAnalyse()">&#x2193; Gem analyse</button>
       <span id="chart-status"></span>
     </div>
@@ -872,10 +872,22 @@ Upload derefter PDF'en her øverst til højre.`,
     const _alleKeys = computeProductKeys(profil);
     if (_alleKeys.length > 0) {
       const defaultAlder = Math.max(tidligst, 62);
-      const startRows = _alleKeys.map(({key, selskab, ptype, isEngangs}, idx) => {
-        // Kapital/aldersopsparing: brug profil-info om tidligste udbetaling hvis tilgængeligt
+      const startRows = _alleKeys.map(({key, selskab, ptype, prod, isEngangs}, idx) => {
+        // Alle produkter starter som udgangspunkt ved samme (tidligst mulige) alder,
+        // så det er let at se "alt fra X år" — juster derefter individuelt per produkt.
+        // Selskabets nuværende plan (fra rapporten) er kun et hint, ikke en beslutning —
+        // den overskriver ikke startværdien.
+        const startAlder = defaultAlder;
+        const planAlder = prod?.aftalt_udbetalingsalder;
         const hint = isEngangs
           ? `<span style="font-size:0.72rem;color:#9ab0c8;margin-left:4px">engangsbeløb</span>`
+          : '';
+        const planHint = (planAlder && planAlder !== startAlder)
+          ? `<span style="font-size:0.72rem;color:#8a9aa8;margin-left:4px;cursor:pointer"
+               title="Selskabets nuværende plan er ${planAlder} år — klik for at bruge den"
+               onclick="const el=document.getElementById('iq_start_${idx}'); el.value=${planAlder}; el.dataset.touched='1'; scheduleRefresh(300, true);">
+               (selskabets plan: ${planAlder} år)
+             </span>`
           : '';
         const bufferToggle = isEngangs
           ? `<label style="font-size:0.78rem;color:#4a6a80;margin-left:12px;cursor:pointer;white-space:nowrap">
@@ -888,9 +900,10 @@ Upload derefter PDF'en her øverst til højre.`,
           <td style="padding:3px 2px;font-size:0.82rem;color:#4a6a80;padding-right:10px;min-width:180px">
             ${selskab} – ${ptype}${hint}</td>
           <td style="padding:3px 0;white-space:nowrap">
-            <input type="number" id="iq_start_${idx}" value="${defaultAlder}" min="60" max="85"
-              data-key="${escapeAttr(key)}" data-is-engangs="${isEngangs}" style="width:70px">
-            <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">år</span>${bufferToggle}
+            <input type="number" id="iq_start_${idx}" value="${startAlder}" min="60" max="85"
+              data-key="${escapeAttr(key)}" data-is-engangs="${isEngangs}"
+              oninput="this.dataset.touched='1'" style="width:70px">
+            <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">år</span>${planHint}${bufferToggle}
           </td>
         </tr>`;
       }).join('');
@@ -1139,18 +1152,11 @@ Upload derefter PDF'en her øverst til højre.`,
   function autoFillStartAldre() {
     const pa = parseInt(document.getElementById('iq3')?.value || '0');
     if (!pa) return;
+    // Synkroniser KUN felter brugeren ikke selv har rørt (data-touched sættes af
+    // input-eventet på feltet) — undgår at overskrive et bevidst valg, og undgår
+    // gæt-baseret "er det stadig standardværdien"-logik.
     document.querySelectorAll('[id^="iq_start_"]').forEach(inp => {
-      const cur = parseInt(inp.value || '0');
-      // Auto-fill loebende produkter til pensionsalder hvis de ikke er sat lavere bevidst.
-      // Engangs-produkter (kapital/aldersopsparing) auto-fills KUN hvis de er > pensionsalder.
-      const isEngangs = inp.dataset.isEngangs === 'true';
-      if (!cur || cur === (inp._lastPa || pa)) {
-        inp.value = pa;
-      } else if (!isEngangs && cur < pa) {
-        // Loebende kan ikke starte før pensionsalder (uden explicit ønske)
-        // — behold brugerens valg
-      }
-      inp._lastPa = pa;
+      if (!inp.dataset.touched) inp.value = pa;
     });
   }
 
@@ -1895,6 +1901,10 @@ function renderChart(data) {
   const jaevnTabel   = data.jaevn_tabel || [];
   const inflationPct = data.parametre?.inflation_pct || 0;
   const useReal      = inflationPct > 0 && jaevnTabel.length > 0 && jaevnTabel[0].jaevn_mdr_real != null;
+  // Søjlerne viser de FAKTISK udbetalte (nominelle) kroner — de stiger med
+  // inflationen over tid, ligesom "Udbetalt (faktisk, kr/mdr)" i Tabel 3. Den
+  // stiplede linje viser derimod nutidskroner (konstant købekraft) som reference
+  // — de to matcher derfor kun i det første pensionsår, med vilje.
 
   const datasets = [];
   produkter.forEach((prod, idx) => {
@@ -1915,10 +1925,17 @@ function renderChart(data) {
   });
 
   // Engangsudbetalinger der INDGÅR i buffer vises ikke som separat spike — pengene
-  // indgår allerede i "Frie midler" (fra_buffer). Tidslinjen viser hvornår de ankommer.
-  // Fravalgte engangsbeløb (i_buffer === false) udbetales derimod direkte og indgår
-  // ikke i bufferen — de skal derfor vises eksplicit, på egen skjult akse så de ikke
-  // ødelægger kr/mdr-skalaen for de løbende udbetalinger.
+  // indgår allerede i "Frie midler" (fra_buffer). Fravalgte engangsbeløb (i_buffer
+  // === false) udbetales derimod direkte og indgår ikke i bufferen.
+  // Et engangsbeløb (kr, éngangs) kan ikke sammenlignes højde-for-højde med de
+  // løbende kr/mdr-søjler — så vi tegner det IKKE proportionalt. Det vises som en
+  // lille, fast markør PÅ SAMME AKSE som resten (ikke en separat akse — to akser
+  // med hvert sit nulpunkt kan ikke visuelt aligne når den ene har negative
+  // værdier, hvilket fik markøren til at se ud som om den gik langt i minus).
+  // Højden er en fast brøkdel af den typiske månedlige søjlehøjde; det reelle
+  // beløb står i tooltippen (_trueValues), ikke i søjlens højde.
+  const maxNettoMdr = Math.max(1, ...tabel.map(r => r.total_netto_mdr || 0));
+  const MARKØR_HØJDE = Math.max(500, Math.round(maxNettoMdr * 0.08));
   const engangsDirekte = engangs.filter(e => e.i_buffer === false);
   engangsDirekte.forEach((prod, i) => {
     const netto = prod.skat_type === 'A' ? Math.round((prod.fv || 0) * 0.60) : Math.round(prod.fv || 0);
@@ -1926,30 +1943,51 @@ function renderChart(data) {
     datasets.push({
       type: 'bar',
       label: `${prod.selskab} – ${prod.produkttype} (udbetalt direkte, ikke buffer)`,
-      data: tabel.map(row => row.alder === prod.start_alder ? netto : null),
+      data: tabel.map(row => row.alder === prod.start_alder ? MARKØR_HØJDE : null),
+      _trueValues: tabel.map(row => row.alder === prod.start_alder ? netto : null),
       backgroundColor: color + 'cc',
       borderColor: color,
       borderWidth: 1,
-      yAxisID: 'y1',
       stack: `direkte${i}`,
       barThickness: 14,
       _direkteBeloeb: true,
     });
   });
+  // Engangsbeløb der INDGÅR i buffer bliver ikke til en synlig indkomst-spike (de
+  // smeltes ind i "Frie midler"), men uden nogen markør ser de ud til at forsvinde
+  // sporløst. Vis derfor også en (anderledes farvet) fast markør for dem, ved det
+  // år beløbet rent faktisk lægges i bufferen.
+  const engangsBuffer = engangs.filter(e => e.i_buffer !== false);
+  engangsBuffer.forEach((prod, i) => {
+    const netto = prod.skat_type === 'A' ? Math.round((prod.fv || 0) * 0.60) : Math.round(prod.fv || 0);
+    const color = '#7c3aed';
+    datasets.push({
+      type: 'bar',
+      label: `${prod.selskab} – ${prod.produkttype} (tilføjet til buffer)`,
+      data: tabel.map(row => row.alder === prod.start_alder ? MARKØR_HØJDE : null),
+      _trueValues: tabel.map(row => row.alder === prod.start_alder ? netto : null),
+      backgroundColor: color + 'cc',
+      borderColor: color,
+      borderWidth: 1,
+      stack: `buffertilskud${i}`,
+      barThickness: 14,
+      _direkteBeloeb: true,
+    });
+  });
 
-  // Frie midler — pre-pension: månedligt bufferafkast; pension: supplement til jævn indkomst
+  // Frie midler — pre-pension: månedligt bufferafkast; pension: supplement til jævn indkomst.
+  // Nominelt (faktisk udbetalt kr/mdr), ligesom de øvrige søjler.
   const hasBuffer = jaevnTabel.some(r => (r.fra_buffer || 0) > 0 || (r.buffer_afkast_mdr || 0) > 0);
   if (hasBuffer) {
-    const supplKey = useReal ? 'fra_buffer_real' : 'fra_buffer';
     datasets.push({
-      label: useReal ? 'Frie midler (nutidskr)' : 'Frie midler',
+      label: 'Frie midler',
       data: tabel.map(row => {
         const jr = jaevnTabel.find(r => r.alder === row.alder);
         if (!jr) return 0;
         // Pre-pension: vis bufferens månedlige afkast; pension: vis supplement
         return jr.fase === 'pre_pension'
           ? (jr.buffer_afkast_mdr || 0)
-          : (jr[supplKey] || 0);
+          : (jr.fra_buffer || 0);
       }),
       backgroundColor: '#a78bfacc',
       borderColor: '#a78bfa',
@@ -1957,7 +1995,7 @@ function renderChart(data) {
       stack: 'a',
     });
     // Overskudsår (pension > jævn niveau) under x-aksen
-    if (!useReal && jaevnTabel.some(r => (r.til_buffer || 0) > 0)) {
+    if (jaevnTabel.some(r => (r.til_buffer || 0) > 0)) {
       datasets.push({
         label: 'Til buffer (overskud)',
         data: tabel.map(row => {
@@ -1997,6 +2035,27 @@ function renderChart(data) {
     borderColor: ATP_COLOR,
     borderWidth: 1,
     stack: 'a',
+  });
+
+  // Overskudsår: den rå indkomst (stack 'a') er højere end det jævne (nominelle)
+  // niveau, og overskuddet ryger i bufferen ("Til buffer"-søjlen under aksen) —
+  // du får faktisk kun det jævne beløb udbetalt. Skaler derfor stack 'a' ned til
+  // jaevn-niveauet (nominelt — samme tal som "Udbetalt (faktisk)" i Tabel 3) i de
+  // år, så de synlige søjler matcher hvad der reelt bliver udbetalt.
+  tabel.forEach((row, i) => {
+    const jr = jaevnTabel.find(r => r.alder === row.alder);
+    if (!jr) return;
+    const tilBuf = jr.til_buffer || 0;
+    if (tilBuf <= 0) return;
+    const jaevnMaal = jr.jaevn_mdr;
+    const raat = jaevnMaal + tilBuf;
+    if (raat <= 0) return;
+    const skala = jaevnMaal / raat;
+    datasets.forEach(ds => {
+      if (ds.stack === 'a' && typeof ds.data[i] === 'number') {
+        ds.data[i] = Math.round(ds.data[i] * skala);
+      }
+    });
   });
 
   // Jaevn linje — brug real-værdier (nutidspenge) hvis inflation > 0
@@ -2095,10 +2154,6 @@ function renderChart(data) {
           },
           beginAtZero: true,
         },
-        y1: {
-          display: false,
-          beginAtZero: true,
-        },
       },
       plugins: {
         legend: {
@@ -2108,11 +2163,13 @@ function renderChart(data) {
         tooltip: {
           callbacks: {
             label: ctx => {
+              if (ctx.dataset._direkteBeloeb) {
+                const v = ctx.dataset._trueValues?.[ctx.dataIndex];
+                if (!v) return null;
+                return ` ${ctx.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr (engangsbeløb — ikke til skala)`;
+              }
               const v = ctx.parsed.y;
               if (!v) return null;
-              if (ctx.dataset._direkteBeloeb) {
-                return ` ${ctx.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr (engangsbeløb)`;
-              }
               return ` ${ctx.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr/mdr`;
             },
             footer: items => {
@@ -2395,8 +2452,33 @@ function tlApplyChanges(d) {
   scheduleRefresh(0);  // øjeblikkelig efter drag — ingen debounce-forsinkelse
 }
 
-function refreshChartFromTimeline() {
-  scheduleRefresh(0, true);  // Genberegn-knap: inkluder panel-parametre
+// Diagrammet opdaterer sig selv live ved træk/justering, men Tabel 1-3 er tekst
+// AI'en skrev i en tidligere chatbesked — den bliver IKKE automatisk gendannet.
+// Denne knap gemmer de aktuelle indstillinger, opdaterer diagrammet, og beder
+// derefter AI'en om en frisk Tabel 1-3 med PRÆCIS de samme indstillinger, så
+// tekst og diagram matcher igen.
+async function opdaterAnalyse() {
+  if (!sessionId || isStreaming) return;
+  const status = document.getElementById('chart-status');
+  if (status) { status.style.color = '#5578a0'; status.textContent = '⟳ Opdaterer analyse…'; }
+
+  await fetch('/api/parametre', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(_collectPayload(true)),
+  }).catch(() => null);
+
+  const res = await fetch(`/api/session/${sessionId}/engine`).catch(() => null);
+  if (res?.ok) {
+    _chartData = await res.json();
+    renderChart(_chartData);
+    renderTimeline(_chartData);
+  }
+  if (status) status.textContent = '';
+
+  await sendSystemTrigger(
+    'Opdater den komplette pensionsanalyse (Tabel 1-3) med de nuværende indstillinger fra diagrammet/panelet ovenfor.'
+  );
 }
 
 function gemAnalyse() {

@@ -244,9 +244,12 @@ Brug tallene fra "BEREGNET PENSIONSANALYSE" i kontekstblokken.
 
 **Tabel 2** — fast kolonnestruktur (rekonstruér ALLE rækker):
 Hvis inflation er oplyst: vis Real/mdr-kolonnen (2025-købekraft) efter Netto/mdr-kolonnen.
-| Alder | [produkt kr/år] | Folkepension kr/år | ATP kr/år | [Engangsbeløb netto] | Brutto/år | Netto/mdr | Note |
+| Alder | [produkt kr/år] | Folkepension kr/år | ATP kr/år | Brutto/år | Netto/mdr | [Real/mdr] | [Engangsbeløb netto] | Note |
 - Alle produktkolonner viser brutto kr/år
 - Engangsbeløb netto-kolonnen vises KUN hvis engine-outputtet har den (der er mindst ét engangsbeløb-produkt) — ellers udelades den helt
+- Engangsbeløb netto ligger sidst, lige før Note — IKKE mellem produktkolonnerne og Brutto/år.
+  Det er bevidst: Brutto/år og Netto/mdr ligger dermed lige efter produktkolonnerne, så det er
+  tydeligt at de kun summerer produkterne + Folkepension + ATP — IKKE engangsbeløbet.
 - Brutto/år = sum af alle produktkolonner (Folkepension + ATP) — IKKE engangsbeløb
 - Netto/mdr = samlet netto månedligt efter AM-bidrag, indkomstskat og topskat — IKKE engangsbeløb
 - Engangsbeløb-kolonnen viser beløbet KUN i det år det udbetales (—/tomt i alle andre år) og må ALDRIG lægges til Brutto/år eller Netto/mdr

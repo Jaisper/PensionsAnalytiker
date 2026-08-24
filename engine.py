@@ -599,6 +599,7 @@ def generer_udbetalingstabel(
             "fra_buffer":         round(fra_buf),
             "fra_buffer_real":    round(fra_buf / deflator) if inflation_pct > 0 else None,
             "til_buffer":         round(til_buf),
+            "til_buffer_real":    round(til_buf / deflator) if inflation_pct > 0 else None,
             "buffer_afkast_mdr":  0,
             "buffer_rest":        round(buffer),
             "buffer_rest_real":   round(buffer / deflator) if inflation_pct > 0 else None,
@@ -1096,8 +1097,11 @@ def format_engine_til_llm(result: dict) -> str:
     header_cols  = " | ".join(f"{l} kr/år" for l in alle_labels)
     real_col     = " | Real/mdr" if has_real else ""
     engangs_hdr  = " | Engangsbeløb netto" if has_engangs else ""
-    header = f"| Alder | {header_cols}{engangs_hdr} | Brutto/år | Netto/mdr{real_col} | Note |"
-    sep    = "|---:|" + "|---:|" * n_prod_cols + ("|---:|" if has_engangs else "") + "---:|---:" + ("|---:" if has_real else "") + "|---|"
+    # Engangsbeløb-kolonnen ligger sidst (lige før Note) — så Brutto/år og Netto/mdr
+    # ligger lige efter produktkolonnerne, og det er tydeligt at de IKKE summerer
+    # engangsbeløbet med.
+    header = f"| Alder | {header_cols} | Brutto/år | Netto/mdr{real_col}{engangs_hdr} | Note |"
+    sep    = "|---:|" + "|---:|" * n_prod_cols + "---:|---:" + ("|---:" if has_real else "") + ("|---:" if has_engangs else "") + "|---|"
 
     fp_idx      = next((i for i, r in enumerate(tabel) if r["alder"] >= fp_alder), None)
     pension_idx = next((i for i, r in enumerate(tabel) if r["alder"] >= p["pensionsalder"]), 0)
@@ -1121,14 +1125,15 @@ def format_engine_til_llm(result: dict) -> str:
     L += [
         f"### TABEL 2 — ÅR-FOR-ÅR BRUTTO/NETTO (uddrag — LLM rekonstruerer alle {len(tabel)} rækker)",
         f"Kolonner: Alder | {' | '.join(alle_labels)} | Brutto/år | Netto/mdr"
-        + (" | Real/mdr" if has_real else "") + " | Note",
+        + (" | Real/mdr" if has_real else "") + (" | Engangsbeløb netto" if has_engangs else "") + " | Note",
         header, sep,
     ]
 
     prev = -1
     for i in vis_idx:
         if i > prev + 1:
-            L.append("| … | " + " | ".join(["…"] * n_prod_cols) + " | … | …" + (" | …" if has_real else "") + " | … |")
+            L.append("| … | " + " | ".join(["…"] * n_prod_cols) + " | … | …"
+                      + (" | …" if has_real else "") + (" | …" if has_engangs else "") + " | … |")
         row = tabel[i]
         har_fp = row["alder"] >= fp_alder
 
@@ -1167,9 +1172,9 @@ def format_engine_til_llm(result: dict) -> str:
 
         L.append(
             f"| {row['alder']} | " + " | ".join(prod_cols)
-            + engangs_col_val
             + f" | {brutto_aar:,.0f} | {row['total_netto_mdr']:,.0f}".replace(",", ".")
             + real_col_val
+            + engangs_col_val
             + f" | {note} |"
         )
         prev = i

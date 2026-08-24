@@ -41,7 +41,8 @@ Return exactly this structure:
       "balance": null,
       "annual_contribution": null,
       "insurance_only": false,
-      "earliest_payout_age": null
+      "earliest_payout_age": null,
+      "agreed_payout_age": null
     }
   ],
   "death_cover": null,
@@ -106,6 +107,17 @@ agreements[].earliest_payout_age
   Each agreement can have a DIFFERENT age (e.g. old contracts from before 2007
   may allow payout from age 60, newer ones from 62 or 63).
   Set null if not stated for this agreement.
+
+agreements[].agreed_payout_age
+  The age this SPECIFIC agreement is actually SCHEDULED/AGREED to start paying
+  out — this is a real commitment, distinct from earliest_payout_age (the
+  regulatory floor). Find it on the "Pension - flere oplysninger" page, under
+  "Udbetaling" for that agreement. Look for phrases like:
+    "Det er aftalt, at pensionen kommer til udbetaling [ved/fra] X år"
+    "Udbetales fra X år"
+  Each agreement can have a DIFFERENT agreed age (e.g. one may start at 65,
+  another at 70). Set null if the report does not state an agreed age for
+  this agreement (do NOT fall back to earliest_payout_age).
 
 earliest_retirement_age
   The LOWEST earliest_payout_age across all agreements.
@@ -217,13 +229,36 @@ async def _extract_with_llm(text: str) -> dict:
     raise last_exc
 
 
+_PDF_CACHE_DIR = Path(__file__).parent / ".pdf_cache"
+
+
+def _pdf_cache_path(pdf_path: str) -> Path:
+    import hashlib
+    with open(pdf_path, "rb") as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    return _PDF_CACHE_DIR / f"{digest}.json"
+
+
 async def parse_pensionsinfo_pdf(pdf_path: str) -> dict:
-    """Udtrækker og strukturerer data fra en PensionsInfo PDF."""
+    """
+    Udtrækker og strukturerer data fra en PensionsInfo PDF.
+    Cacher resultatet på filens indhold (SHA-256), så gentagne uploads af samme
+    PDF under udvikling/test ikke genudløser en ny LLM-ekstraktion.
+    Slet .pdf_cache/ for at tvinge en frisk ekstraktion.
+    """
+    cache_path = _pdf_cache_path(pdf_path)
+    if cache_path.exists():
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+
     pages = await asyncio.to_thread(_extract_pages, pdf_path)
     relevant = _filter_relevant_pages(pages)
     raw = await _extract_with_llm(relevant)
     full_text = "\n\n".join(f"=== SIDE {i+1} ===\n{p}" for i, p in enumerate(pages) if p)
-    return _to_legacy_format(raw, full_text)
+    profil = _to_legacy_format(raw, full_text)
+
+    _PDF_CACHE_DIR.mkdir(exist_ok=True)
+    cache_path.write_text(json.dumps(profil, ensure_ascii=False), encoding="utf-8")
+    return profil
 
 
 def _fv_fra_payout(ptype: str, aldersperioder: dict, r: float = 0.04) -> float | None:
@@ -400,15 +435,18 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
         ptype = best_ptype(nr, prv, raw_type)
         epa = a.get("earliest_payout_age")
         epa_int = int(epa) if epa and 55 <= int(epa) <= 75 else None
+        apa = a.get("agreed_payout_age")
+        apa_int = int(apa) if apa and 55 <= int(apa) <= 85 else None
         ordninger.append({
-            "aftalenr":              nr,
-            "selskab":               prv,
-            "produkttype":           ptype,
-            "aarlig_indbetaling":    to_int(a.get("annual_contribution")) or 0,
-            "opsparing":             to_int(a.get("balance")),
-            "kun_forsikring":        bool(a.get("insurance_only", False)),
-            "investeringsform":      raw_type,
-            "tidligste_udbetaling":  epa_int,
+            "aftalenr":                nr,
+            "selskab":                 prv,
+            "produkttype":             ptype,
+            "aarlig_indbetaling":      to_int(a.get("annual_contribution")) or 0,
+            "opsparing":               to_int(a.get("balance")),
+            "kun_forsikring":          bool(a.get("insurance_only", False)),
+            "investeringsform":        raw_type,
+            "tidligste_udbetaling":    epa_int,
+            "aftalt_udbetalingsalder": apa_int,
         })
 
     opsparing_total: dict[str, int] = {}
@@ -425,17 +463,25 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
         "gruppeliv":               0,
     }
 
+    aftalt_alder_by_aftale = {
+        (o["aftalenr"], o["selskab"]): o["aftalt_udbetalingsalder"]
+        for o in ordninger if o["aftalt_udbetalingsalder"]
+    }
+
     pensionsprodukter = []
     for p in raw.get("payout_products", []):
         ams = p.get("amounts") or {}
+        nr  = str(p.get("number") or "")
+        prv = p.get("provider", "")
         pensionsprodukter.append({
-            "selskab":        p.get("provider", ""),
-            "aftalenr":       str(p.get("number") or ""),
-            "produkttype":    p.get("type", ""),
-            "skat_type":      p.get("tax", ""),
-            "aldersperioder": {k: int(v) for k, v in ams.items() if v},
-            "trend":          None,
-            "opsparing":      to_int(p.get("current_balance")),
+            "selskab":                p.get("provider", ""),
+            "aftalenr":               nr,
+            "produkttype":            p.get("type", ""),
+            "skat_type":              p.get("tax", ""),
+            "aldersperioder":         {k: int(v) for k, v in ams.items() if v},
+            "trend":                  None,
+            "opsparing":              to_int(p.get("current_balance")),
+            "aftalt_udbetalingsalder": aftalt_alder_by_aftale.get((nr, prv)),
         })
 
     per_aftale_ages = [o["tidligste_udbetaling"] for o in ordninger if o["tidligste_udbetaling"]]

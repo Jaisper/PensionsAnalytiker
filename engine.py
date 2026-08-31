@@ -353,6 +353,12 @@ def generer_udbetalingstabel(
     produkt_start_aldre_param: dict[str, int] = parametre.get("produkt_start_aldre", {})
     # Per-produkt buffer-deltagelse: {key: bool} — engangsbeloeb indgaar som buffer med mindre fravalgt
     produkt_i_buffer_param: dict[str, bool] = parametre.get("produkt_i_buffer", {})
+    # Per-produkt udbetalingsperiode-override (kun ratepension) — bruges af
+    # sekventeringsoptimeringen (Fase C) til at afprøve andre periodelængder
+    # end den PDF-udledte. Uden override: uændret opførsel som før Fase C.
+    produkt_udb_aar_param: dict[str, int] = parametre.get("produkt_udb_aar", {})
+    # Folkepensions-opsættelse (Fase C) — udskyder FP mod et forenklet ventetillæg.
+    folkepension_opsaettelse_aar = int(parametre.get("folkepension_opsaettelse_aar", 0) or 0)
 
     # Genbruger det eksisterende "fri_formue"-felt til formuegrænsen for
     # ældrecheck/varmetillæg — det er allerede "likvid opsparing ud over pension".
@@ -498,7 +504,8 @@ def generer_udbetalingstabel(
             mdr_brutto = beregn_maanedlig_annuitet(fv, r, udb_aar)
             stopper    = None
         else:   # ratepension
-            udb_aar    = _udled_udbetalingsaar(perioder) or 15
+            override_udb_aar = produkt_udb_aar_param.get(key)
+            udb_aar    = int(override_udb_aar) if override_udb_aar is not None else (_udled_udbetalingsaar(perioder) or 15)
             udb_type   = "rate"
             mdr_brutto = beregn_maanedlig_annuitet(fv, r, udb_aar)
             stopper    = produkt_start_alder + udb_aar
@@ -553,7 +560,16 @@ def generer_udbetalingstabel(
     tabel_slut = max(pensionsalder + udbetaling_aar, latest_stopper)
     tabel = []
     for alder in range(tabel_start, tabel_slut + 1):
-        har_fp = alder >= fp_alder
+        # ATP starter altid ved den almindelige fp_alder — folkepensions-
+        # opsætning (Fase C) udskyder KUN folkepensionens grundbeløb/tillæg/
+        # tillægsprocent-styrede ydelser, ligesom sekventering.ts's model,
+        # der eksplicit friholder ATP fra opsætningsdimensionen.
+        har_atp = alder >= fp_alder
+        har_fp  = alder >= (fp_alder + folkepension_opsaettelse_aar)
+        fp_venteprocent = (
+            1 + satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR.vaerdi * folkepension_opsaettelse_aar
+            if folkepension_opsaettelse_aar > 0 else 1.0
+        )
 
         # S-indkomst dette år — kun aktive produkter
         privat_s_brutto = sum(
@@ -565,7 +581,10 @@ def generer_udbetalingstabel(
         )
 
         pi_med_am  = privat_s_brutto * (1 - AM_BIDRAG)
-        pi_uden_am = (FOLKEPENSION_MDR * 12 + atp_mdr * 12) if har_fp else 0.0
+        pi_uden_am = (
+            (FOLKEPENSION_MDR * 12 * fp_venteprocent if har_fp else 0.0)
+            + (atp_mdr * 12 if har_atp else 0.0)
+        )
         total_pi   = pi_med_am + pi_uden_am
 
         produkt_data: dict[str, dict] = {}
@@ -607,12 +626,20 @@ def generer_udbetalingstabel(
         if har_fp and partner_er_fp:
             indtaegtsgrundlag_aar += skat_params.partner_indkomst_aar
 
-        if har_fp:
-            fp_netto_aar  = _netto_s_uden_am(FOLKEPENSION_MDR * 12, skat_params, total_pi, FOLKEPENSION_MDR * 12)
+        if har_atp:
             atp_netto_aar = _netto_s_uden_am(float(atp_mdr * 12), skat_params, total_pi, float(atp_mdr * 12))
-            fp_mdr_netto  = fp_netto_aar / 12
             atp_mdr_netto = atp_netto_aar / 12
-            tillaeg_aar   = folkepension_pensionstillaeg_aar(indtaegtsgrundlag_aar, skat_params, partner_er_fp)
+        else:
+            atp_mdr_netto = 0.0
+
+        if har_fp:
+            fp_brutto_aar = FOLKEPENSION_MDR * 12 * fp_venteprocent
+            fp_netto_aar  = _netto_s_uden_am(fp_brutto_aar, skat_params, total_pi, fp_brutto_aar)
+            fp_mdr_netto  = fp_netto_aar / 12
+            # Ventetillægget (Fase C, forenklet — se satser_2026.py) forhøjer
+            # også det allerede aftrapnings-justerede pensionstillæg, ligesom
+            # i den porterede kilde (samspil.ts: "tillaeg * venteprocent").
+            tillaeg_aar   = folkepension_pensionstillaeg_aar(indtaegtsgrundlag_aar, skat_params, partner_er_fp) * fp_venteprocent
             tillaeg_mdr   = tillaeg_aar / 12
 
             tillaegsprocent = beregn_tillaegsprocent(indtaegtsgrundlag_aar, skat_params.enlig)
@@ -634,7 +661,7 @@ def generer_udbetalingstabel(
             mediecheck_mdr   = ydelser["mediecheck"] / 12
             varmetillaeg_mdr = ydelser["varmetillaeg"] / 12
         else:
-            fp_mdr_netto = atp_mdr_netto = tillaeg_mdr = 0.0
+            fp_mdr_netto = tillaeg_mdr = 0.0
             tillaegsprocent = 0
             aeldrecheck_mdr = mediecheck_mdr = varmetillaeg_mdr = 0.0
 
@@ -668,9 +695,9 @@ def generer_udbetalingstabel(
             "alder":           alder,
             "aar_nr":          alder - pensionsalder + 1,
             "produkter":       produkt_data,
-            "fp_mdr_brutto":   float(FOLKEPENSION_MDR) if har_fp else 0.0,
+            "fp_mdr_brutto":   float(FOLKEPENSION_MDR) * fp_venteprocent if har_fp else 0.0,
             "fp_mdr_netto":    fp_mdr_netto,
-            "atp_mdr_brutto":  float(atp_mdr) if har_fp else 0.0,
+            "atp_mdr_brutto":  float(atp_mdr) if har_atp else 0.0,
             "atp_mdr_netto":   atp_mdr_netto,
             "tillaeg_mdr":     tillaeg_mdr,
             "tillaegsprocent": tillaegsprocent,

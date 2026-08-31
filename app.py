@@ -10,6 +10,7 @@ import hashlib
 import time
 import tempfile
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
@@ -33,6 +34,7 @@ from pension_rules import PENSION_REGLER
 from engine import (generer_udbetalingstabel, format_engine_til_llm, SkatParametre,
                      fordel_pmt_default, format_fordeling_til_llm, generer_scenarier,
                      analyser_forsikring, beregn_fri_formue_tabel)
+import sekventering
 
 app = FastAPI(title="PensionsAnalytiker")
 
@@ -292,6 +294,13 @@ Hvis brugeren har angivet civilstand "gift eller samlevende":
 - Hvis en partner-indkomst er angivet, tælles den KUN med i indtægtsgrundlaget i de år partneren selv er folkepensionist — IKKE mens partneren stadig er erhvervsaktiv. Gør altid klart for brugeren at dette er et **overslag**, ikke en juridisk præcis fælles-beregning: den fulde modregningsregel for gifte par med to indkomster er mere kompleks end dette værktøj modellerer.
 - Der er IKKE regnet en selvstændig udbetalingsplan for partneren — kun brugerens egen tidslinje/produkter vises. Sig det tydeligt hvis brugeren spørger til partnerens egen pension.
 
+## SEKVENTERINGSOPTIMERING — "FIND BEDSTE UDBETALINGSRÆKKEFØLGE"
+Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsrækkefølge:
+- Resultatet er fundet ved at afprøve en lang række kombinationer af start-aldre, ratepensions-udbetalingsperioder og evt. udskudt folkepension — IKKE ved at forudse fremtiden. Præsenter det som en anbefaling baseret på de antagelser (afkast, skat, mål) der allerede er sat, ikke som en garanti.
+- Hvis resultatet er "målet kan ikke nås": sig det direkte og eksplicit — foreslå ALDRIG den næstbedste plan som var den en løsning, det ville modsige selve formålet med den hårde grænse.
+- Hvis brugeren har fået foreslået udskudt folkepension (`folkepension_opsaettelse_aar > 0`): gør klart at ventetillægget (6 %/år) er et **forenklet skøn**, ikke den juridisk præcise ventetillægsberegning — den rigtige regel er mere kompleks.
+- Nævn at optimeringen kun ser på brugerens egne produkter — en eventuel partners egen pension indgår ikke i søgningen.
+
 ## NØGLESATSER 2026
 - Ratepension loft: 68.700 kr/år | Aldersopsparing: 9.100 kr/år (60.900 kr under 7 år til folkepensionsalder, PBL §16)
 - AM-bidrag: 8% | Bundskat: 12,01%
@@ -326,6 +335,8 @@ def _engine_cache_key(session: dict) -> str:
         "civilstand":         params.get("civilstand"),
         "partner_alder":      params.get("partner_alder"),
         "partner_indkomst_aar": params.get("partner_indkomst_aar"),
+        "produkt_udb_aar":    json.dumps(params.get("produkt_udb_aar", {}), sort_keys=True),
+        "folkepension_opsaettelse_aar": params.get("folkepension_opsaettelse_aar"),
         "profil_id":          id(profil),
     }
     return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
@@ -395,10 +406,16 @@ def _kør_engine(session_id: str) -> str:
                 if "kapital" in (p.get("produkttype") or "").lower():
                     p["skat_type"] = kapital_skat
 
+        civilstand = params.get("civilstand")
+        if civilstand is None:
+            civilstand = "enlig" if params.get("enlig", True) else "gift_samlevende"
+        partner_alder = params.get("partner_alder")
         skat = SkatParametre.fra_pct(
             kommuneskat_pct=float(params.get("kommuneskat_pct", 25.0)),
             kirkeskat_pct=float(params.get("kirkeskat_pct", 0.7)),
-            enlig=bool(params.get("enlig", True)),
+            enlig=(civilstand != "gift_samlevende"),
+            partner_foedselsaar=(date.today().year - int(partner_alder)) if partner_alder else None,
+            partner_indkomst_aar=float(params.get("partner_indkomst_aar", 0) or 0),
         )
         result = generer_udbetalingstabel(profil_kopi, params, skat)
         result["scenarier"] = generer_scenarier(copy.deepcopy(profil_kopi), params, skat)
@@ -998,6 +1015,8 @@ class Parametre(BaseModel):
     civilstand: str | None = None
     partner_alder: int | None = None
     partner_indkomst_aar: float | None = None
+    produkt_udb_aar: dict | None = None
+    folkepension_opsaettelse_aar: int | None = None
 
 
 @app.post("/api/parametre")
@@ -1024,6 +1043,8 @@ async def gem_parametre(req: Parametre):
     if req.civilstand is not None:                    p["civilstand"] = req.civilstand
     if req.partner_alder is not None:                 p["partner_alder"] = req.partner_alder
     if req.partner_indkomst_aar is not None:          p["partner_indkomst_aar"] = req.partner_indkomst_aar
+    if req.produkt_udb_aar is not None:               p["produkt_udb_aar"] = req.produkt_udb_aar
+    if req.folkepension_opsaettelse_aar is not None:  p["folkepension_opsaettelse_aar"] = req.folkepension_opsaettelse_aar
 
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")
@@ -1077,6 +1098,55 @@ async def get_engine_data(session_id: str):
         "produkt_start_aldre": params.get("produkt_start_aldre", {}),
         "produkt_i_buffer":   params.get("produkt_i_buffer", {}),
         "fri_formue_analyse": result.get("fri_formue_analyse"),
+    })
+
+
+@app.post("/api/optimer")
+async def optimer_udbetalingsplan(req: dict):
+    session_id = req.get("session_id")
+    if not session_id or session_id not in sessions:
+        raise HTTPException(404, "Session ikke fundet")
+    session = sessions[session_id]
+    params  = session.get("beregningsparametre", {})
+    profil  = session.get("profil")
+    if not profil or not params.get("pensionsalder"):
+        return JSONResponse({"success": False, "besked": "Ingen profil/pensionsalder endnu — gennemfør interviewet først."}, status_code=400)
+
+    import copy
+    profil_kopi = copy.deepcopy(profil)
+    kapital_skat = params.get("kapital_skat_type") or _kapital_skat_type_fra_historik(session)
+    if kapital_skat:
+        for p in profil_kopi.get("pensionsprodukter", []):
+            if "kapital" in (p.get("produkttype") or "").lower():
+                p["skat_type"] = kapital_skat
+
+    obj = sekventering.Objektiv(
+        maal_mdr=float(req["maal_mdr"]) if req.get("maal_mdr") else None,
+        haard_minimum_mdr=float(req["haard_minimum_mdr"]) if req.get("haard_minimum_mdr") else None,
+    )
+    res = sekventering.optimer(profil_kopi, params, obj)
+
+    if not sekventering.har_loesning(res):
+        return JSONResponse({
+            "success": False,
+            "evalueret": res.evalueret,
+            "besked": "Målet kan ikke nås inden for det afsøgte rum af start-aldre, perioder og folkepensions-opsætning — ingen kombination undgår mindst ét år under den anvendte minimumsgrænse.",
+        })
+
+    b = res.bedste
+    return JSONResponse({
+        "success": True,
+        "evalueret": res.evalueret,
+        "antal_gennemfoerlige": res.antal_gennemfoerlige,
+        "bedste": {
+            "produkt_start_aldre": b.produkt_start_aldre,
+            "produkt_udb_aar": b.produkt_udb_aar,
+            "folkepension_opsaettelse_aar": b.folkepension_opsaettelse_aar,
+            "npv_netto_raadighed": round(b.npv_netto_raadighed),
+            "samlet_underdaekning": round(b.samlet_underdaekning),
+            "jaevn_netto_mdr": b.resultat.get("jaevn_netto_mdr") if b.resultat else None,
+        },
+        "foelsomhed": {k: round(v) for k, v in res.foelsomhed.items()},
     })
 
 

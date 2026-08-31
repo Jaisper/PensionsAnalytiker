@@ -100,3 +100,13 @@ MEDIECHECK = Sats("yd.mediecheck", 1_552, "Satser 2026; kræver tillægsprocent 
 VARMETILLAEG_EGENBETALING_ENLIG = Sats("yd.varme.egen.enlig", 6_300, "Satser 2026", verificeret=False)
 VARMETILLAEG_EGENBETALING_GIFT = Sats("yd.varme.egen.gift", 9_450, "Satser 2026", verificeret=False)
 VARMETILLAEG_MAKSIMALT = Sats("yd.varme.maks", 9_000, "Anslået loft — skal verificeres", verificeret=False)
+
+# ── Folkepensions-opsættelse (sekventeringsoptimering) ───────────────────────
+# Forenklet ventetillæg-tilnærmelse, porteret 1:1 fra pension-core (samme
+# uverificerede skøn som kildepakken selv bruger) — den reelle regel bygger på
+# Finanstilsynets levetidsforudsætninger og er væsentligt mere kompleks.
+FOLKEPENSION_VENTEPROCENT_PR_AAR = Sats(
+    "fp.opsaettelse.venteprocent", 0.06,
+    "Forenklet estimat, jf. pension-core — bør erstattes af Finanstilsynets levetidsforudsatte ventetillæg",
+    verificeret=False,
+)

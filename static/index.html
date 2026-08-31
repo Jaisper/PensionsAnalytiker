@@ -532,9 +532,11 @@
     <div class="tl-wrap" id="timeline-container"></div>
     <div class="chart-actions">
       <button class="chart-btn primary" onclick="opdaterAnalyse()">&#x21BB; Opdater analyse (Tabel 1-3)</button>
+      <button class="chart-btn secondary" onclick="koerOptimering()">&#x1F50D; Find bedste udbetalingsrækkefølge</button>
       <button class="chart-btn secondary" onclick="gemAnalyse()">&#x2193; Gem analyse</button>
       <span id="chart-status"></span>
     </div>
+    <div id="optimering-resultat" style="display:none"></div>
   </div>
 </div>
 
@@ -2611,6 +2613,92 @@ async function opdaterAnalyse() {
   await sendSystemTrigger(
     'Opdater den komplette pensionsanalyse (Tabel 1-3) med de nuværende indstillinger fra diagrammet/panelet ovenfor.'
   );
+}
+
+// ── Sekventeringsoptimering ("Find bedste udbetalingsrækkefølge") ───────────
+let _sidsteOptimering = null;
+
+function renderOptimeringsResultat(data) {
+  const el = document.getElementById('optimering-resultat');
+  if (!el) return;
+  if (!data || !data.success) { el.innerHTML = ''; el.style.display = 'none'; return; }
+  const b = data.bedste;
+  el.style.display = '';
+  el.innerHTML = `
+    <div style="margin-top:10px;padding:10px 12px;background:#f0f5fa;border-radius:8px;font-size:0.85rem">
+      <strong>Bedste udbetalingsrækkefølge fundet</strong>
+      (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige)
+      <button class="chart-btn primary" style="margin-left:10px" onclick="anvendOptimering()">Anvend denne plan</button>
+    </div>`;
+}
+
+async function koerOptimering() {
+  if (!sessionId || isStreaming) return;
+  const status = document.getElementById('chart-status');
+  if (status) { status.style.color = '#5578a0'; status.textContent = '🔍 Afsøger udbetalingsrækkefølger…'; }
+  renderOptimeringsResultat(null);
+
+  const res = await fetch('/api/optimer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId }),
+  }).catch(() => null);
+  const data = res ? await res.json().catch(() => null) : null;
+  if (status) status.textContent = '';
+
+  if (!data || !data.success) {
+    _sidsteOptimering = null;
+    await sendSystemTrigger(
+      data?.besked
+        ? `Jeg har prøvet at finde den bedste udbetalingsrækkefølge. Svar fra optimeringen: "${data.besked}" (evalueret ${data.evalueret ?? '?'} planer). Forklar kort hvorfor målet ikke kan nås inden for det afsøgte rum — foreslå ALDRIG en næstbedste plan som var den en brugbar løsning.`
+        : 'Sekventeringsoptimeringen kunne ikke gennemføres — der mangler formentlig en profil eller pensionsalder endnu.'
+    );
+    return;
+  }
+
+  _sidsteOptimering = data;
+  renderOptimeringsResultat(data);
+
+  const b = data.bedste;
+  const startLinjer = Object.entries(b.produkt_start_aldre).map(([k, v]) => `${k}: start ${v} år`).join(', ');
+  const periodeLinjer = Object.entries(b.produkt_udb_aar).map(([k, v]) => `${k}: ${v} års periode`).join(', ');
+  const opsaetLinje = b.folkepension_opsaettelse_aar > 0
+    ? `Folkepension foreslås udskudt ${b.folkepension_opsaettelse_aar} år (forenklet ventetillæg-skøn på 6%/år — IKKE en juridisk præcis beregning).`
+    : 'Folkepension foreslås ikke udskudt.';
+
+  await sendSystemTrigger(
+    `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen. ` +
+    `Evalueret ${data.evalueret} kombinationer af start-aldre${periodeLinjer ? ', udbetalingsperioder' : ''} og folkepensions-opsætning, ` +
+    `heraf ${data.antal_gennemfoerlige} gennemførlige (opfylder den fastsatte minimumsgrænse for rådighedsbeløb i alle år). ` +
+    `Bedste fundne plan — start-aldre: ${startLinjer || 'uændret'}. ` +
+    (periodeLinjer ? `Udbetalingsperioder: ${periodeLinjer}. ` : '') +
+    `${opsaetLinje} NPV af nettorådighed for denne plan: ${b.npv_netto_raadighed.toLocaleString('da-DK')} kr. ` +
+    `Præsenter denne anbefaling kort i punktform og forklar kort hvorfor rækkefølgen giver mening (fx skattemæssig timing eller undgåelse af modregning). ` +
+    `Nævn at brugeren kan klikke "Anvend denne plan"-knappen for at opdatere tidslinjen/diagrammet med denne rækkefølge, og at optimeringen kun ser på brugerens egne produkter.`
+  );
+}
+
+async function anvendOptimering() {
+  if (!_sidsteOptimering?.bedste || !sessionId) return;
+  const b = _sidsteOptimering.bedste;
+  await fetch('/api/parametre', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      produkt_start_aldre: b.produkt_start_aldre,
+      produkt_udb_aar: b.produkt_udb_aar,
+      folkepension_opsaettelse_aar: b.folkepension_opsaettelse_aar,
+    }),
+  }).catch(() => null);
+
+  const res = await fetch(`/api/session/${sessionId}/engine`).catch(() => null);
+  if (res?.ok) {
+    _chartData = await res.json();
+    renderChart(_chartData);
+    renderTimeline(_chartData);
+  }
+  await sendSystemTrigger('Jeg har anvendt den foreslåede udbetalingsrækkefølge. Bekræft kort at tidslinjen/diagrammet nu er opdateret med denne plan.');
 }
 
 function gemAnalyse() {

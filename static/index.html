@@ -2673,11 +2673,13 @@ function renderOptimeringsResultat(data) {
   if (!el) return;
   if (!data || !data.success) { el.innerHTML = ''; el.style.display = 'none'; return; }
   const b = data.bedste;
+  const stikproeve = data.mulige_kombinationer > data.evalueret
+    ? ` (stikprøve af ${data.mulige_kombinationer.toLocaleString('da-DK')} mulige)` : '';
   el.style.display = '';
   el.innerHTML = `
     <div style="margin-top:10px;padding:10px 12px;background:#f0f5fa;border-radius:8px;font-size:0.85rem">
       <strong>Bedste udbetalingsrækkefølge fundet</strong>
-      (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige)
+      (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${stikproeve})
       <button class="chart-btn primary" style="margin-left:10px" onclick="anvendOptimering()">Anvend denne plan</button>
     </div>`;
 }
@@ -2715,12 +2717,15 @@ async function koerOptimering() {
     ? `Folkepension foreslås udskudt ${b.folkepension_opsaettelse_aar} år (forenklet ventetillæg-skøn på 6%/år — IKKE en juridisk præcis beregning).`
     : 'Folkepension foreslås ikke udskudt.';
 
+  const stikproeveNote = data.mulige_kombinationer > data.evalueret
+    ? ` (det fulde søgerum har ${data.mulige_kombinationer.toLocaleString('da-DK')} kombinationer — der er brugt en tilfældig stikprøve, ikke en udtømmende gennemgang)`
+    : '';
   await sendSystemTrigger(
     `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen. Målet er det højeste FASTE, ` +
     `inflationskorrigerede månedsbeløb — ikke den største samlede sum. ` +
-    `Evalueret ${data.evalueret} kombinationer af per-produkt start-aldre og folkepensions-opsætning ` +
+    `Evalueret ${data.evalueret} kombinationer af per-produkt start-aldre og folkepensions-opsætning${stikproeveNote} ` +
     `(engangsbeløbs udbetalingsår og ratepensioners udbetalingsperiode er IKKE en del af søgningen — det er allerede trufne valg), ` +
-    `heraf ${data.antal_gennemfoerlige} gennemførlige (optimeringen kan aldrig gøre de tidlige/laveste år ringere end de ville have været uden indblanding). ` +
+    `heraf ${data.antal_gennemfoerlige} gennemførlige (optimeringen kan aldrig gøre et overlappende år ringere end det allerede er i din nuværende plan). ` +
     `Bedste fundne plan — start-aldre: ${startLinjer || 'uændret'}. ` +
     `${opsaetLinje} Fast månedsbeløb denne plan giver: ${b.jaevn_netto_mdr.toLocaleString('da-DK')} kr/mdr. ` +
     `Præsenter denne anbefaling kort i punktform og forklar kort hvorfor rækkefølgen giver mening (fx skattemæssig timing eller undgåelse af modregning). ` +

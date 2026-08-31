@@ -1,68 +1,92 @@
 """
-Sekventeringsoptimering — udtømmende (beskåret) søgning over per-produkt
-start-aldre og folkepensions-opsættelse.
+Sekventeringsoptimering — søgning over per-produkt start-aldre og
+folkepensions-opsættelse.
 
 Målet er IKKE at maksimere den samlede nutidsværdi af udbetalingerne (det
 belønner lumpede, bagtunge forløb, fordi sen, stor kapital i teorien kan
 "udjævnes" bagud over hele perioden) — målet er at maksimere det faste,
 inflationskorrigerede månedsbeløb brugeren rent faktisk kan leve af hele
-den ønskede periode, jf. den samme `jaevn_netto_mdr` som allerede vises i
-det almindelige udbetalingsdiagram.
+den ønskede periode, jf. den samme `jaevn_netto_mdr`/`jaevn_niveau_realt`
+som allerede vises i det almindelige udbetalingsdiagram.
 
 En kandidat-kombination er et selvstændigt kald til
-engine.generer_udbetalingstabel (ren funktion, ingen delt tilstand). Ratepensioners
-udbetalingsperiode og engangsbeløbs udbetalingsår behandles begge som
-brugerens egne, allerede trufne valg — kun START-alderen pr. løbende produkt
-og folkepensions-opsætningen er reelt frie beslutningsvariable her.
+engine.generer_udbetalingstabel (ren funktion, ingen delt tilstand).
+Ratepensioners udbetalingsperiode og engangsbeløbs udbetalingsår behandles
+begge som brugerens egne, allerede trufne valg — kun START-alderen pr.
+løbende produkt og folkepensions-opsætningen er reelt frie
+beslutningsvariable her.
 
 VIGTIGT om realisme: `jaevn_netto_mdr` er en fremadskuende udjævning af HELE
-den resterende løbende indkomst — for ethvert forløb med et sent indkomst-løft
-(fx folkepension der først starter år senere) vil dette tal helt naturligt
-ligge over de tidlige års rå indkomst, også for den helt uoptimerede
-default-plan. Det er IKKE i sig selv et problem — `jaevn_tabel`s egen
-`buffer_rest` går naturligt i minus i sådanne år, fordi udjævningen i sin
-natur forudsætter penge der endnu ikke er modtaget (samme mekanik chartet
-allerede skjuler den stiplede linje ved). Det AFGØRENDE er om optimeringen
-aktivt GØR DETTE VÆRRE end default-planen allerede har det, blot for at
-presse et højere (men mindre reelt) udjævnet tal frem. Der måles derfor det
-SAMLEDE "bufferunderskud" (summen af alle negative buffer_rest-år i
-pensionsfasen, se `_buffer_underskud`) — en kandidat der kræver et større
-underskud end default-planens eget, bliver diskvalificeret, uanset hvor
-godt det udjævnede tal ellers ser ud. Et rent minimum-af-et-enkelt-år-tjek
-viste sig utilstrækkeligt: det fanger dybden af et hul, men ikke hvor
-mange flere år hullet varer ved.
+den resterende løbende indkomst — for ethvert forløb med et sent
+indkomst-løft (fx folkepension der først starter år senere) vil dette tal
+helt naturligt ligge over de tidlige års rå indkomst, også for den helt
+uoptimerede default-plan. Det er IKKE i sig selv et problem. Det AFGØRENDE
+er om optimeringen aktivt GØR ET SPECIFIKT ÅR VÆRRE end default-planen
+allerede har det år, blot for at presse et højere (men mindre reelt)
+udjævnet tal frem. Der sammenlignes derfor år for år (alder for alder, se
+`_raa_indkomst_pr_alder`): kandidatens rå, faktisk udbetalte beløb i hvert
+overlappende år skal mindst matche default-planens eget for samme alder.
+
+To tidligere, svagere forsøg viste sig utilstrækkelige og er droppet:
+et enkelt-minimum-tjek fangede dybden af et hul men ikke hvor mange år det
+varede ved; et summeret "bufferunderskud"-tjek kollapsede til nul tolerance
+når default-planen selv havde 0 i underskud (almindeligt for profiler uden
+et pre-pensions engangsbeløb) og var samtidig virkningsløst når
+default-planen HAVDE et stort engangsbeløb (bufferen blev aldrig negativ
+for nogen kandidat, uanset hvor langt et produkt blev udskudt). Den
+år-for-år sammenligning der bruges nu er robust over for begge svagheder.
+
+Søgerummet kan blive langt større end det er praktisk at gennemgå
+udtømmende (fx 5 produkter × 15 aldre × 5 opsætningsår > 1 million
+kombinationer). Er det tilfældet, bruges en DETERMINISTISK (fast seed)
+tilfældig stikprøve i stedet for blot at tage de første N kombinationer i
+den kartesiske rækkefølge — en ren "de første N" ville systematisk fastfryse
+de forreste dimensioner nær deres laveste værdier og aldrig undersøge resten
+af deres interval (og dermed rapportere en kunstigt lav følsomhed for netop
+dem). Default-planens egen kombination indgår altid eksplicit, uanset
+stikprøve, så den garanteret er en af de evaluerede kandidater.
 
 "Ingen løsning" er et gyldigt svar: kald altid har_loesning() før resultatet
 præsenteres, og vis aldrig den næstbedste-men-utilstrækkelige plan som var
-den brugbar. Med denne kombination af tjek er default-planen dog altid selv
-en gennemførlig kandidat, så "ingen løsning" i praksis kun opstår hvis
+den brugbar. Fordi default-planens egen kombination altid indgår og altid
+er gennemførlig mod sig selv, opstår "ingen løsning" i praksis kun hvis
 brugeren selv har sat en urealistisk høj bundgrænse.
+
+Er der uploadet en fuld partner-profil (Fase D), regnes partnerens
+indkomst-per-kalenderår ÉN gang (partnerens egen plan optimeres ikke,
+kun brugerens) og fødes ind i hver kandidats samspils-beregning — ellers
+ville optimeringen score kandidater mod et forkert, husstands-uafhængigt
+indtægtsgrundlag.
 
 Folkepensions-opsætningens ventetillæg er en bevidst forenkling (samme skøn
 som kildepakken selv bruger, jf. satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR)
 — IKKE en juridisk præcis beregning.
 """
 from __future__ import annotations
+import random
 from dataclasses import dataclass, field
-from itertools import islice, product
+from itertools import product
 from typing import Any, Optional
 
-from engine import generer_udbetalingstabel, tidligste_private_pensionsalder
+from engine import generer_udbetalingstabel, tidligste_private_pensionsalder, jaevn_niveau_realt, SkatParametre
+import husstand
 
 MAKS_EVALUERINGER_DEFAULT = 3000
 STANDARD_OPSAETTELSE = [0, 1, 2, 3, 5]
 STANDARD_EKSTRA_AAR  = 10  # søg start-aldre op til pensionsalder + dette
+STIKPROEVE_SEED = 20260831  # fast seed — samme profil giver samme resultat hver gang
 
-# Kandidatens samlede bufferunderskud (se _buffer_underskud) må højst være
-# denne faktor gange default-planens eget — lille tolerance for afrunding,
-# ikke en invitation til at forringe de tidlige/mellemliggende år mærkbart.
-BUFFER_UNDERSKUD_TOLERANCE = 1.05
+# Kandidatens rå (ikke-udjævnede) beløb for et givet år skal mindst udgøre
+# denne andel af default-planens eget rå beløb for SAMME alder — lille
+# tolerance for afrunding, ikke en invitation til at forringe et
+# overlappende år mærkbart.
+RAA_AAR_TOLERANCE = 0.97
 
 
 @dataclass
 class Objektiv:
-    """Valgfri hård bundgrænse (kr/mdr) — uden den falder optimeringen
-    tilbage til en fornuftig default (se optimer())."""
+    """Valgfri hård bundgrænse (kr/mdr, i dagens købekraft) — uden den falder
+    optimeringen tilbage til en fornuftig default (se optimer())."""
     haard_minimum_mdr: Optional[float] = None
 
 
@@ -72,13 +96,14 @@ class Kandidat:
     produkt_udb_aar: dict[str, int]
     folkepension_opsaettelse_aar: int
     score: float
-    jaevn_netto_mdr: float  # i DAGENS købekraft — se _jaevn_niveau_realt, IKKE det samme som resultat["jaevn_netto_mdr"]
-    resultat: Optional[dict] = None  # kun udfyldt for top-kandidater, se optimer()
+    jaevn_netto_mdr: float  # i DAGENS købekraft — se engine.jaevn_niveau_realt
+    resultat: Optional[dict] = None
 
 
 @dataclass
 class OptimeringsResultat:
     evalueret: int
+    mulige_kombinationer: int  # størrelsen af det fulde søgerum, uanset stikprøve
     antal_gennemfoerlige: int
     bedste: Optional[Kandidat]
     top: list[Kandidat] = field(default_factory=list)
@@ -90,25 +115,20 @@ def har_loesning(r: OptimeringsResultat) -> bool:
     return r.antal_gennemfoerlige > 0
 
 
-def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: int):
-    """Bygger (noegler, dimensioner) — én dimension pr. beslutningsvariabel,
-    mønster fra sekventering.ts's `noegler`/`dimensioner`. Engangsbeløb
-    (aldersopsparing/kapitalpension) får IKKE en start-alder-dimension — det
-    er brugerens egen, bevidst valgte udbetalingsår (fx sat via tidslinje-
-    trækket), og optimeringen må ikke flytte rundt på et allerede truffet
-    valg. Ratepensionens udbetalingsperiode er PÅ SAMME MÅDE brugerens eget
-    valg (fra rapporten eller et tidligere manuelt valg) — kun START-alderen
-    pr. løbende produkt og folkepensions-opsætningen er reelt frie
-    beslutningsvariable her (ATP er slet ikke en del af `produkter`-listen
-    og indgår derfor aldrig, samme udelukkelse som i sekventering.ts)."""
+def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: int, nuvaerende_opsaettelse: int):
+    """Bygger (noegler, dimensioner) — én dimension pr. beslutningsvariabel.
+    Engangsbeløb (aldersopsparing/kapitalpension) får IKKE en
+    start-alder-dimension — det er brugerens egen, bevidst valgte
+    udbetalingsår, og optimeringen må ikke flytte rundt på et allerede
+    truffet valg. Kun START-alderen pr. løbende produkt og
+    folkepensions-opsætningen er reelt frie beslutningsvariable her (ATP er
+    slet ikke en del af `produkter`-listen og indgår derfor aldrig)."""
     # Den generelle lovmæssige tommelfingerregel (fp_alder - 5) er kun en
-    # DEFAULT-hjælp i interviewet — brugeren kan frit have valgt en tidligere
-    # pensionsalder end den (fx fordi deres konkrete produkter allerede
-    # tillader det). Søgerummet skal ALDRIG ekskludere den alder brugeren
-    # faktisk har valgt, ellers "optimerer" den brugeren væk fra deres egen
-    # ønskede pensionsalder og over i et senere, ubedt starttidspunkt.
-    tidligst = min(tidligste_private_pensionsalder(fp_alder), pensionsalder)
-    start_aldre = list(range(tidligst, pensionsalder + STANDARD_EKSTRA_AAR + 1))
+    # DEFAULT-hjælp i interviewet — søgerummet skal ALDRIG ekskludere en alder
+    # brugeren faktisk allerede har valgt (hverken pensionsalderen generelt
+    # eller et enkelt produkts egen, evt. manuelt trukne start-alder).
+    tidligst_generelt = min(tidligste_private_pensionsalder(fp_alder), pensionsalder)
+    standard_interval = set(range(tidligst_generelt, pensionsalder + STANDARD_EKSTRA_AAR + 1))
 
     noegler: list[str] = []
     dimensioner: list[list[tuple]] = []
@@ -116,11 +136,38 @@ def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: 
         if pr["udb_type"] == "engangsbeloeb":
             continue
         key = pr["key"]
-        dimensioner.append([("start", key, a) for a in start_aldre])
+        interval = standard_interval | {pr["start_alder"]}
+        dimensioner.append([("start", key, a) for a in sorted(interval)])
         noegler.append(f"start:{key}")
-    dimensioner.append([("opsaet", None, o) for o in STANDARD_OPSAETTELSE])
+    opsaettelse_interval = sorted(set(STANDARD_OPSAETTELSE) | {nuvaerende_opsaettelse})
+    dimensioner.append([("opsaet", None, o) for o in opsaettelse_interval])
     noegler.append("opsaet:folkepension")
     return noegler, dimensioner
+
+
+def _kandidat_vektorer(dimensioner: list[list[tuple]], maks_evalueringer: int, default_vektor: tuple):
+    """Genererer kandidat-vektorer til evaluering. Udtømmende hvis det fulde
+    søgerum er lille nok; ellers en DETERMINISTISK tilfældig stikprøve (fast
+    seed) i stedet for blot de første N i kartesisk rækkefølge — en ren
+    prefix-afskæring fastfryser systematisk de forreste dimensioner nær
+    deres laveste værdier (se modulets docstring). default_vektor indgår
+    altid eksplicit, uanset stikprøve."""
+    mulige = 1
+    for d in dimensioner:
+        mulige *= len(d)
+
+    if mulige <= maks_evalueringer:
+        return list(product(*dimensioner)), mulige
+
+    rng = random.Random(STIKPROEVE_SEED)
+    valgt: set[tuple] = {default_vektor}
+    forsoeg = 0
+    maks_forsoeg = maks_evalueringer * 30
+    while len(valgt) < maks_evalueringer and forsoeg < maks_forsoeg:
+        vektor = tuple(rng.choice(d) for d in dimensioner)
+        valgt.add(vektor)
+        forsoeg += 1
+    return list(valgt), mulige
 
 
 def _parametre_for_vektor(base_parametre: dict, vektor: tuple[tuple, ...]) -> tuple[dict, dict, int]:
@@ -144,41 +191,37 @@ def _parametre_for_vektor(base_parametre: dict, vektor: tuple[tuple, ...]) -> tu
     return p, produkt_start_aldre, produkt_udb_aar
 
 
-def _buffer_underskud(resultat: dict) -> float:
-    """Summeret bufferunderskud i pensionsfasen: hvor meget bufferen samlet
-    set går i minus, år for år (kun de negative år tæller, positive år
-    bidrager 0). Et højere tal betyder at flere/dybere år af det udjævnede
-    niveau reelt er et regnestykke, ikke penge der faktisk er til stede —
-    se modulets docstring."""
+def _default_vektor(baseline_produkter: list[dict], nuvaerende_opsaettelse: int) -> tuple:
+    """Bygger den vektor der svarer til brugerens NUVÆRENDE plan — bruges til
+    at garantere den altid indgår som kandidat, se _kandidat_vektorer."""
+    delvektor = tuple(
+        ("start", pr["key"], pr["start_alder"])
+        for pr in baseline_produkter if pr["udb_type"] != "engangsbeloeb"
+    )
+    return delvektor + (("opsaet", None, nuvaerende_opsaettelse),)
+
+
+def _raa_indkomst_pr_alder(resultat: dict) -> dict[int, float]:
+    """Rå (ikke-udjævnet) beløb pr. alder i pensionsfasen, i dagens
+    købekraft når inflation er sat — bruges til at sammenligne to planers
+    FAKTISKE udbetaling alder for alder (ikke kalenderår, da to kandidater
+    typisk har forskudte tidslinjer)."""
     pension_raekker = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
-    return sum(max(0.0, -r["buffer_rest"]) for r in pension_raekker)
+    return {
+        r["alder"]: (r["normal_mdr_real"] if r["normal_mdr_real"] is not None else r["normal_mdr"])
+        for r in pension_raekker
+    }
 
 
-def _jaevn_niveau_realt(resultat: dict) -> float:
-    """`jaevn_netto_mdr` er nominel i det FØRSTE pensionsår — altså ved
-    pensionsalderen, ikke i dag. Er der år mellem i dag og pensionsalderen
-    og inflation sat, er det IKKE det samme som dagens købekraft (samme
-    beløb ganget op med inflationen for ventetiden). `jaevn_mdr_real` for
-    den første pensionsrække er derimod deflateret tilbage til i dag, og er
-    konstant hen over hele pensionsfasen (bortset fra senere tillæg, der kun
-    kan hæve niveauet) — det er DEN, brugeren rent faktisk vil sammenligne
-    med et beløb "i dagens/2025-købekraft"."""
-    pension_raekker = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
-    if not pension_raekker:
-        return resultat["jaevn_netto_mdr"]
-    foerste = pension_raekker[0]
-    return foerste["jaevn_mdr_real"] if foerste["jaevn_mdr_real"] is not None else foerste["jaevn_mdr"]
-
-
-def score(resultat: dict, obj: Objektiv, buffer_underskud_baseline: float) -> tuple[float, float]:
+def score(resultat: dict, obj: Objektiv, baseline_raa_pr_alder: dict[int, float]) -> tuple[float, float]:
     """Returnerer (score, jaevn_niveau_realt). Score er det faste,
-    bæredygtige månedsbeløb i DAGENS købekraft (se `_jaevn_niveau_realt`)
-    — højere er bedre, det ER selve målet. Score = -inf hvis planen enten
-    bryder en (eventuel) hård bundgrænse, forøger bufferunderskuddet ud over
-    default-planens eget (se modulets docstring), eller indeholder et
-    fuldstændigt indkomst-hul."""
+    bæredygtige månedsbeløb i DAGENS købekraft — højere er bedre, det ER
+    selve målet. Score = -inf hvis planen enten bryder en (eventuel) hård
+    bundgrænse, gør et OVERLAPPENDE år ringere end default-planens eget
+    samme år (se modulets docstring), eller indeholder et fuldstændigt
+    indkomst-hul."""
     jaevn_tabel = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
-    jaevn_niveau = _jaevn_niveau_realt(resultat)
+    jaevn_niveau = jaevn_niveau_realt(resultat)
     graense = obj.haard_minimum_mdr if obj.haard_minimum_mdr is not None else 0.0
 
     for row in jaevn_tabel:
@@ -186,8 +229,11 @@ def score(resultat: dict, obj: Objektiv, buffer_underskud_baseline: float) -> tu
         if udjaevnet < graense:
             return float("-inf"), 0.0
 
-    if _buffer_underskud(resultat) > buffer_underskud_baseline * BUFFER_UNDERSKUD_TOLERANCE:
-        return float("-inf"), 0.0
+    candidate_raa = _raa_indkomst_pr_alder(resultat)
+    for alder, baseline_vaerdi in baseline_raa_pr_alder.items():
+        kandidat_vaerdi = candidate_raa.get(alder)
+        if kandidat_vaerdi is not None and kandidat_vaerdi < baseline_vaerdi * RAA_AAR_TOLERANCE:
+            return float("-inf"), 0.0
 
     # Et fuldstændigt indkomst-hul (fx før pensionsalder, eller hvis ALLE
     # produkter er udskudt forbi et givet år) skal disqualificere uanset
@@ -205,50 +251,65 @@ def optimer(
     parametre: dict,
     obj: Optional[Objektiv] = None,
     maks_evalueringer: int = MAKS_EVALUERINGER_DEFAULT,
+    profil_partner: Optional[dict] = None,
+    parametre_partner: Optional[dict] = None,
 ) -> OptimeringsResultat:
     if obj is None:
         obj = Objektiv()
 
-    baseline = generer_udbetalingstabel(profil, parametre)
+    # Fuld partner-profil (Fase D): partnerens indkomst-per-kalenderår regnes
+    # ÉN gang her (partnerens egen plan optimeres ikke) og genbruges i alle
+    # kandidat-kald nedenfor — ellers ville hver kandidat blive scoret mod et
+    # husstands-uafhængigt (forkert, for lavt) indtægtsgrundlag.
+    skat_params: Optional[SkatParametre] = None
+    if profil_partner and parametre_partner:
+        skat_params = husstand.skat_params_for_person(parametre, profil_partner, parametre_partner)
+
+    baseline = generer_udbetalingstabel(profil, parametre, skat_params)
     if obj.haard_minimum_mdr is None:
         # Ingen grænse angivet af brugeren: beskyt mod at optimeringen finder
         # en plan der er drastisk værre i et enkelt år end den nuværende,
         # uden at kræve brugeren selv opfinder et tal. Baseres på det REELLE
-        # (dagens-købekraft) niveau, samme grundlag som selve scoren — ellers
-        # blandes en nominel-ved-pensionsalder-værdi ind i en grænse der
-        # tjekkes mod reelle (nutidskr) tal i score().
-        obj = Objektiv(haard_minimum_mdr=round(_jaevn_niveau_realt(baseline) * 0.7))
-    buffer_underskud_baseline = _buffer_underskud(baseline)
+        # (dagens-købekraft) niveau, samme grundlag som selve scoren.
+        obj = Objektiv(haard_minimum_mdr=round(jaevn_niveau_realt(baseline) * 0.7))
+    baseline_raa_pr_alder = _raa_indkomst_pr_alder(baseline)
 
     alle_produkter = baseline["produkter"]
 
     if not alle_produkter:
-        return OptimeringsResultat(evalueret=0, antal_gennemfoerlige=0, bedste=None)
+        return OptimeringsResultat(evalueret=0, mulige_kombinationer=0, antal_gennemfoerlige=0, bedste=None)
 
-    noegler, dimensioner = _byg_soegerum(alle_produkter, baseline["fp_alder"], baseline["pensionsalder"])
+    nuvaerende_opsaettelse = int(parametre.get("folkepension_opsaettelse_aar", 0) or 0)
+    noegler, dimensioner = _byg_soegerum(
+        alle_produkter, baseline["fp_alder"], baseline["pensionsalder"], nuvaerende_opsaettelse
+    )
+    default_vektor = _default_vektor(alle_produkter, nuvaerende_opsaettelse)
+    vektorer, mulige_kombinationer = _kandidat_vektorer(dimensioner, maks_evalueringer, default_vektor)
 
     evaluerede: list[tuple[tuple, float, float]] = []  # (vektor, score, jaevn_netto_mdr)
-    for vektor in islice(product(*dimensioner), maks_evalueringer):
+    for vektor in vektorer:
         p, _, _ = _parametre_for_vektor(parametre, vektor)
-        resultat = generer_udbetalingstabel(profil, p)
-        s, jaevn = score(resultat, obj, buffer_underskud_baseline)
+        resultat = generer_udbetalingstabel(profil, p, skat_params)
+        s, jaevn = score(resultat, obj, baseline_raa_pr_alder)
         evaluerede.append((vektor, s, jaevn))
 
     evaluerede.sort(key=lambda x: x[1], reverse=True)
     gennemfoerlige = [e for e in evaluerede if e[1] != float("-inf")]
 
     if not gennemfoerlige:
-        return OptimeringsResultat(evalueret=len(evaluerede), antal_gennemfoerlige=0, bedste=None)
+        return OptimeringsResultat(
+            evalueret=len(evaluerede), mulige_kombinationer=mulige_kombinationer,
+            antal_gennemfoerlige=0, bedste=None,
+        )
 
     # Kun de bedste 5 får et fuldt genberegnet resultat vedhæftet (til visning/
-    # "Anvend denne plan") — at gemme den fulde generer_udbetalingstabel-output
-    # for op til 3.000 kandidater undervejs ville bruge unødig hukommelse, når
-    # kun vinderen reelt skal bruges bagefter.
+    # "Anvend denne plan") — resten af søgningen holder kun (vektor, score,
+    # jaevn) i hukommelsen, ikke den fulde generer_udbetalingstabel-output.
     top_kandidater: list[Kandidat] = []
     for vektor, s, jaevn in gennemfoerlige[:5]:
         p, start_aldre, udb_aar = _parametre_for_vektor(parametre, vektor)
         opsaettelse = next((v for slag, _, v in vektor if slag == "opsaet"), 0)
-        resultat = generer_udbetalingstabel(profil, p)
+        resultat = generer_udbetalingstabel(profil, p, skat_params)
         top_kandidater.append(Kandidat(
             produkt_start_aldre=start_aldre,
             produkt_udb_aar=udb_aar,
@@ -258,7 +319,7 @@ def optimer(
         ))
 
     # Følsomhed: spænd (max-min) i gennemsnitlig score pr. beslutningsdimension,
-    # kun blandt gennemførlige kandidater — samme mønster som sekventering.ts.
+    # kun blandt gennemførlige kandidater.
     foelsomhed: dict[str, float] = {}
     for dim_idx, noegle in enumerate(noegler):
         grupper: dict[Any, list[float]] = {}
@@ -270,6 +331,7 @@ def optimer(
 
     return OptimeringsResultat(
         evalueret=len(evaluerede),
+        mulige_kombinationer=mulige_kombinationer,
         antal_gennemfoerlige=len(gennemfoerlige),
         bedste=top_kandidater[0],
         top=top_kandidater,

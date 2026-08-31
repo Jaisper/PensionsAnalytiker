@@ -28,6 +28,22 @@ def _indtaegtsgrundlag_pr_kalenderaar(resultat: dict, alder_nu: int) -> dict[int
     }
 
 
+def skat_params_for_person(
+    parametre_selv: dict, profil_partner: dict, parametre_partner: dict,
+) -> SkatParametre:
+    """Kører partnerens SOLO-kørsel (deres egen plan påvirkes ikke af hvad
+    'selv' foretager sig) og bygger den SkatParametre 'selv' skal bruge for
+    korrekt koblet samspil — samme byggesten som beregn_husstand, men
+    genbrugelig for én side ad gangen (fx sekventeringsoptimeringen, der
+    kun søger over den ene persons produkter og derfor kun behøver
+    partnerens indkomst udregnet ÉN gang, ikke pr. kandidat)."""
+    alder_nu_partner = int(profil_partner.get("person", {}).get("alder") or 0)
+    solo_partner = generer_udbetalingstabel(profil_partner, parametre_partner)
+    indkomst_partner_pr_aar = _indtaegtsgrundlag_pr_kalenderaar(solo_partner, alder_nu_partner)
+    foedselsaar_partner = _foedselsaar_fra_profil(profil_partner)
+    return _skat_params_med_partner(parametre_selv, foedselsaar_partner, indkomst_partner_pr_aar)
+
+
 def beregn_husstand(
     profil_a: dict, parametre_a: dict,
     profil_b: dict, parametre_b: dict,
@@ -37,23 +53,8 @@ def beregn_husstand(
     udtrækker hver persons reelle indtægtsgrundlag pr. kalenderår, som
     derefter fødes ind i den ANDEN persons endelige, korrekt koblede
     kørsel. Returnerer {"a": resultat_a, "b": resultat_b}."""
-    alder_nu_a = int(profil_a.get("person", {}).get("alder") or 0)
-    alder_nu_b = int(profil_b.get("person", {}).get("alder") or 0)
-
-    solo_a = generer_udbetalingstabel(profil_a, parametre_a)
-    solo_b = generer_udbetalingstabel(profil_b, parametre_b)
-
-    indkomst_a_pr_aar = _indtaegtsgrundlag_pr_kalenderaar(solo_a, alder_nu_a)
-    indkomst_b_pr_aar = _indtaegtsgrundlag_pr_kalenderaar(solo_b, alder_nu_b)
-
-    # Partnerens fødselsår kommer nu fra dennes EGEN uploadede rapport — langt
-    # mere præcist end Fase B's manuelt indtastede alder, som stadig er
-    # fallback-vejen når der ikke findes en fuld partner-profil (se app.py).
-    foedselsaar_a = _foedselsaar_fra_profil(profil_a)
-    foedselsaar_b = _foedselsaar_fra_profil(profil_b)
-
-    skat_a = _skat_params_med_partner(parametre_a, foedselsaar_b, indkomst_b_pr_aar)
-    skat_b = _skat_params_med_partner(parametre_b, foedselsaar_a, indkomst_a_pr_aar)
+    skat_a = skat_params_for_person(parametre_a, profil_b, parametre_b)
+    skat_b = skat_params_for_person(parametre_b, profil_a, parametre_a)
 
     resultat_a = generer_udbetalingstabel(profil_a, parametre_a, skat_a)
     resultat_b = generer_udbetalingstabel(profil_b, parametre_b, skat_b)

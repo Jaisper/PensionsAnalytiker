@@ -1206,15 +1206,39 @@ async def optimer_udbetalingsplan(req: dict):
             if "kapital" in (p.get("produkttype") or "").lower():
                 p["skat_type"] = kapital_skat
 
+    # Samme husstands-detektion som _kør_engine — uden den ville optimeringen
+    # score kandidater mod et husstands-uafhængigt (forkert) indtægtsgrundlag
+    # for enhver bruger der har uploadet en fuld partner-profil.
+    civilstand = params.get("civilstand")
+    if civilstand is None:
+        civilstand = "enlig" if params.get("enlig", True) else "gift_samlevende"
+    profil_partner = session.get("profil_partner")
+    kwargs_partner = {}
+    if profil_partner and civilstand == "gift_samlevende" and params.get("partner_pensionsalder"):
+        params_partner = {
+            k: v for k, v in params.items()
+            if k not in ("produkt_start_aldre", "produkt_i_buffer", "produkt_udb_aar",
+                         "folkepension_opsaettelse_aar", "civilstand", "partner_alder",
+                         "partner_indkomst_aar", "partner_pensionsalder")
+        }
+        params_partner["pensionsalder"] = int(params["partner_pensionsalder"])
+        params_partner["civilstand"] = "gift_samlevende"
+        kwargs_partner = {
+            "profil_partner": copy.deepcopy(profil_partner),
+            "parametre_partner": params_partner,
+        }
+
+    haard_minimum = req.get("haard_minimum_mdr")
     obj = sekventering.Objektiv(
-        haard_minimum_mdr=float(req["haard_minimum_mdr"]) if req.get("haard_minimum_mdr") else None,
+        haard_minimum_mdr=float(haard_minimum) if haard_minimum is not None else None,
     )
-    res = sekventering.optimer(profil_kopi, params, obj)
+    res = sekventering.optimer(profil_kopi, params, obj, **kwargs_partner)
 
     if not sekventering.har_loesning(res):
         return JSONResponse({
             "success": False,
             "evalueret": res.evalueret,
+            "mulige_kombinationer": res.mulige_kombinationer,
             "besked": "Målet kan ikke nås inden for det afsøgte rum af start-aldre og folkepensions-opsætning — ingen kombination undgår mindst ét år under den anvendte minimumsgrænse.",
         })
 
@@ -1222,6 +1246,7 @@ async def optimer_udbetalingsplan(req: dict):
     return JSONResponse({
         "success": True,
         "evalueret": res.evalueret,
+        "mulige_kombinationer": res.mulige_kombinationer,
         "antal_gennemfoerlige": res.antal_gennemfoerlige,
         "bedste": {
             "produkt_start_aldre": b.produkt_start_aldre,

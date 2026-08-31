@@ -372,11 +372,17 @@ def generer_udbetalingstabel(
     likvid_formue      = float(parametre.get("fri_formue", 0) or 0)
     aarlig_varmeudgift = float(parametre.get("aarlig_varmeudgift", 0) or 0)
 
-    person   = profil.get("person", {})
-    alder_nu = int(person.get("alder") or 0)
-    n        = max(0, pensionsalder - alder_nu)
-
+    person      = profil.get("person", {})
     foedselsaar = _foedselsaar_fra_profil(profil)
+    # Fald tilbage til at udlede alder_nu fra fødselsåret når "alder" mangler
+    # (fx en profil der kun har foedselsdato) — ellers bliver alder_nu 0, hvilket
+    # `if alder_nu else ...`-fald-tilbage andre steder i denne funktion (bl.a.
+    # jaevn_tabel's reelt/nominelt-deflatering) fejlagtigt tolker som "ingen
+    # ventetid til pension", og stille slår inflations-deflateringen fra.
+    alder_raw = person.get("alder")
+    alder_nu  = int(alder_raw) if alder_raw else ((date.today().year - foedselsaar) if foedselsaar else 0)
+    n         = max(0, pensionsalder - alder_nu)
+
     fp_alder    = folkepension_alder(foedselsaar) if foedselsaar else 67
 
     ordninger         = profil.get("ordninger", [])
@@ -629,7 +635,10 @@ def generer_udbetalingstabel(
 
         # Indtægtsgrundlag for BÅDE pensionstillæg og tillægsprocent inkluderer
         # ATP (jf. satser_2026's indtaegtsgrundlag) — en tidligere udeladt post.
-        indtaegtsgrundlag_aar = privat_s_brutto + (atp_mdr * 12 if har_fp else 0.0)
+        # ATP er upåvirket af en evt. folkepensions-opsætning (samme som
+        # `har_atp` andre steder i denne løkke) — bruger derfor har_atp, IKKE
+        # har_fp, som i opsættelses-år ville udelukke allerede udbetalt ATP.
+        indtaegtsgrundlag_aar = privat_s_brutto + (atp_mdr * 12 if har_atp else 0.0)
         if har_fp and partner_er_fp:
             kalenderaar = date.today().year + (alder - alder_nu)
             if skat_params.partner_indkomst_pr_kalenderaar is not None and kalenderaar in skat_params.partner_indkomst_pr_kalenderaar:
@@ -869,6 +878,24 @@ def generer_udbetalingstabel(
     }
 
 
+def jaevn_niveau_realt(resultat: dict) -> float:
+    """`jaevn_netto_mdr` er nominel i det FØRSTE pensionsår — altså ved
+    pensionsalderen, ikke i dag. Er der år mellem i dag og pensionsalderen
+    og inflation sat, er det IKKE det samme som dagens købekraft (samme
+    beløb ganget op med inflationen for ventetiden). `jaevn_mdr_real` for
+    den første pensionsrække er derimod deflateret tilbage til i dag, og er
+    konstant hen over hele pensionsfasen (bortset fra senere tillæg, der kun
+    kan hæve niveauet) — det er DEN et beløb "i dagens/2025-købekraft"
+    faktisk skal sammenlignes med. Fælles helper for Tabel 3/4 og
+    sekventeringsoptimeringen, så de aldrig kan komme til at bruge to
+    forskellige tal for samme begreb."""
+    pension_raekker = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
+    if not pension_raekker:
+        return resultat["jaevn_netto_mdr"]
+    foerste = pension_raekker[0]
+    return foerste["jaevn_mdr_real"] if foerste["jaevn_mdr_real"] is not None else foerste["jaevn_mdr"]
+
+
 # ── Scenarieanalyse ───────────────────────────────────────────────────────────
 
 def generer_scenarier(profil: dict, parametre: dict, skat_params: Optional[SkatParametre]) -> list[dict]:
@@ -895,7 +922,8 @@ def generer_scenarier(profil: dict, parametre: dict, skat_params: Optional[SkatP
                 "r":          r_val,
                 "start_mdr":  round(first["total_netto_mdr"]) if first else 0,
                 "fp_mdr":     round(fp_row["total_netto_mdr"]) if fp_row else 0,
-                "jaevn_mdr":  res.get("jaevn_netto_mdr", 0),
+                "jaevn_mdr":      res.get("jaevn_netto_mdr", 0),
+                "jaevn_mdr_real": round(jaevn_niveau_realt(res)),
             })
         except Exception:
             pass
@@ -1511,6 +1539,19 @@ def format_engine_til_llm(result: dict) -> str:
         headline = f"**Du får udbetalt: {kr(jaevn_mdr)} kr/mdr** hver måned gennem hele pensionen."
         real_line = " (fast kronebeløb — ingen inflation er indregnet.)"
 
+    # Realisme-tjek: det udjævnede niveau forudsætter i sin natur at et tidligt,
+    # lavere år er en normal del af et sundt forløb (fx ratepension alene før
+    # folkepensionen supplerer) — det er IKKE i sig selv et problem. Men når
+    # bufferen samlet set går markant i minus i pensionsfasen, lover niveauet
+    # penge der endnu ikke er modtaget i et omfang der er værd at nævne.
+    buffer_underskud = sum(max(0.0, -row.get("buffer_rest", 0)) for row in pension_jt)
+    realisme_note = (
+        f" *Bemærk: niveauet er et gennemsnit for hele perioden — i nogle af de tidlige år "
+        f"forudsætter det penge fra senere udbetalinger, du endnu ikke har modtaget (se udsvinget "
+        f"nævnt ovenfor). Det er ikke et løfte om præcis dette beløb hvert enkelt år.*"
+        if buffer_underskud > jaevn_mdr else ""
+    )
+
     L += [
         "",
         "### TABEL 3 — JÆVN MÅNEDLIG UDBETALING",
@@ -1519,6 +1560,7 @@ def format_engine_til_llm(result: dict) -> str:
         "",
         headline,
         real_line,
+        realisme_note,
         (f"Bufferen fyldes op af engangsbeløb netto ({kr(engangs_total)} kr) og forrentes med "
          f"{r_buf_pct:.1f}% p.a. efter {buf_skat_pct:.0f}% kapitalafgift.") if engangs_total else "",
     ]
@@ -1556,19 +1598,23 @@ def format_engine_til_llm(result: dict) -> str:
 
     # Tabel 4 — Scenarieanalyse
     if scenarier:
+        vis_realt_4 = inflation_vis > 0
+        real_hdr = " | Jævn netto/mdr (i dagens købekraft)" if vis_realt_4 else ""
         L += [
             "",
             "### TABEL 4 — SCENARIEANALYSE (pessimistisk / base / optimistisk afkast)",
-            "| Scenarie | Afkast | Netto/mdr ved pensionsstart | Netto/mdr ved folkepension | Jævn netto/mdr |",
-            "|---|---:|---:|---:|---:|",
+            f"| Scenarie | Afkast | Netto/mdr ved pensionsstart | Netto/mdr ved folkepension | Jævn netto/mdr (ved pensionsstart){real_hdr} |",
+            "|---|---:|---:|---:|---:" + ("|---:" if vis_realt_4 else "") + "|",
         ]
         for s in scenarier:
+            real_col = f" | {s['jaevn_mdr_real']:,.0f} kr/mdr".replace(",", ".") if vis_realt_4 else ""
             L.append(
                 f"| {s['label']} | {s['r']:.1f}%"
                 f" | {s['start_mdr']:,.0f} kr/mdr"
                 f" | {s['fp_mdr']:,.0f} kr/mdr"
-                f" | {s['jaevn_mdr']:,.0f} kr/mdr |".replace(",", ".")
+                f" | {s['jaevn_mdr']:,.0f} kr/mdr".replace(",", ".")
+                + real_col + " |"
             )
-        L.append("*(Base-scenariet svarer til Tabel 1–3 ovenfor)*")
+        L.append("*(Base-scenariet svarer til Tabel 1–3 ovenfor. \"Ved pensionsstart\" er nominelt — kronebeløb stiger med inflationen fra dette udgangspunkt, ligesom Tabel 3.)*" if vis_realt_4 else "*(Base-scenariet svarer til Tabel 1–3 ovenfor)*")
 
     return "\n".join(L)

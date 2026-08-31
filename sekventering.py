@@ -19,12 +19,18 @@ VIGTIGT om realisme: `jaevn_netto_mdr` er en fremadskuende udjævning af HELE
 den resterende løbende indkomst — for ethvert forløb med et sent indkomst-løft
 (fx folkepension der først starter år senere) vil dette tal helt naturligt
 ligge over de tidlige års rå indkomst, også for den helt uoptimerede
-default-plan. Det er IKKE i sig selv et problem. Det AFGØRENDE er om
-optimeringen aktivt gør de tidlige år VÆRRE end de ville have været uden
-indblanding, blot for at få et højere (men mindre reelt) udjævnet tal at
-vise frem. Der tjekkes derfor at ingen kandidat nogensinde har et lavere
-rå, faktisk udbetalt minimum end den uoptimerede default-plan selv har —
-se `_mindste_raa_beloeb`.
+default-plan. Det er IKKE i sig selv et problem — `jaevn_tabel`s egen
+`buffer_rest` går naturligt i minus i sådanne år, fordi udjævningen i sin
+natur forudsætter penge der endnu ikke er modtaget (samme mekanik chartet
+allerede skjuler den stiplede linje ved). Det AFGØRENDE er om optimeringen
+aktivt GØR DETTE VÆRRE end default-planen allerede har det, blot for at
+presse et højere (men mindre reelt) udjævnet tal frem. Der måles derfor det
+SAMLEDE "bufferunderskud" (summen af alle negative buffer_rest-år i
+pensionsfasen, se `_buffer_underskud`) — en kandidat der kræver et større
+underskud end default-planens eget, bliver diskvalificeret, uanset hvor
+godt det udjævnede tal ellers ser ud. Et rent minimum-af-et-enkelt-år-tjek
+viste sig utilstrækkeligt: det fanger dybden af et hul, men ikke hvor
+mange flere år hullet varer ved.
 
 "Ingen løsning" er et gyldigt svar: kald altid har_loesning() før resultatet
 præsenteres, og vis aldrig den næstbedste-men-utilstrækkelige plan som var
@@ -47,10 +53,10 @@ MAKS_EVALUERINGER_DEFAULT = 3000
 STANDARD_OPSAETTELSE = [0, 1, 2, 3, 5]
 STANDARD_EKSTRA_AAR  = 10  # søg start-aldre op til pensionsalder + dette
 
-# Kandidatens laveste rå månedsbeløb skal mindst udgøre denne andel af
-# default-planens eget laveste rå beløb — lille tolerance for afrunding,
-# ikke en invitation til at forringe de tidlige år mærkbart.
-RAA_TOLERANCE = 0.95
+# Kandidatens samlede bufferunderskud (se _buffer_underskud) må højst være
+# denne faktor gange default-planens eget — lille tolerance for afrunding,
+# ikke en invitation til at forringe de tidlige/mellemliggende år mærkbart.
+BUFFER_UNDERSKUD_TOLERANCE = 1.05
 
 
 @dataclass
@@ -138,21 +144,22 @@ def _parametre_for_vektor(base_parametre: dict, vektor: tuple[tuple, ...]) -> tu
     return p, produkt_start_aldre, produkt_udb_aar
 
 
-def _mindste_raa_beloeb(resultat: dict) -> float:
-    """Det laveste rå (ikke-udjævnede) månedsbeløb i pensionsfasen — bruges
-    som en \"gør ikke de tidlige år værre end de var\"-reference."""
+def _buffer_underskud(resultat: dict) -> float:
+    """Summeret bufferunderskud i pensionsfasen: hvor meget bufferen samlet
+    set går i minus, år for år (kun de negative år tæller, positive år
+    bidrager 0). Et højere tal betyder at flere/dybere år af det udjævnede
+    niveau reelt er et regnestykke, ikke penge der faktisk er til stede —
+    se modulets docstring."""
     pension_raekker = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
-    if not pension_raekker:
-        return 0.0
-    return min(r["normal_mdr"] for r in pension_raekker)
+    return sum(max(0.0, -r["buffer_rest"]) for r in pension_raekker)
 
 
-def score(resultat: dict, obj: Objektiv, mindste_raa_baseline: float) -> tuple[float, float]:
+def score(resultat: dict, obj: Objektiv, buffer_underskud_baseline: float) -> tuple[float, float]:
     """Returnerer (score, jaevn_netto_mdr). Score er det faste, bæredygtige
     månedsbeløb (samme tal som `jaevn_netto_mdr` i det almindelige diagram)
     — højere er bedre, det ER selve målet. Score = -inf hvis planen enten
-    bryder en (eventuel) hård bundgrænse, gør de tidlige/laveste år værre
-    end default-planens egne (se modulets docstring), eller indeholder et
+    bryder en (eventuel) hård bundgrænse, forøger bufferunderskuddet ud over
+    default-planens eget (se modulets docstring), eller indeholder et
     fuldstændigt indkomst-hul."""
     jaevn_tabel = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
     jaevn_niveau = resultat["jaevn_netto_mdr"]
@@ -163,7 +170,7 @@ def score(resultat: dict, obj: Objektiv, mindste_raa_baseline: float) -> tuple[f
         if udjaevnet < graense:
             return float("-inf"), 0.0
 
-    if _mindste_raa_beloeb(resultat) < mindste_raa_baseline * RAA_TOLERANCE:
+    if _buffer_underskud(resultat) > buffer_underskud_baseline * BUFFER_UNDERSKUD_TOLERANCE:
         return float("-inf"), 0.0
 
     # Et fuldstændigt indkomst-hul (fx før pensionsalder, eller hvis ALLE
@@ -192,7 +199,7 @@ def optimer(
         # en plan der er drastisk værre i et enkelt år end den nuværende,
         # uden at kræve brugeren selv opfinder et tal.
         obj = Objektiv(haard_minimum_mdr=round(baseline["jaevn_netto_mdr"] * 0.7))
-    mindste_raa_baseline = _mindste_raa_beloeb(baseline)
+    buffer_underskud_baseline = _buffer_underskud(baseline)
 
     alle_produkter = baseline["produkter"]
 
@@ -205,7 +212,7 @@ def optimer(
     for vektor in islice(product(*dimensioner), maks_evalueringer):
         p, _, _ = _parametre_for_vektor(parametre, vektor)
         resultat = generer_udbetalingstabel(profil, p)
-        s, jaevn = score(resultat, obj, mindste_raa_baseline)
+        s, jaevn = score(resultat, obj, buffer_underskud_baseline)
         evaluerede.append((vektor, s, jaevn))
 
     evaluerede.sort(key=lambda x: x[1], reverse=True)

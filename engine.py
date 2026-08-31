@@ -42,6 +42,11 @@ class SkatParametre:
     # begge pensionister" der vælges — se _vaelg_pensionstillaeg_regel().
     partner_foedselsaar: Optional[int] = None
     partner_indkomst_aar: float        = 0.0
+    # Fase D — når en fuld partner-profil er uploadet, kender husstand.py
+    # partnerens REELLE indkomst pr. kalenderår og sender den her i stedet for
+    # det flade Fase B-overslag. Slås op FØRST; falder tilbage til
+    # partner_indkomst_aar hvis ordbogen mangler eller ikke dækker året.
+    partner_indkomst_pr_kalenderaar: Optional[dict[int, float]] = None
 
     @classmethod
     def fra_pct(
@@ -51,6 +56,7 @@ class SkatParametre:
         enlig: bool = True,
         partner_foedselsaar: Optional[int] = None,
         partner_indkomst_aar: float = 0.0,
+        partner_indkomst_pr_kalenderaar: Optional[dict[int, float]] = None,
     ) -> "SkatParametre":
         return cls(
             kommuneskat=kommuneskat_pct / 100,
@@ -58,6 +64,7 @@ class SkatParametre:
             enlig=enlig,
             partner_foedselsaar=partner_foedselsaar,
             partner_indkomst_aar=partner_indkomst_aar,
+            partner_indkomst_pr_kalenderaar=partner_indkomst_pr_kalenderaar,
         )
 
 
@@ -624,7 +631,11 @@ def generer_udbetalingstabel(
         # ATP (jf. satser_2026's indtaegtsgrundlag) — en tidligere udeladt post.
         indtaegtsgrundlag_aar = privat_s_brutto + (atp_mdr * 12 if har_fp else 0.0)
         if har_fp and partner_er_fp:
-            indtaegtsgrundlag_aar += skat_params.partner_indkomst_aar
+            kalenderaar = date.today().year + (alder - alder_nu)
+            if skat_params.partner_indkomst_pr_kalenderaar is not None and kalenderaar in skat_params.partner_indkomst_pr_kalenderaar:
+                indtaegtsgrundlag_aar += skat_params.partner_indkomst_pr_kalenderaar[kalenderaar]
+            else:
+                indtaegtsgrundlag_aar += skat_params.partner_indkomst_aar
 
         if har_atp:
             atp_netto_aar = _netto_s_uden_am(float(atp_mdr * 12), skat_params, total_pi, float(atp_mdr * 12))
@@ -700,6 +711,7 @@ def generer_udbetalingstabel(
             "atp_mdr_brutto":  float(atp_mdr) if har_atp else 0.0,
             "atp_mdr_netto":   atp_mdr_netto,
             "tillaeg_mdr":     tillaeg_mdr,
+            "indtaegtsgrundlag_aar": indtaegtsgrundlag_aar,
             "tillaegsprocent": tillaegsprocent,
             "aeldrecheck_mdr":   aeldrecheck_mdr,
             "mediecheck_mdr":    mediecheck_mdr,

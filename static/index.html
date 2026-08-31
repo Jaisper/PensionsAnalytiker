@@ -1035,16 +1035,28 @@ Upload derefter PDF'en her øverst til højre.`,
             <span style="font-size:0.85rem;color:#2a3a4a">Gift eller samlevende (fælles økonomi)</span>
           </label>
           <div id="civilstand_wrap" style="display:none">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
-              <span style="font-size:0.85rem;color:#2a3a4a;min-width:90px">Partners alder</span>
-              <input type="number" id="iq_partner_alder" min="18" max="110" step="1" style="width:70px">
+            <div id="partner_let_felter">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+                <span style="font-size:0.85rem;color:#2a3a4a;min-width:90px">Partners alder</span>
+                <input type="number" id="iq_partner_alder" min="18" max="110" step="1" style="width:70px">
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:0.85rem;color:#2a3a4a;min-width:90px">Partners indkomst</span>
+                <input type="number" id="iq_partner_indkomst" placeholder="0" min="0" step="10000" style="width:100px">
+                <span class="unit">kr/år efter folkepension</span>
+              </div>
+              <div class="qdesc" style="margin-top:4px">Bruges til et overslag over jeres samlede indtægtsgrundlag for pensionstillæg/tillægsprocent — den præcise modregningsregel for gifte par er mere kompleks end dette værktøj modellerer.</div>
             </div>
-            <div style="display:flex;align-items:center;gap:8px">
-              <span style="font-size:0.85rem;color:#2a3a4a;min-width:90px">Partners indkomst</span>
-              <input type="number" id="iq_partner_indkomst" placeholder="0" min="0" step="10000" style="width:100px">
-              <span class="unit">kr/år efter folkepension</span>
+            <div style="margin-top:8px;padding-top:8px;border-top:1px solid #dde6ee">
+              <div class="qdesc" style="margin-bottom:5px">Har du partnerens egen PensionsInfo-rapport? Så bliver beregningen fuldt præcis i stedet for et overslag.</div>
+              <input type="file" id="iq_partner_pdf" accept="application/pdf" style="font-size:0.8rem" onchange="uploadPartnerRapport()">
+              <div id="partner_upload_status" style="font-size:0.8rem;margin-top:4px"></div>
+              <div id="partner_pensionsalder_row" style="display:none;margin-top:6px;align-items:center;gap:8px">
+                <span style="font-size:0.85rem;color:#2a3a4a;min-width:150px">Partners ønskede pensionsalder</span>
+                <input type="number" id="iq_partner_pensionsalder" min="55" max="80" step="1" style="width:70px">
+                <span class="unit">år</span>
+              </div>
             </div>
-            <div class="qdesc" style="margin-top:4px">Bruges til et overslag over jeres samlede indtægtsgrundlag for pensionstillæg/tillægsprocent — den præcise modregningsregel for gifte par er mere kompleks end dette værktøj modellerer.</div>
           </div>
         </td>
       </tr>`;
@@ -1187,6 +1199,37 @@ Upload derefter PDF'en her øverst til højre.`,
     const checked = document.getElementById('iq_civilstand')?.checked;
     const wrap = document.getElementById('civilstand_wrap');
     if (wrap) wrap.style.display = checked ? '' : 'none';
+  }
+
+  let _partnerUploaded = false;
+
+  async function uploadPartnerRapport() {
+    const input  = document.getElementById('iq_partner_pdf');
+    const status = document.getElementById('partner_upload_status');
+    const file = input?.files?.[0];
+    if (!file || !sessionId) return;
+
+    status.style.color = '#5578a0';
+    status.textContent = '⟳ Indlæser partners rapport…';
+
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch(`/api/upload-partner/${sessionId}`, { method: 'POST', body: formData });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.detail || 'Ukendt fejl');
+
+      _partnerUploaded = true;
+      status.style.color = '#1a7a4a';
+      status.textContent = `✓ ${data.navn || 'Partners rapport'} indlæst — beregningen er nu fuldt præcis for partneren.`;
+      const letFelter = document.getElementById('partner_let_felter');
+      if (letFelter) letFelter.style.display = 'none';
+      const pensionsalderRow = document.getElementById('partner_pensionsalder_row');
+      if (pensionsalderRow) pensionsalderRow.style.display = 'flex';
+    } catch (e) {
+      status.style.color = '#c0392b';
+      status.textContent = `Kunne ikke indlæse rapporten: ${e.message}`;
+    }
   }
 
   function autoFillStartAldre() {
@@ -1358,9 +1401,13 @@ Upload derefter PDF'en her øverst til højre.`,
 
     const civilstandChecked = document.getElementById('iq_civilstand')?.checked ?? false;
     const civilstand = civilstandChecked ? 'gift_samlevende' : 'enlig';
-    const partnerAlder    = civilstandChecked ? parseInt(v('iq_partner_alder')) || undefined : undefined;
-    const partnerIndkomst = civilstandChecked ? parseFloat(v('iq_partner_indkomst')) || 0 : undefined;
-    if (civilstandChecked) {
+    const partnerPensionsalder = civilstandChecked && _partnerUploaded
+      ? parseInt(v('iq_partner_pensionsalder')) || undefined : undefined;
+    const partnerAlder    = civilstandChecked && !_partnerUploaded ? parseInt(v('iq_partner_alder')) || undefined : undefined;
+    const partnerIndkomst = civilstandChecked && !_partnerUploaded ? parseFloat(v('iq_partner_indkomst')) || 0 : undefined;
+    if (civilstandChecked && _partnerUploaded) {
+      parts.push(`7c. Civilstand: Gift/samlevende, partners egen rapport uploadet, ønsket pensionsalder ${partnerPensionsalder || '?'} år`);
+    } else if (civilstandChecked) {
       parts.push(`7c. Civilstand: Gift/samlevende, partner ${partnerAlder || '?'} år, partner-indkomst ${partnerIndkomst || 0} kr/år efter folkepension`);
     } else {
       parts.push(`7c. Civilstand: Enlig`);
@@ -1431,6 +1478,7 @@ Upload derefter PDF'en her øverst til højre.`,
         civilstand:                  civilstand,
         partner_alder:               partnerAlder,
         partner_indkomst_aar:        partnerIndkomst,
+        partner_pensionsalder:       partnerPensionsalder,
       }),
     });
 
@@ -1911,7 +1959,9 @@ function _collectPayload(includePanel = false) {
     const civilstandChecked = document.getElementById('iq_civilstand')?.checked ?? false;
     if (document.getElementById('iq_civilstand')) {
       payload.civilstand = civilstandChecked ? 'gift_samlevende' : 'enlig';
-      if (civilstandChecked) {
+      if (civilstandChecked && _partnerUploaded) {
+        payload.partner_pensionsalder = parseInt(document.getElementById('iq_partner_pensionsalder')?.value) || undefined;
+      } else if (civilstandChecked) {
         payload.partner_alder = parseInt(document.getElementById('iq_partner_alder')?.value) || undefined;
         payload.partner_indkomst_aar = parseFloat(document.getElementById('iq_partner_indkomst')?.value) || 0;
       }

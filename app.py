@@ -35,6 +35,7 @@ from engine import (generer_udbetalingstabel, format_engine_til_llm, SkatParamet
                      fordel_pmt_default, format_fordeling_til_llm, generer_scenarier,
                      analyser_forsikring, beregn_fri_formue_tabel)
 import sekventering
+import husstand
 
 app = FastAPI(title="PensionsAnalytiker")
 
@@ -294,6 +295,11 @@ Hvis brugeren har angivet civilstand "gift eller samlevende":
 - Hvis en partner-indkomst er angivet, tælles den KUN med i indtægtsgrundlaget i de år partneren selv er folkepensionist — IKKE mens partneren stadig er erhvervsaktiv. Gør altid klart for brugeren at dette er et **overslag**, ikke en juridisk præcis fælles-beregning: den fulde modregningsregel for gifte par med to indkomster er mere kompleks end dette værktøj modellerer.
 - Der er IKKE regnet en selvstændig udbetalingsplan for partneren — kun brugerens egen tidslinje/produkter vises. Sig det tydeligt hvis brugeren spørger til partnerens egen pension.
 
+Hvis der derimod findes en "## PARTNERENS UDBETALINGSANALYSE"-sektion i konteksten (partneren har uploadet sin egen rapport):
+- Partnerens tal er nu en FULD, egen beregning — egne produkter, egen tidslinje, egen skat — ikke længere et overslag. Præsenter den som en klart adskilt sektion, ligesom den fremstår i konteksten.
+- Den ENESTE tilnærmelse der stadig gælder er selve samspils-koblingen: det kombinerede indtægtsgrundlag for pensionstillæg/tillægsprocent er stadig en forenklet tilnærmelse til § 29-reglerne — nævn det kort, men lad være med at gentage hele forbeholdet for hver eneste tabel.
+- Diagrammet/tidslinjen i UI'et viser fortsat kun brugerens EGNE produkter — partnerens tal findes kun i chatten som tekst.
+
 ## SEKVENTERINGSOPTIMERING — "FIND BEDSTE UDBETALINGSRÆKKEFØLGE"
 Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsrækkefølge:
 - Resultatet er fundet ved at afprøve en lang række kombinationer af start-aldre, ratepensions-udbetalingsperioder og evt. udskudt folkepension — IKKE ved at forudse fremtiden. Præsenter det som en anbefaling baseret på de antagelser (afkast, skat, mål) der allerede er sat, ikke som en garanti.
@@ -337,6 +343,8 @@ def _engine_cache_key(session: dict) -> str:
         "partner_indkomst_aar": params.get("partner_indkomst_aar"),
         "produkt_udb_aar":    json.dumps(params.get("produkt_udb_aar", {}), sort_keys=True),
         "folkepension_opsaettelse_aar": params.get("folkepension_opsaettelse_aar"),
+        "partner_pensionsalder": params.get("partner_pensionsalder"),
+        "profil_partner_id":  id(session.get("profil_partner")),
         "profil_id":          id(profil),
     }
     return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
@@ -410,15 +418,38 @@ def _kør_engine(session_id: str) -> str:
         if civilstand is None:
             civilstand = "enlig" if params.get("enlig", True) else "gift_samlevende"
         partner_alder = params.get("partner_alder")
-        skat = SkatParametre.fra_pct(
-            kommuneskat_pct=float(params.get("kommuneskat_pct", 25.0)),
-            kirkeskat_pct=float(params.get("kirkeskat_pct", 0.7)),
-            enlig=(civilstand != "gift_samlevende"),
-            partner_foedselsaar=(date.today().year - int(partner_alder)) if partner_alder else None,
-            partner_indkomst_aar=float(params.get("partner_indkomst_aar", 0) or 0),
-        )
-        result = generer_udbetalingstabel(profil_kopi, params, skat)
-        result["scenarier"] = generer_scenarier(copy.deepcopy(profil_kopi), params, skat)
+
+        profil_partner = session.get("profil_partner")
+        result_text_partner = None
+        if profil_partner and civilstand == "gift_samlevende" and params.get("partner_pensionsalder"):
+            # Fase D — fuld partner-profil. Genbrug primærens antagelser
+            # (afkast/inflation/kommune-/kirkeskat), men uden primærens
+            # produkt-specifikke overrides (start-aldre/perioder/buffer),
+            # som slet ikke matcher partnerens produkt-nøgler.
+            params_partner = {
+                k: v for k, v in params.items()
+                if k not in ("produkt_start_aldre", "produkt_i_buffer", "produkt_udb_aar",
+                             "folkepension_opsaettelse_aar", "civilstand", "partner_alder",
+                             "partner_indkomst_aar", "partner_pensionsalder")
+            }
+            params_partner["pensionsalder"] = int(params["partner_pensionsalder"])
+            params_partner["civilstand"] = "gift_samlevende"
+            husstand_resultat = husstand.beregn_husstand(
+                profil_kopi, params, copy.deepcopy(profil_partner), params_partner,
+            )
+            result = husstand_resultat["a"]
+            result_text_partner = format_engine_til_llm(husstand_resultat["b"])
+            skat = None  # allerede anvendt inde i beregn_husstand
+        else:
+            skat = SkatParametre.fra_pct(
+                kommuneskat_pct=float(params.get("kommuneskat_pct", 25.0)),
+                kirkeskat_pct=float(params.get("kirkeskat_pct", 0.7)),
+                enlig=(civilstand != "gift_samlevende"),
+                partner_foedselsaar=(date.today().year - int(partner_alder)) if partner_alder else None,
+                partner_indkomst_aar=float(params.get("partner_indkomst_aar", 0) or 0),
+            )
+            result = generer_udbetalingstabel(profil_kopi, params, skat)
+            result["scenarier"] = generer_scenarier(copy.deepcopy(profil_kopi), params, skat)
         fri_formue = params.get("fri_formue")
         if fri_formue and fri_formue > 0:
             alder_nu = int((session.get("profil") or {}).get("person", {}).get("alder") or 0)
@@ -435,6 +466,15 @@ def _kør_engine(session_id: str) -> str:
             result["fri_formue_analyse"] = None
         session["engine_output"] = result
         result_text = format_engine_til_llm(result)
+        if result_text_partner:
+            result_text += (
+                "\n\n---\n\n"
+                "## PARTNERENS UDBETALINGSANALYSE\n"
+                "*(Fuld, selvstændig beregning for partneren — samspils-koblingen (kombineret "
+                "indtægtsgrundlag for pensionstillæg/tillægsprocent) er stadig en forenklet "
+                "tilnærmelse til § 29-reglerne, ikke en juridisk præcis fælles-beregning.)*\n\n"
+                + result_text_partner
+            )
         session["_engine_cache_key"]  = cache_key
         session["_engine_cache_text"] = result_text
         return result_text
@@ -887,6 +927,47 @@ async def upload_rapport(session_id: str, file: UploadFile = File(...)):
         os.unlink(tmp_path)
 
 
+@app.post("/api/upload-partner/{session_id}")
+async def upload_partner_rapport(session_id: str, file: UploadFile = File(...)):
+    """Fase D — valgfri partner-rapport, uploadet når civilstand-checkboxen
+    vælges. Spejler /api/upload, men gemmer under profil_partner og rører
+    IKKE messages/beregningsparametre — de tilhører hovedinterviewet, som
+    kan allerede være i gang."""
+    if session_id not in sessions:
+        raise HTTPException(404, "Session ikke fundet")
+
+    if not (file.filename or "").endswith(".pdf"):
+        raise HTTPException(400, "Kun PDF-filer accepteres")
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        content = await file.read()
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(400, f"Filen er for stor (max {MAX_UPLOAD_BYTES // 1_000_000} MB)")
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        profil_partner = await parse_pensionsinfo_pdf(tmp_path)
+        profil_partner_tekst = format_profil_til_tekst(profil_partner)
+
+        sessions[session_id]["profil_partner"] = profil_partner
+        sessions[session_id]["profil_partner_tekst"] = profil_partner_tekst
+
+        return {
+            "success": True,
+            "navn": profil_partner["person"].get("navn", ""),
+            "profil_partner_tekst": profil_partner_tekst,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logging.error("Partner-upload fejl for session %s: %s", session_id, traceback.format_exc())
+        raise HTTPException(500, detail=f"Fejl ved indlæsning af partners rapport: {type(e).__name__}: {e}")
+    finally:
+        os.unlink(tmp_path)
+
+
 class ChatMessage(BaseModel):
     session_id: str
     message: str
@@ -1017,6 +1098,7 @@ class Parametre(BaseModel):
     partner_indkomst_aar: float | None = None
     produkt_udb_aar: dict | None = None
     folkepension_opsaettelse_aar: int | None = None
+    partner_pensionsalder: int | None = None
 
 
 @app.post("/api/parametre")
@@ -1045,6 +1127,7 @@ async def gem_parametre(req: Parametre):
     if req.partner_indkomst_aar is not None:          p["partner_indkomst_aar"] = req.partner_indkomst_aar
     if req.produkt_udb_aar is not None:               p["produkt_udb_aar"] = req.produkt_udb_aar
     if req.folkepension_opsaettelse_aar is not None:  p["folkepension_opsaettelse_aar"] = req.folkepension_opsaettelse_aar
+    if req.partner_pensionsalder is not None:         p["partner_pensionsalder"] = req.partner_pensionsalder
 
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")

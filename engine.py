@@ -10,27 +10,23 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-# ── 2025-satser ──────────────────────────────────────────────────────────────
+import satser_2026
+
+# ── 2025/2026-satser ─────────────────────────────────────────────────────────
+# Topskat, skatteloft og pensionstillæggets gamle flade satser er flyttet til
+# satser_2026.py (progressiv 2026-struktur + verificeret pensionstillæg/
+# tillægsprocent). De resterende konstanter her har intet 2026-modstykke i
+# den porterede regelpakke.
 
 AM_BIDRAG                         = 0.08
 BUNDSKAT                          = 0.1201
-TOPSKAT                           = 0.15
-TOPSKAT_GRAENSE_PI                = 588_900    # kr/år personlig indkomst (efter AM-bidrag)
 KOMMUNESKAT_DEFAULT               = 0.250
 KIRKESKAT_DEFAULT                 = 0.007
 
 FOLKEPENSION_MDR                  = 7_955      # kr/mdr grundbeløb 2025
 ATP_MDR_STANDARD                  = 1_825      # kr/mdr estimat
 
-PENSIONSTILLAEG_MAX_ENLIG_AAR     = 8_891 * 12    # 106.692 kr/år
-PENSIONSTILLAEG_BUNDFRADRAG_ENLIG = 98_400         # kr/år
-PENSIONSTILLAEG_MODREGNING        = 0.309          # 30,9 % jf. § 29
-PENSIONSTILLAEG_MAX_PAR_AAR       = 4_396 * 12      # 52.752 kr/år jf. § 29 stk. 2
-PENSIONSTILLAEG_BUNDFRADRAG_PAR   = 196_700          # kr/år (par)
-PENSIONSTILLAEG_MODREGNING_PAR    = 0.32             # 32 % (par)
-
 RATEPENSION_LOFT                  = 63_100
-SKATTELOFT                        = 0.5207     # PSL § 19
 LIVSVARIG_ESTIMAT_AAR             = 18             # fallback — overstyres af alder-justeret estimat
 
 
@@ -100,29 +96,84 @@ def beregn_maanedlig_annuitet(fv: float, r: float, m: int) -> float:
 
 
 # ── Skatteberegning ──────────────────────────────────────────────────────────
+# Progressiv struktur 2026: mellemskat/topskat/top-topskat, hver med sit eget
+# skatteloft (PSL § 19). Porteret fra pension-core (tax.ts) efter dens 22
+# håndverificerede golden-tests. Denne app modellerer ikke nettokapitalindkomst
+# særskilt, så alle tre trin bruger personlig indkomst som grundlag.
 
-def _topskat_andel(dette_pi: float, total_pi: float) -> float:
-    if total_pi <= TOPSKAT_GRAENSE_PI or total_pi == 0:
+def _progressiv_skat_total_aar(
+    personlig_indkomst: float,
+    kommunal_sats: float,
+    strict: bool = False,
+    spor: list[str] | None = None,
+) -> float:
+    """Samlet mellemskat + topskat + top-topskat − skatteloft-nedslag for hele
+    husstandens/personens personlige indkomst i året."""
+    if spor is None:
+        spor = []
+    mellemskat = topskat = toptopskat = 0.0
+    hoejeste_loft = 0.0
+    for trin in satser_2026.PROGRESSION:
+        beloeb = max(0.0, personlig_indkomst - trin.bundgraense) * trin.sats
+        if beloeb > 0:
+            hoejeste_loft = trin.skatteloft
+            spor.append(trin.id)
+        if trin.id == "skat.mellemskat":
+            mellemskat = beloeb
+        elif trin.id == "skat.topskat":
+            topskat = beloeb
+        elif trin.id == "skat.toptopskat":
+            toptopskat = beloeb
+
+    loft_nedslag = 0.0
+    if hoejeste_loft > 0:
+        marginalsats = (
+            BUNDSKAT + kommunal_sats
+            + (0.075 if mellemskat > 0 else 0.0)
+            + (0.075 if topskat > 0 else 0.0)
+            + (0.05 if toptopskat > 0 else 0.0)
+        )
+        if marginalsats > hoejeste_loft:
+            overskydende = marginalsats - hoejeste_loft
+            trin_grundlag = max(0.0, personlig_indkomst - satser_2026.PROGRESSION[0].bundgraense)
+            loft_nedslag = trin_grundlag * overskydende
+            spor.append("skat.skatteloft")
+
+    return mellemskat + topskat + toptopskat - loft_nedslag
+
+
+def _progressiv_skat_andel(
+    dette_pi: float,
+    total_pi: float,
+    kommunal_sats: float,
+    strict: bool = False,
+    spor: list[str] | None = None,
+) -> float:
+    """Fordeler husstandens/personens samlede progressive skat forholdsmæssigt
+    ud på det enkelte produkts andel af den personlige indkomst."""
+    if total_pi <= 0:
         return 0.0
-    total_topskat = (total_pi - TOPSKAT_GRAENSE_PI) * TOPSKAT
-    return total_topskat * (dette_pi / total_pi)
+    total = _progressiv_skat_total_aar(total_pi, kommunal_sats, strict, spor)
+    return total * (dette_pi / total_pi)
 
 
-def _netto_s_med_am(brutto: float, skat: SkatParametre, total_pi: float, dette_pi: float) -> float:
+def _netto_s_med_am(
+    brutto: float, skat: SkatParametre, total_pi: float, dette_pi: float,
+    strict: bool = False, spor: list[str] | None = None,
+) -> float:
     basis = BUNDSKAT + skat.kommuneskat + skat.kirkeskat
-    if basis + TOPSKAT > SKATTELOFT:
-        basis = max(0.0, SKATTELOFT - TOPSKAT)  # PSL § 19
     netto = brutto * (1 - AM_BIDRAG) * (1 - basis)
-    netto -= _topskat_andel(dette_pi, total_pi)
+    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat + skat.kirkeskat, strict, spor)
     return netto
 
 
-def _netto_s_uden_am(brutto: float, skat: SkatParametre, total_pi: float, dette_pi: float) -> float:
+def _netto_s_uden_am(
+    brutto: float, skat: SkatParametre, total_pi: float, dette_pi: float,
+    strict: bool = False, spor: list[str] | None = None,
+) -> float:
     basis = BUNDSKAT + skat.kommuneskat + skat.kirkeskat
-    if basis + TOPSKAT > SKATTELOFT:
-        basis = max(0.0, SKATTELOFT - TOPSKAT)  # PSL § 19
     netto = brutto * (1 - basis)
-    netto -= _topskat_andel(dette_pi, total_pi)
+    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat + skat.kirkeskat, strict, spor)
     return netto
 
 
@@ -143,20 +194,70 @@ def beregn_netto_skat(
     return _netto_s_uden_am(brutto_aar, skat, total_pi, dette_pi)
 
 
-# ── Pensionstillæg (modregning) ──────────────────────────────────────────────
+# ── Pensionstillæg (modregning) og personlig tillægsprocent ─────────────────
+# To UAFHÆNGIGE indtægtsreguleringer, der styrer hver sin ting og aldrig må
+# kollapses til én — se satser_2026.py for de fulde kilder og tal.
 
 def folkepension_pensionstillaeg_aar(privat_s_indkomst_aar: float, skat: SkatParametre) -> float:
     """Pensionstillæg efter modregning. Kilde: Lov om social pension § 29."""
-    if skat.enlig:
-        max_t       = PENSIONSTILLAEG_MAX_ENLIG_AAR
-        bundfradrag = PENSIONSTILLAEG_BUNDFRADRAG_ENLIG
-        modregning  = PENSIONSTILLAEG_MODREGNING
-    else:
-        max_t       = PENSIONSTILLAEG_MAX_PAR_AAR
-        bundfradrag = PENSIONSTILLAEG_BUNDFRADRAG_PAR
-        modregning  = PENSIONSTILLAEG_MODREGNING_PAR
-    overskud   = max(0.0, privat_s_indkomst_aar - bundfradrag)
+    regel = satser_2026.TILLAEG_ENLIG if skat.enlig else satser_2026.TILLAEG_GIFT_PARTNER_IKKE_PENSIONIST
+    max_t       = regel["ydelse"].vaerdi
+    bundfradrag = regel["bundfradrag"].vaerdi
+    modregning  = regel["sats"].vaerdi
+    overskud    = max(0.0, privat_s_indkomst_aar - bundfradrag)
     return max(0.0, max_t - overskud * modregning)
+
+
+def beregn_tillaegsprocent(indtaegt_aar: float, enlig: bool) -> int:
+    """Den personlige tillægsprocent (0–100), som styrer ældrecheck,
+    mediecheck og varmetillæg. Falder i HELE procentpoint (ikke lineært) —
+    en SELVSTÆNDIG regel, ikke en afledning af pensionstillæggets aftrapning.
+    Rammer nul ved en langt lavere indkomst end pensionstillægget gør."""
+    regel = satser_2026.TILLAEGSPROCENT_ENLIG if enlig else satser_2026.TILLAEGSPROCENT_GIFT
+    bund = regel["bundfradrag"].vaerdi
+    trin = regel["trinstoerrelse"].vaerdi
+    if indtaegt_aar <= bund:
+        return 100
+    reduktion = int((indtaegt_aar - bund) // trin)
+    return max(0, 100 - reduktion)
+
+
+def beregn_tillaegsstyrede_ydelser(
+    tillaegsprocent: int,
+    likvid_formue: float,
+    aarlig_varmeudgift: float,
+    enlig: bool,
+) -> dict:
+    """Ældrecheck, mediecheck og varmetillæg — alle styret af den personlige
+    tillægsprocent. Formuegrænsen er en HÅRD tærskel, men gælder KUN
+    ældrechecken (jf. samspil.ts) — mediecheck og varmetillæg er ikke
+    formueafhængige: én krone over grænsen koster kun ældrechecken."""
+    tp = tillaegsprocent / 100
+    formue_ok = likvid_formue <= satser_2026.LIKVID_FORMUEGRAENSE.vaerdi
+
+    aeldrecheck = 0.0
+    if formue_ok and tillaegsprocent > 0:
+        aeldrecheck = satser_2026.AELDRECHECK.vaerdi * tp
+
+    mediecheck = 0.0
+    if tillaegsprocent == 100:
+        mediecheck = satser_2026.MEDIECHECK.vaerdi
+
+    varmetillaeg = 0.0
+    if aarlig_varmeudgift > 0 and tillaegsprocent > 0:
+        egen = (
+            satser_2026.VARMETILLAEG_EGENBETALING_ENLIG.vaerdi
+            if enlig else satser_2026.VARMETILLAEG_EGENBETALING_GIFT.vaerdi
+        )
+        maks = satser_2026.VARMETILLAEG_MAKSIMALT.vaerdi
+        varmetillaeg = min(maks, max(0.0, aarlig_varmeudgift - egen)) * tp
+
+    return {
+        "aeldrecheck":    aeldrecheck,
+        "mediecheck":     mediecheck,
+        "varmetillaeg":   varmetillaeg,
+        "formue_ok":      formue_ok,
+    }
 
 
 # ── Hjælpefunktioner ─────────────────────────────────────────────────────────
@@ -218,6 +319,11 @@ def generer_udbetalingstabel(
     produkt_start_aldre_param: dict[str, int] = parametre.get("produkt_start_aldre", {})
     # Per-produkt buffer-deltagelse: {key: bool} — engangsbeloeb indgaar som buffer med mindre fravalgt
     produkt_i_buffer_param: dict[str, bool] = parametre.get("produkt_i_buffer", {})
+
+    # Genbruger det eksisterende "fri_formue"-felt til formuegrænsen for
+    # ældrecheck/varmetillæg — det er allerede "likvid opsparing ud over pension".
+    likvid_formue      = float(parametre.get("fri_formue", 0) or 0)
+    aarlig_varmeudgift = float(parametre.get("aarlig_varmeudgift", 0) or 0)
 
     person   = profil.get("person", {})
     alder_nu = int(person.get("alder") or 0)
@@ -449,19 +555,45 @@ def generer_udbetalingstabel(
                 "skat_type":  p["skat_type"],
             }
 
+        # Indtægtsgrundlag for BÅDE pensionstillæg og tillægsprocent inkluderer
+        # ATP (jf. satser_2026's indtaegtsgrundlag) — en tidligere udeladt post.
+        indtaegtsgrundlag_aar = privat_s_brutto + (atp_mdr * 12 if har_fp else 0.0)
+
         if har_fp:
             fp_netto_aar  = _netto_s_uden_am(FOLKEPENSION_MDR * 12, skat_params, total_pi, FOLKEPENSION_MDR * 12)
             atp_netto_aar = _netto_s_uden_am(float(atp_mdr * 12), skat_params, total_pi, float(atp_mdr * 12))
             fp_mdr_netto  = fp_netto_aar / 12
             atp_mdr_netto = atp_netto_aar / 12
-            tillaeg_aar   = folkepension_pensionstillaeg_aar(privat_s_brutto, skat_params)
+            tillaeg_aar   = folkepension_pensionstillaeg_aar(indtaegtsgrundlag_aar, skat_params)
             tillaeg_mdr   = tillaeg_aar / 12
+
+            tillaegsprocent = beregn_tillaegsprocent(indtaegtsgrundlag_aar, skat_params.enlig)
+            ydelser = beregn_tillaegsstyrede_ydelser(
+                tillaegsprocent, likvid_formue, aarlig_varmeudgift, skat_params.enlig
+            )
+            # Ældrechecken er skattepligtig personlig indkomst uden AM-bidrag —
+            # beskattes forholdsmæssigt ligesom FP/ATP (lille afvigelse mulig,
+            # se note ved skatteeksemplet: den indgår ikke selv i det total_pi
+            # den beskattes imod).
+            aeldrecheck_aar = ydelser["aeldrecheck"]
+            aeldrecheck_netto_aar = (
+                _netto_s_uden_am(aeldrecheck_aar, skat_params, total_pi + aeldrecheck_aar, aeldrecheck_aar)
+                if aeldrecheck_aar > 0 else 0.0
+            )
+            aeldrecheck_mdr  = aeldrecheck_netto_aar / 12
+            # Mediecheck og varmetillæg regnes skattefri (samme antagelse som
+            # kildepakken — uverificeret sammen med selve satserne).
+            mediecheck_mdr   = ydelser["mediecheck"] / 12
+            varmetillaeg_mdr = ydelser["varmetillaeg"] / 12
         else:
             fp_mdr_netto = atp_mdr_netto = tillaeg_mdr = 0.0
+            tillaegsprocent = 0
+            aeldrecheck_mdr = mediecheck_mdr = varmetillaeg_mdr = 0.0
 
         total_netto_mdr = (
             sum(d["mdr_netto"] for d in produkt_data.values())
             + fp_mdr_netto + tillaeg_mdr + atp_mdr_netto
+            + aeldrecheck_mdr + mediecheck_mdr + varmetillaeg_mdr
         )
 
         # Realværdi: deflatér med inflation siden i dag
@@ -469,9 +601,11 @@ def generer_udbetalingstabel(
         real_deflator   = (1 + inflation_pct) ** years_from_now if inflation_pct > 0 else 1.0
         real_netto_mdr  = round(total_netto_mdr / real_deflator) if inflation_pct > 0 else None
 
-        over_topskat = total_pi > TOPSKAT_GRAENSE_PI
+        # "over_topskat" dækker nu ethvert af de tre progressive trin (mellem-,
+        # top- eller top-topskat) — mellemskattens grænse er den laveste.
+        over_topskat = total_pi > satser_2026.PROGRESSION[0].bundgraense
         if over_topskat:
-            msg = f"Alder {alder}: bruttoudbetalingen overstiger topskattegrænsen — effektiv marginalbeskatning over 52 %"
+            msg = f"Alder {alder}: bruttoudbetalingen overstiger mellemskattegrænsen — høj effektiv marginalbeskatning"
             if msg not in advarsler:
                 advarsler.append(msg)
 
@@ -491,6 +625,10 @@ def generer_udbetalingstabel(
             "atp_mdr_brutto":  float(atp_mdr) if har_fp else 0.0,
             "atp_mdr_netto":   atp_mdr_netto,
             "tillaeg_mdr":     tillaeg_mdr,
+            "tillaegsprocent": tillaegsprocent,
+            "aeldrecheck_mdr":   aeldrecheck_mdr,
+            "mediecheck_mdr":    mediecheck_mdr,
+            "varmetillaeg_mdr":  varmetillaeg_mdr,
             "total_netto_mdr": total_netto_mdr,
             "total_netto_aar": total_netto_mdr * 12,
             "real_netto_mdr":  real_netto_mdr,
@@ -956,10 +1094,7 @@ def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder:
     total_pi        = pi_med_am + pi_uden_am
     basis_skat      = total_pi * (BUNDSKAT + kom_pct / 100 + kirke_pct)
 
-    topskat = 0.0
-    over_top = max(0.0, total_pi - TOPSKAT_GRAENSE_PI)
-    if over_top:
-        topskat = over_top * TOPSKAT
+    progressiv_skat = _progressiv_skat_total_aar(total_pi, kom_pct / 100 + kirke_pct)
 
     netto_mdr = row["total_netto_mdr"]
 
@@ -989,16 +1124,26 @@ def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder:
     rows.append("|---|---|---:|")
 
     add(f"Bundskat + kommuneskat + kirkeskat", f"{kr(total_pi)} × {basis_pct:.2f}%", basis_skat, "− ")
-    if topskat:
-        add(f"Topskat 15% (PI over {kr(TOPSKAT_GRAENSE_PI)} kr)", f"{kr(over_top)} × 15%", topskat, "− ")
-    else:
-        rows.append(f"| Topskat | PI under grænsen ({kr(TOPSKAT_GRAENSE_PI)} kr) | — |")
+    trin_ramt = False
+    for trin in satser_2026.PROGRESSION:
+        beloeb = max(0.0, total_pi - trin.bundgraense) * trin.sats
+        if beloeb > 0:
+            trin_ramt = True
+            add(
+                f"{trin.navn} {trin.sats*100:.1f}% (PI over {kr(trin.bundgraense)} kr)",
+                f"{kr(total_pi - trin.bundgraense)} × {trin.sats*100:.1f}%",
+                beloeb, "− ",
+            )
+    if not trin_ramt:
+        rows.append(f"| Mellemskat/topskat | PI under grænsen ({kr(satser_2026.PROGRESSION[0].bundgraense)} kr) | — |")
+    elif abs(progressiv_skat - sum(max(0.0, total_pi - t.bundgraense) * t.sats for t in satser_2026.PROGRESSION)) > 1:
+        rows.append(f"| Skatteloft-nedslag (PSL § 19) | | − {kr(sum(max(0.0, total_pi - t.bundgraense) * t.sats for t in satser_2026.PROGRESSION) - progressiv_skat)} |")
     rows.append("|---|---|---:|")
 
     rows.append(f"| **Netto/år** | | **{kr(netto_mdr * 12)}** |")
     rows.append(f"| **Netto/mdr** | | **{kr(netto_mdr)}** |")
     rows.append("")
-    rows.append("*(Lille afvigelse mulig: engine fordeler topskat forholdsmæssigt per produkt)*")
+    rows.append("*(Lille afvigelse mulig: engine fordeler skat forholdsmæssigt per produkt)*")
 
     return "\n".join(rows)
 
@@ -1084,17 +1229,18 @@ def format_engine_til_llm(result: dict) -> str:
     L.append("")
 
     # Pensionstillæg modregning
+    tillaeg_regel = satser_2026.TILLAEG_ENLIG if p["enlig"] else satser_2026.TILLAEG_GIFT_PARTNER_IKKE_PENSIONIST
+    tillaeg_max_mdr = tillaeg_regel["ydelse"].vaerdi / 12
     first_fp_row = next((r for r in tabel if r["alder"] >= fp_alder), None)
     if first_fp_row:
-        max_mdr  = PENSIONSTILLAEG_MAX_ENLIG_AAR / 12
         faktisk  = first_fp_row["tillaeg_mdr"]
-        if faktisk < max_mdr * 0.95:
-            tabt = max_mdr - faktisk
+        if faktisk < tillaeg_max_mdr * 0.95:
+            tabt = tillaeg_max_mdr - faktisk
             L += [
                 "### PENSIONSTILLÆG EFTER MODREGNING",
-                f"Maks. tillæg (enlig): {max_mdr:,.0f} kr/mdr → Faktisk: {faktisk:,.0f} kr/mdr (tabt: {tabt:,.0f} kr/mdr)".replace(",", "."),
-                f"Modregning: {PENSIONSTILLAEG_MODREGNING*100:.1f} % af S-indkomst over "
-                f"{PENSIONSTILLAEG_BUNDFRADRAG_ENLIG:,.0f} kr/år (jf. § 29).".replace(",", "."),
+                f"Maks. tillæg ({'enlig' if p['enlig'] else 'par'}): {tillaeg_max_mdr:,.0f} kr/mdr → Faktisk: {faktisk:,.0f} kr/mdr (tabt: {tabt:,.0f} kr/mdr)".replace(",", "."),
+                f"Modregning: {tillaeg_regel['sats'].vaerdi*100:.1f} % af S-indkomst over "
+                f"{tillaeg_regel['bundfradrag'].vaerdi:,.0f} kr/år (jf. § 29).".replace(",", "."),
                 "Aldersopsparing (F-skat) tæller IKKE med i modregningsgrundlaget.",
                 "",
             ]
@@ -1177,11 +1323,21 @@ def format_engine_til_llm(result: dict) -> str:
             else (" | —" if has_engangs else "")
         )
         if row["over_topskat"]:
-            note_parts.append("Topskat")
-        tillaeg_max = PENSIONSTILLAEG_MAX_ENLIG_AAR / 12
-        if har_fp and row["tillaeg_mdr"] < tillaeg_max * 0.95:
-            tabt = round(tillaeg_max - row["tillaeg_mdr"])
+            note_parts.append("Mellem-/topskat")
+        if har_fp and row["tillaeg_mdr"] < tillaeg_max_mdr * 0.95:
+            tabt = round(tillaeg_max_mdr - row["tillaeg_mdr"])
             note_parts.append(f"Modregning -{tabt:,.0f} kr/mdr".replace(",", "."))
+        if har_fp and row.get("tillaegsprocent", 100) < 100:
+            note_parts.append(f"Tillægsprocent {row['tillaegsprocent']}%")
+        ydelse_bits = []
+        if row.get("aeldrecheck_mdr"):
+            ydelse_bits.append(f"ældrecheck {row['aeldrecheck_mdr']:,.0f}".replace(",", "."))
+        if row.get("mediecheck_mdr"):
+            ydelse_bits.append(f"mediecheck {row['mediecheck_mdr']:,.0f}".replace(",", "."))
+        if row.get("varmetillaeg_mdr"):
+            ydelse_bits.append(f"varmetillæg {row['varmetillaeg_mdr']:,.0f}".replace(",", "."))
+        if ydelse_bits:
+            note_parts.append(f"+{' + '.join(ydelse_bits)} kr/mdr")
         note = "; ".join(note_parts) if note_parts else "—"
 
         real_col_val = f" | {row['real_netto_mdr']:,.0f}".replace(",", ".") if has_real and row.get("real_netto_mdr") is not None else (" | —" if has_real else "")

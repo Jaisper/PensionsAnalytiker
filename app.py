@@ -253,7 +253,7 @@ Hvis inflation er oplyst: vis Real/mdr-kolonnen (2025-købekraft) efter Netto/md
 - Brutto/år = sum af alle produktkolonner (Folkepension + ATP) — IKKE engangsbeløb
 - Netto/mdr = samlet netto månedligt efter AM-bidrag, indkomstskat og topskat — IKKE engangsbeløb
 - Engangsbeløb-kolonnen viser beløbet KUN i det år det udbetales (—/tomt i alle andre år) og må ALDRIG lægges til Brutto/år eller Netto/mdr
-- Note: "Topskat" hvis samlet PI > 588.900 kr; "Modregning -X kr" hvis pensionstillæg reduceres; ellers "—"
+- Note: "Mellem-/topskat" hvis samlet PI > 641.200 kr; "Modregning -X kr" hvis pensionstillæg reduceres; "Tillægsprocent X%" hvis under 100; "+ældrecheck/mediecheck/varmetillæg X kr/mdr" hvis ydelser udbetales; ellers "—"
 - Folkepension og ATP vises som "—" inden folkepensionsalderen
 - Engangsbeløb vises i BÅDE Tabel 1 (som samlet FV/netto) og Tabel 2 (år-for-år, hvornår det udbetales) — aldrig kun i Tabel 1
 
@@ -278,11 +278,22 @@ Når FORSIKRINGSANALYSE-blokken er tilgængelig i konteksten:
 - Anbefal specifik handling (fx kontakt forsikringsrådgiver) ved manglende dækning
 - Estimeringerne er baseret på indbetalinger som proxy — ikke eksakte beregninger
 
-## NØGLESATSER 2025
-- Ratepension loft: 63.100 kr/år | Aldersopsparing: 9.100 kr/år (60.900 kr under 7 år til folkepensionsalder, PBL §16)
-- AM-bidrag: 8% | Bundskat: 12,01% | Topskatgrænse: 588.900 kr PI | Topskat: 15%
+## PENSIONSTILLÆG VS. PERSONLIG TILLÆGSPROCENT — TO UAFHÆNGIGE SKALAER
+Dette er let at forveksle — gør det ALDRIG:
+- **Pensionstillæg**: bortfalder først ved ca. 438.200 kr/år i anden indkomst (enlig). Vises som "tillaeg_mdr" / "Modregning -X kr/mdr" i Tabel 2.
+- **Personlig tillægsprocent** (0-100): en HELT ANDEN, langt strengere skala, der rammer nul allerede ved 99.200 kr/år (enlig) — mens pensionstillægget der stadig er fuldt intakt. Den styrer IKKE pensionstillægget, men derimod ældrecheck, mediecheck og varmetillæg.
+- En bruger kan altså miste hele ældrechecken (skjult marginalskat op til ca. 82%) i indkomstintervallet 35.700-99.200 kr, LÆNGE før pensionstillægget overhovedet begynder at blive ramt væsentligt.
+- Formuegrænsen (108.000 kr likvid formue) for ældrecheck/varmetillæg er en HÅRD tærskel — ingen glidende aftrapning. Én krone over grænsen fjerner hele beløbet.
+- Præsenter derfor altid disse to reguleringer SEPARAT for brugeren, aldrig som "aftrapningen" i ental.
+
+## NØGLESATSER 2026
+- Ratepension loft: 68.700 kr/år | Aldersopsparing: 9.100 kr/år (60.900 kr under 7 år til folkepensionsalder, PBL §16)
+- AM-bidrag: 8% | Bundskat: 12,01%
+- Progressiv topskat (personlig indkomst, hvert trin har sit eget skatteloft jf. PSL §19):
+  mellemskat 7,5% over 641.200 kr (loft 44,57%) | topskat 7,5% over 777.900 kr (loft 52,07%) | top-topskat 5% over 2.592.700 kr (loft 57,07%)
 - Folkepension: 7.955 kr/mdr | ATP: ca. 1.825 kr/mdr | PAL-skat: 15,3%
-- Pensionstillæg max (enlig): 8.891 kr/mdr — modregnes 30,9% af S-indkomst over 98.400 kr/år
+- Pensionstillæg max (enlig): 104.748 kr/år — modregnes 30,9% af indtægtsgrundlag over 99.200 kr/år (gift: 53.604 kr/år, 32%/16% over 198.800 kr)
+- Ældrecheck: op til 26.900 kr/år (skattepligtig) | Mediecheck og varmetillæg: uverificerede satser, nævn dette hvis de vises
 """
 
 
@@ -305,6 +316,7 @@ def _engine_cache_key(session: dict) -> str:
         "loenvaekst_pct":     params.get("loenvaekst_pct"),
         "fri_formue":         params.get("fri_formue"),
         "fri_formue_skat":    params.get("fri_formue_kapital_skat_pct"),
+        "aarlig_varmeudgift": params.get("aarlig_varmeudgift"),
         "profil_id":          id(profil),
     }
     return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
@@ -973,6 +985,7 @@ class Parametre(BaseModel):
     fri_formue: float | None = None
     fri_formue_kapital_skat_pct: float | None = None
     engangs_buffer_skat_pct: float | None = None
+    aarlig_varmeudgift: float | None = None
 
 
 @app.post("/api/parametre")
@@ -995,6 +1008,7 @@ async def gem_parametre(req: Parametre):
     if req.fri_formue is not None:                    p["fri_formue"] = req.fri_formue
     if req.fri_formue_kapital_skat_pct is not None:   p["fri_formue_kapital_skat_pct"] = req.fri_formue_kapital_skat_pct
     if req.engangs_buffer_skat_pct is not None:       p["engangs_buffer_skat_pct"] = req.engangs_buffer_skat_pct
+    if req.aarlig_varmeudgift is not None:            p["aarlig_varmeudgift"] = req.aarlig_varmeudgift
 
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")

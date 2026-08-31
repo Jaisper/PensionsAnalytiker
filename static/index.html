@@ -2711,17 +2711,16 @@ async function koerOptimering() {
 
   const b = data.bedste;
   const startLinjer = Object.entries(b.produkt_start_aldre).map(([k, v]) => `${k}: start ${v} år`).join(', ');
-  const periodeLinjer = Object.entries(b.produkt_udb_aar).map(([k, v]) => `${k}: ${v} års periode`).join(', ');
   const opsaetLinje = b.folkepension_opsaettelse_aar > 0
     ? `Folkepension foreslås udskudt ${b.folkepension_opsaettelse_aar} år (forenklet ventetillæg-skøn på 6%/år — IKKE en juridisk præcis beregning).`
     : 'Folkepension foreslås ikke udskudt.';
 
   await sendSystemTrigger(
     `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen. ` +
-    `Evalueret ${data.evalueret} kombinationer af start-aldre${periodeLinjer ? ', udbetalingsperioder' : ''} og folkepensions-opsætning, ` +
+    `Evalueret ${data.evalueret} kombinationer af per-produkt start-aldre og folkepensions-opsætning ` +
+    `(engangsbeløbs udbetalingsår og ratepensioners udbetalingsperiode er IKKE en del af søgningen — det er allerede trufne valg), ` +
     `heraf ${data.antal_gennemfoerlige} gennemførlige (opfylder den fastsatte minimumsgrænse for rådighedsbeløb i alle år). ` +
     `Bedste fundne plan — start-aldre: ${startLinjer || 'uændret'}. ` +
-    (periodeLinjer ? `Udbetalingsperioder: ${periodeLinjer}. ` : '') +
     `${opsaetLinje} NPV af nettorådighed for denne plan: ${b.npv_netto_raadighed.toLocaleString('da-DK')} kr. ` +
     `Præsenter denne anbefaling kort i punktform og forklar kort hvorfor rækkefølgen giver mening (fx skattemæssig timing eller undgåelse af modregning). ` +
     `Nævn at brugeren kan klikke "Anvend denne plan"-knappen for at opdatere tidslinjen/diagrammet med denne rækkefølge, og at optimeringen kun ser på brugerens egne produkter.`

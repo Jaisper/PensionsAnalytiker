@@ -1,6 +1,6 @@
 """
 Sekventeringsoptimering — udtømmende (beskåret) søgning over per-produkt
-start-aldre, ratepensions-udbetalingsperioder og folkepensions-opsættelse.
+start-aldre og folkepensions-opsættelse.
 
 Port af pension-core's sekventering.ts (optimer/score/harLoesning). Hver
 kandidat-kombination er et selvstændigt kald til engine.generer_udbetalingstabel
@@ -10,6 +10,11 @@ HÅRD diskvalifikation (score = -inf) af enhver plan med blot ét år under en
 minimumsgrænse. "Ingen løsning" er et gyldigt svar: kald altid har_loesning()
 før resultatet præsenteres, og vis aldrig den næstbedste-men-utilstrækkelige
 plan som var den brugbar.
+
+Ratepensioners udbetalingsperiode og engangsbeløbs udbetalingsår behandles
+BEGGE som brugerens egne, allerede trufne valg (fra rapporten eller et
+tidligere manuelt valg) — ligesom i pension-core er det kun START-alderen og
+folkepensions-opsætningen der reelt er frie beslutningsvariable her.
 
 Folkepensions-opsætningens ventetillæg er en bevidst forenkling (samme skøn
 som kildepakken selv bruger, jf. satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR)
@@ -23,7 +28,6 @@ from typing import Any, Optional
 from engine import generer_udbetalingstabel, tidligste_private_pensionsalder
 
 MAKS_EVALUERINGER_DEFAULT = 3000
-STANDARD_PERIODER    = [10, 15, 20, 25, 30]
 STANDARD_OPSAETTELSE = [0, 1, 2, 3, 5]
 STANDARD_EKSTRA_AAR  = 10  # søg start-aldre op til pensionsalder + dette
 
@@ -68,10 +72,11 @@ def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: 
     (aldersopsparing/kapitalpension) får IKKE en start-alder-dimension — det
     er brugerens egen, bevidst valgte udbetalingsår (fx sat via tidslinje-
     trækket), og optimeringen må ikke flytte rundt på et allerede truffet
-    valg. Kun løbende produkter indgår, og kun ratepension får derudover en
-    periode-dimension (livsvarig er et levetidsskøn, ikke et frit valg; ATP
-    er slet ikke en del af `produkter`-listen og indgår derfor aldrig, samme
-    udelukkelse som i sekventering.ts)."""
+    valg. Ratepensionens udbetalingsperiode er PÅ SAMME MÅDE brugerens eget
+    valg (fra rapporten eller et tidligere manuelt valg) — kun START-alderen
+    pr. løbende produkt og folkepensions-opsætningen er reelt frie
+    beslutningsvariable her (ATP er slet ikke en del af `produkter`-listen
+    og indgår derfor aldrig, samme udelukkelse som i sekventering.ts)."""
     # Den generelle lovmæssige tommelfingerregel (fp_alder - 5) er kun en
     # DEFAULT-hjælp i interviewet — brugeren kan frit have valgt en tidligere
     # pensionsalder end den (fx fordi deres konkrete produkter allerede
@@ -89,27 +94,23 @@ def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: 
         key = pr["key"]
         dimensioner.append([("start", key, a) for a in start_aldre])
         noegler.append(f"start:{key}")
-        if pr["udb_type"] == "rate":
-            dimensioner.append([("periode", key, p) for p in STANDARD_PERIODER])
-            noegler.append(f"periode:{key}")
     dimensioner.append([("opsaet", None, o) for o in STANDARD_OPSAETTELSE])
     noegler.append("opsaet:folkepension")
     return noegler, dimensioner
 
 
 def _parametre_for_vektor(base_parametre: dict, vektor: tuple[tuple, ...]) -> tuple[dict, dict, int]:
-    # Start med brugerens EGNE eksisterende start-alder-valg (bl.a. engangsbeløbenes
-    # bevidst valgte udbetalingsår, som slet ikke er en del af søgerummet — se
+    # Start med brugerens EGNE eksisterende start-alder-/periode-valg (bl.a.
+    # engangsbeløbenes bevidst valgte udbetalingsår og ratepensionens
+    # udbetalingsperiode, som ingen af dem er en del af søgerummet — se
     # _byg_soegerum) — vektorens "start"-indgange overskriver kun de løbende
     # produkter der rent faktisk indgår i optimeringen.
     produkt_start_aldre: dict[str, int] = dict(base_parametre.get("produkt_start_aldre", {}))
-    produkt_udb_aar: dict[str, int] = {}
+    produkt_udb_aar: dict[str, int] = dict(base_parametre.get("produkt_udb_aar", {}))
     opsaettelse_aar = 0
     for slag, key, vaerdi in vektor:
         if slag == "start":
             produkt_start_aldre[key] = vaerdi
-        elif slag == "periode":
-            produkt_udb_aar[key] = vaerdi
         elif slag == "opsaet":
             opsaettelse_aar = vaerdi
     p = dict(base_parametre)

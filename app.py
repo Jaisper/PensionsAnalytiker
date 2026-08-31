@@ -302,7 +302,8 @@ Hvis der derimod findes en "## PARTNERENS UDBETALINGSANALYSE"-sektion i kontekst
 
 ## SEKVENTERINGSOPTIMERING — "FIND BEDSTE UDBETALINGSRÆKKEFØLGE"
 Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsrækkefølge:
-- Resultatet er fundet ved at afprøve en lang række kombinationer af start-aldre, ratepensions-udbetalingsperioder og evt. udskudt folkepension — IKKE ved at forudse fremtiden. Præsenter det som en anbefaling baseret på de antagelser (afkast, skat, mål) der allerede er sat, ikke som en garanti.
+- Resultatet er fundet ved at afprøve en lang række kombinationer af per-produkt start-aldre og evt. udskudt folkepension — IKKE ved at forudse fremtiden. Præsenter det som en anbefaling baseret på de antagelser (afkast, skat, mål) der allerede er sat, ikke som en garanti.
+- Engangsbeløbs udbetalingsår og ratepensioners udbetalingsperiode rører optimeringen IKKE — det er brugerens egne, allerede trufne valg (fra rapporten eller tidslinjen), ikke frie variable.
 - Hvis resultatet er "målet kan ikke nås": sig det direkte og eksplicit — foreslå ALDRIG den næstbedste plan som var den en løsning, det ville modsige selve formålet med den hårde grænse.
 - Hvis brugeren har fået foreslået udskudt folkepension (`folkepension_opsaettelse_aar > 0`): gør klart at ventetillægget (6 %/år) er et **forenklet skøn**, ikke den juridisk præcise ventetillægsberegning — den rigtige regel er mere kompleks.
 - Nævn at optimeringen kun ser på brugerens egne produkter — en eventuel partners egen pension indgår ikke i søgningen.

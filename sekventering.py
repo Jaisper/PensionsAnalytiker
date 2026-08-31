@@ -64,19 +64,28 @@ def har_loesning(r: OptimeringsResultat) -> bool:
 
 def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: int):
     """Bygger (noegler, dimensioner) — én dimension pr. beslutningsvariabel,
-    mønster fra sekventering.ts's `noegler`/`dimensioner`. ALLE produkter
-    (også engangsbeløb som aldersopsparing/kapitalpension) får en start-alder-
-    dimension — timingen af et engangsbeløb er stadig en reel strategisk
-    beslutning, selvom beløbet ikke har en udbetalingsperiode. Kun ratepension
-    får derudover en periode-dimension (livsvarig er et levetidsskøn, ikke et
-    frit valg; ATP er slet ikke en del af `produkter`-listen og indgår derfor
-    aldrig, samme udelukkelse som i sekventering.ts)."""
-    tidligst = tidligste_private_pensionsalder(fp_alder)
+    mønster fra sekventering.ts's `noegler`/`dimensioner`. Engangsbeløb
+    (aldersopsparing/kapitalpension) får IKKE en start-alder-dimension — det
+    er brugerens egen, bevidst valgte udbetalingsår (fx sat via tidslinje-
+    trækket), og optimeringen må ikke flytte rundt på et allerede truffet
+    valg. Kun løbende produkter indgår, og kun ratepension får derudover en
+    periode-dimension (livsvarig er et levetidsskøn, ikke et frit valg; ATP
+    er slet ikke en del af `produkter`-listen og indgår derfor aldrig, samme
+    udelukkelse som i sekventering.ts)."""
+    # Den generelle lovmæssige tommelfingerregel (fp_alder - 5) er kun en
+    # DEFAULT-hjælp i interviewet — brugeren kan frit have valgt en tidligere
+    # pensionsalder end den (fx fordi deres konkrete produkter allerede
+    # tillader det). Søgerummet skal ALDRIG ekskludere den alder brugeren
+    # faktisk har valgt, ellers "optimerer" den brugeren væk fra deres egen
+    # ønskede pensionsalder og over i et senere, ubedt starttidspunkt.
+    tidligst = min(tidligste_private_pensionsalder(fp_alder), pensionsalder)
     start_aldre = list(range(tidligst, pensionsalder + STANDARD_EKSTRA_AAR + 1))
 
     noegler: list[str] = []
     dimensioner: list[list[tuple]] = []
     for pr in baseline_produkter:
+        if pr["udb_type"] == "engangsbeloeb":
+            continue
         key = pr["key"]
         dimensioner.append([("start", key, a) for a in start_aldre])
         noegler.append(f"start:{key}")
@@ -89,7 +98,11 @@ def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: 
 
 
 def _parametre_for_vektor(base_parametre: dict, vektor: tuple[tuple, ...]) -> tuple[dict, dict, int]:
-    produkt_start_aldre: dict[str, int] = {}
+    # Start med brugerens EGNE eksisterende start-alder-valg (bl.a. engangsbeløbenes
+    # bevidst valgte udbetalingsår, som slet ikke er en del af søgerummet — se
+    # _byg_soegerum) — vektorens "start"-indgange overskriver kun de løbende
+    # produkter der rent faktisk indgår i optimeringen.
+    produkt_start_aldre: dict[str, int] = dict(base_parametre.get("produkt_start_aldre", {}))
     produkt_udb_aar: dict[str, int] = {}
     opsaettelse_aar = 0
     for slag, key, vaerdi in vektor:
@@ -116,7 +129,18 @@ def score(resultat: dict, obj: Objektiv, inflation_pct: float) -> tuple[float, f
     år for år før udjævning (fx før et produkt starter) og derfor ville gøre
     stort set enhver plan "urealistisk" mod en fast bundgrænse. Kun
     pensionsfasen (`fase == "pension"`) tæller med — pre-pension-år er
-    stadig lønår, som denne tabel ikke modellerer disponibel indkomst for."""
+    stadig lønår, som denne tabel ikke modellerer disponibel indkomst for.
+
+    VIGTIGT: `jaevn_mdr` er en fremadskuende udjævning af HELE den resterende
+    løbende indkomst (ratepension/livsvarig/FP/ATP), og forudsætter i sin
+    natur at et tidligt, lavere rå beløb er en NORMAL del af et ellers sundt
+    forløb (fx ratepension alene før folkepensionen supplerer) — det er ikke
+    i sig selv et tegn på et urealistisk hul, og bundgrænsen skal derfor
+    fortsat tjekkes mod det udjævnede tal for den almindelige straf for
+    underdækning. Men udjævningen kan IKKE gøre et fuldstændigt indkomst-hul
+    (reelt nul kr. hele året, fx fordi et produkt er udskudt langt ud i
+    fremtiden) usynligt — det er en anden og strengere ting end "lavere end
+    gennemsnittet", og tjekkes derfor separat mod den RÅ `tabel`."""
     jaevn_tabel = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
     diskonto = obj.diskonteringsrente if obj.diskonteringsrente is not None else resultat["parametre"].get("afkast_pct", 4.0) / 100
 
@@ -125,6 +149,11 @@ def score(resultat: dict, obj: Objektiv, inflation_pct: float) -> tuple[float, f
             check_val = row["jaevn_mdr_real"] if row["jaevn_mdr_real"] is not None else row["jaevn_mdr"]
             if check_val < obj.haard_minimum_mdr:
                 return float("-inf"), 0.0, 0.0
+
+    pensionsalder = resultat["pensionsalder"]
+    for row in resultat["tabel"]:
+        if row["alder"] >= pensionsalder and row["total_netto_mdr"] <= 0:
+            return float("-inf"), 0.0, 0.0
 
     npv = 0.0
     samlet_underdaekning = 0.0

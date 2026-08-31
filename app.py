@@ -302,7 +302,9 @@ Hvis der derimod findes en "## PARTNERENS UDBETALINGSANALYSE"-sektion i kontekst
 
 ## SEKVENTERINGSOPTIMERING — "FIND BEDSTE UDBETALINGSRÆKKEFØLGE"
 Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsrækkefølge:
-- Resultatet er fundet ved at afprøve en lang række kombinationer af per-produkt start-aldre og evt. udskudt folkepension — IKKE ved at forudse fremtiden. Præsenter det som en anbefaling baseret på de antagelser (afkast, skat, mål) der allerede er sat, ikke som en garanti.
+- Målet er at MAKSIMERE det faste, inflationskorrigerede månedsbeløb brugeren kan leve af hele den ønskede periode (`jaevn_netto_mdr`) — IKKE at maksimere den samlede udbetalte sum. Præsenter resultatet som "det højeste faste månedsbeløb vi kunne finde", ikke som en garanti.
+- Optimeringen kan ALDRIG anbefale en plan hvor de tidlige/laveste år bliver ringere end de ville have været uden indblanding — det er en indbygget grænse, ikke noget der skal forklares som en begrænsning.
+- Resultatet er fundet ved at afprøve en lang række kombinationer af per-produkt start-aldre og evt. udskudt folkepension — IKKE ved at forudse fremtiden.
 - Engangsbeløbs udbetalingsår og ratepensioners udbetalingsperiode rører optimeringen IKKE — det er brugerens egne, allerede trufne valg (fra rapporten eller tidslinjen), ikke frie variable.
 - Hvis resultatet er "målet kan ikke nås": sig det direkte og eksplicit — foreslå ALDRIG den næstbedste plan som var den en løsning, det ville modsige selve formålet med den hårde grænse.
 - Hvis brugeren har fået foreslået udskudt folkepension (`folkepension_opsaettelse_aar > 0`): gør klart at ventetillægget (6 %/år) er et **forenklet skøn**, ikke den juridisk præcise ventetillægsberegning — den rigtige regel er mere kompleks.
@@ -1205,7 +1207,6 @@ async def optimer_udbetalingsplan(req: dict):
                 p["skat_type"] = kapital_skat
 
     obj = sekventering.Objektiv(
-        maal_mdr=float(req["maal_mdr"]) if req.get("maal_mdr") else None,
         haard_minimum_mdr=float(req["haard_minimum_mdr"]) if req.get("haard_minimum_mdr") else None,
     )
     res = sekventering.optimer(profil_kopi, params, obj)
@@ -1214,7 +1215,7 @@ async def optimer_udbetalingsplan(req: dict):
         return JSONResponse({
             "success": False,
             "evalueret": res.evalueret,
-            "besked": "Målet kan ikke nås inden for det afsøgte rum af start-aldre, perioder og folkepensions-opsætning — ingen kombination undgår mindst ét år under den anvendte minimumsgrænse.",
+            "besked": "Målet kan ikke nås inden for det afsøgte rum af start-aldre og folkepensions-opsætning — ingen kombination undgår mindst ét år under den anvendte minimumsgrænse.",
         })
 
     b = res.bedste
@@ -1226,9 +1227,7 @@ async def optimer_udbetalingsplan(req: dict):
             "produkt_start_aldre": b.produkt_start_aldre,
             "produkt_udb_aar": b.produkt_udb_aar,
             "folkepension_opsaettelse_aar": b.folkepension_opsaettelse_aar,
-            "npv_netto_raadighed": round(b.npv_netto_raadighed),
-            "samlet_underdaekning": round(b.samlet_underdaekning),
-            "jaevn_netto_mdr": b.resultat.get("jaevn_netto_mdr") if b.resultat else None,
+            "jaevn_netto_mdr": round(b.jaevn_netto_mdr),
         },
         "foelsomhed": {k: round(v) for k, v in res.foelsomhed.items()},
     })

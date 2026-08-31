@@ -286,6 +286,12 @@ Dette er let at forveksle — gør det ALDRIG:
 - Formuegrænsen (108.000 kr likvid formue) for ældrecheck/varmetillæg er en HÅRD tærskel — ingen glidende aftrapning. Én krone over grænsen fjerner hele beløbet.
 - Præsenter derfor altid disse to reguleringer SEPARAT for brugeren, aldrig som "aftrapningen" i ental.
 
+## CIVILSTAND OG PARTNER — TILVALGT, FORENKLET
+Hvis brugeren har angivet civilstand "gift eller samlevende":
+- Pensionstillægget bruger automatisk den korrekte gift-sats (32 % hvis kun brugeren er folkepensionist, 16 % hvis begge er det) i stedet for enlig-satsen — dette sker år for år, og skifter automatisk det år partneren selv når folkepensionsalderen.
+- Hvis en partner-indkomst er angivet, tælles den KUN med i indtægtsgrundlaget i de år partneren selv er folkepensionist — IKKE mens partneren stadig er erhvervsaktiv. Gør altid klart for brugeren at dette er et **overslag**, ikke en juridisk præcis fælles-beregning: den fulde modregningsregel for gifte par med to indkomster er mere kompleks end dette værktøj modellerer.
+- Der er IKKE regnet en selvstændig udbetalingsplan for partneren — kun brugerens egen tidslinje/produkter vises. Sig det tydeligt hvis brugeren spørger til partnerens egen pension.
+
 ## NØGLESATSER 2026
 - Ratepension loft: 68.700 kr/år | Aldersopsparing: 9.100 kr/år (60.900 kr under 7 år til folkepensionsalder, PBL §16)
 - AM-bidrag: 8% | Bundskat: 12,01%
@@ -317,6 +323,9 @@ def _engine_cache_key(session: dict) -> str:
         "fri_formue":         params.get("fri_formue"),
         "fri_formue_skat":    params.get("fri_formue_kapital_skat_pct"),
         "aarlig_varmeudgift": params.get("aarlig_varmeudgift"),
+        "civilstand":         params.get("civilstand"),
+        "partner_alder":      params.get("partner_alder"),
+        "partner_indkomst_aar": params.get("partner_indkomst_aar"),
         "profil_id":          id(profil),
     }
     return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
@@ -986,6 +995,9 @@ class Parametre(BaseModel):
     fri_formue_kapital_skat_pct: float | None = None
     engangs_buffer_skat_pct: float | None = None
     aarlig_varmeudgift: float | None = None
+    civilstand: str | None = None
+    partner_alder: int | None = None
+    partner_indkomst_aar: float | None = None
 
 
 @app.post("/api/parametre")
@@ -1009,6 +1021,9 @@ async def gem_parametre(req: Parametre):
     if req.fri_formue_kapital_skat_pct is not None:   p["fri_formue_kapital_skat_pct"] = req.fri_formue_kapital_skat_pct
     if req.engangs_buffer_skat_pct is not None:       p["engangs_buffer_skat_pct"] = req.engangs_buffer_skat_pct
     if req.aarlig_varmeudgift is not None:            p["aarlig_varmeudgift"] = req.aarlig_varmeudgift
+    if req.civilstand is not None:                    p["civilstand"] = req.civilstand
+    if req.partner_alder is not None:                 p["partner_alder"] = req.partner_alder
+    if req.partner_indkomst_aar is not None:          p["partner_indkomst_aar"] = req.partner_indkomst_aar
 
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")

@@ -8,6 +8,7 @@ INDEN LLM-kaldet, så assistenten præsenterer tal — aldrig beregner dem.
 from __future__ import annotations
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Optional
 
 import satser_2026
@@ -35,6 +36,12 @@ class SkatParametre:
     kommuneskat: float = KOMMUNESKAT_DEFAULT
     kirkeskat: float   = KIRKESKAT_DEFAULT
     enlig: bool        = True
+    # Husstand/ægtefælle (Fase B) — enlig skelner stadig kun enlig vs. gift for
+    # TILLAEGSPROCENT_ENLIG/GIFT og VARMETILLAEG-satserne. Disse to felter
+    # afgør DEROVER om det er "gift, partner ikke pensionist" eller "gift,
+    # begge pensionister" der vælges — se _vaelg_pensionstillaeg_regel().
+    partner_foedselsaar: Optional[int] = None
+    partner_indkomst_aar: float        = 0.0
 
     @classmethod
     def fra_pct(
@@ -42,11 +49,15 @@ class SkatParametre:
         kommuneskat_pct: float = 25.0,
         kirkeskat_pct: float = 0.7,
         enlig: bool = True,
+        partner_foedselsaar: Optional[int] = None,
+        partner_indkomst_aar: float = 0.0,
     ) -> "SkatParametre":
         return cls(
             kommuneskat=kommuneskat_pct / 100,
             kirkeskat=kirkeskat_pct / 100,
             enlig=enlig,
+            partner_foedselsaar=partner_foedselsaar,
+            partner_indkomst_aar=partner_indkomst_aar,
         )
 
 
@@ -198,9 +209,24 @@ def beregn_netto_skat(
 # To UAFHÆNGIGE indtægtsreguleringer, der styrer hver sin ting og aldrig må
 # kollapses til én — se satser_2026.py for de fulde kilder og tal.
 
-def folkepension_pensionstillaeg_aar(privat_s_indkomst_aar: float, skat: SkatParametre) -> float:
+def _vaelg_pensionstillaeg_regel(skat: SkatParametre, partner_er_fp: bool) -> dict:
+    """Vælger hvilket af de TRE aftrapningstrin der gælder. Enlig og
+    "gift, partner ikke pensionist" var de eneste nåede trin før husstands-
+    modelleringen (Fase B) — "gift, begge pensionister" var indtil da dødt
+    kode i satser_2026.py, fordi der ingen vej var til at vide om partneren
+    selv var folkepensionist."""
+    if skat.enlig:
+        return satser_2026.TILLAEG_ENLIG
+    if partner_er_fp:
+        return satser_2026.TILLAEG_GIFT_BEGGE_PENSIONISTER
+    return satser_2026.TILLAEG_GIFT_PARTNER_IKKE_PENSIONIST
+
+
+def folkepension_pensionstillaeg_aar(
+    privat_s_indkomst_aar: float, skat: SkatParametre, partner_er_fp: bool = False,
+) -> float:
     """Pensionstillæg efter modregning. Kilde: Lov om social pension § 29."""
-    regel = satser_2026.TILLAEG_ENLIG if skat.enlig else satser_2026.TILLAEG_GIFT_PARTNER_IKKE_PENSIONIST
+    regel = _vaelg_pensionstillaeg_regel(skat, partner_er_fp)
     max_t       = regel["ydelse"].vaerdi
     bundfradrag = regel["bundfradrag"].vaerdi
     modregning  = regel["sats"].vaerdi
@@ -302,10 +328,18 @@ def generer_udbetalingstabel(
       produkt_start_aldre (dict, default {})   — key → start-alder for loebende produkter
     """
     if skat_params is None:
+        civilstand = parametre.get("civilstand")
+        if civilstand is None:
+            # Bagudkompatibelt fald tilbage til det ældre flade "enlig"-flag,
+            # hvis en kaldende part stadig sender det i stedet for civilstand.
+            civilstand = "enlig" if parametre.get("enlig", True) else "gift_samlevende"
+        partner_alder = parametre.get("partner_alder")
         skat_params = SkatParametre.fra_pct(
             kommuneskat_pct=float(parametre.get("kommuneskat_pct", 25.0)),
             kirkeskat_pct=float(parametre.get("kirkeskat_pct", 0.7)),
-            enlig=bool(parametre.get("enlig", True)),
+            enlig=(civilstand != "gift_samlevende"),
+            partner_foedselsaar=(date.today().year - int(partner_alder)) if partner_alder else None,
+            partner_indkomst_aar=float(parametre.get("partner_indkomst_aar", 0) or 0),
         )
 
     pensionsalder  = int(parametre["pensionsalder"])
@@ -555,16 +589,30 @@ def generer_udbetalingstabel(
                 "skat_type":  p["skat_type"],
             }
 
+        # Er partneren selv folkepensionist DETTE kalenderår? Afgør både hvilket
+        # af de tre aftrapningstrin der gælder (se _vaelg_pensionstillaeg_regel)
+        # og om partnerens indkomst tælles med i indtægtsgrundlaget nedenfor —
+        # kun i de år partneren selv er folkepensionist, for at undgå at gætte
+        # på den langt mere komplekse modregning af en erhvervsaktiv partners løn.
+        partner_er_fp = False
+        if skat_params.partner_foedselsaar is not None:
+            partner_alder_dette_aar = (
+                (date.today().year - skat_params.partner_foedselsaar) + (alder - alder_nu)
+            )
+            partner_er_fp = partner_alder_dette_aar >= folkepension_alder(skat_params.partner_foedselsaar)
+
         # Indtægtsgrundlag for BÅDE pensionstillæg og tillægsprocent inkluderer
         # ATP (jf. satser_2026's indtaegtsgrundlag) — en tidligere udeladt post.
         indtaegtsgrundlag_aar = privat_s_brutto + (atp_mdr * 12 if har_fp else 0.0)
+        if har_fp and partner_er_fp:
+            indtaegtsgrundlag_aar += skat_params.partner_indkomst_aar
 
         if har_fp:
             fp_netto_aar  = _netto_s_uden_am(FOLKEPENSION_MDR * 12, skat_params, total_pi, FOLKEPENSION_MDR * 12)
             atp_netto_aar = _netto_s_uden_am(float(atp_mdr * 12), skat_params, total_pi, float(atp_mdr * 12))
             fp_mdr_netto  = fp_netto_aar / 12
             atp_mdr_netto = atp_netto_aar / 12
-            tillaeg_aar   = folkepension_pensionstillaeg_aar(indtaegtsgrundlag_aar, skat_params)
+            tillaeg_aar   = folkepension_pensionstillaeg_aar(indtaegtsgrundlag_aar, skat_params, partner_er_fp)
             tillaeg_mdr   = tillaeg_aar / 12
 
             tillaegsprocent = beregn_tillaegsprocent(indtaegtsgrundlag_aar, skat_params.enlig)

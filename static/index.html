@@ -1022,6 +1022,29 @@ Upload derefter PDF'en her øverst til højre.`,
             <span class="unit">%</span>
           </div>
         </td>
+      </tr>
+      <tr>
+        <td class="ql"><strong>7c.</strong> Civilstand
+          <div class="qdesc">Gift/samlevende har en anden aftrapningssats for pensionstillæg end enlige</div>
+        </td>
+        <td class="qi">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:5px">
+            <input type="checkbox" id="iq_civilstand" onchange="toggleCivilstand()">
+            <span style="font-size:0.85rem;color:#2a3a4a">Gift eller samlevende (fælles økonomi)</span>
+          </label>
+          <div id="civilstand_wrap" style="display:none">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+              <span style="font-size:0.85rem;color:#2a3a4a;min-width:90px">Partners alder</span>
+              <input type="number" id="iq_partner_alder" min="18" max="110" step="1" style="width:70px">
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:0.85rem;color:#2a3a4a;min-width:90px">Partners indkomst</span>
+              <input type="number" id="iq_partner_indkomst" placeholder="0" min="0" step="10000" style="width:100px">
+              <span class="unit">kr/år efter folkepension</span>
+            </div>
+            <div class="qdesc" style="margin-top:4px">Bruges til et overslag over jeres samlede indtægtsgrundlag for pensionstillæg/tillægsprocent — den præcise modregningsregel for gifte par er mere kompleks end dette værktøj modellerer.</div>
+          </div>
+        </td>
       </tr>`;
 
     // Q8: Årlig bruttoindtægt — vis hvis pensionsopsparing tyder på topskat-relevans
@@ -1155,6 +1178,12 @@ Upload derefter PDF'en her øverst til højre.`,
   function toggleKirkeskat() {
     const checked = document.getElementById('iq_kirkeskat')?.checked;
     const wrap = document.getElementById('kirkeskat_pct_wrap');
+    if (wrap) wrap.style.display = checked ? '' : 'none';
+  }
+
+  function toggleCivilstand() {
+    const checked = document.getElementById('iq_civilstand')?.checked;
+    const wrap = document.getElementById('civilstand_wrap');
     if (wrap) wrap.style.display = checked ? '' : 'none';
   }
 
@@ -1325,6 +1354,16 @@ Upload derefter PDF'en her øverst til højre.`,
     parts.push(`7. Kommune: ${kommune || 'ikke oplyst (brug landsgennemsnit 25%)'}`);
     parts.push(`7b. Kirkeskat: ${kirkeskatPct}%`);
 
+    const civilstandChecked = document.getElementById('iq_civilstand')?.checked ?? false;
+    const civilstand = civilstandChecked ? 'gift_samlevende' : 'enlig';
+    const partnerAlder    = civilstandChecked ? parseInt(v('iq_partner_alder')) || undefined : undefined;
+    const partnerIndkomst = civilstandChecked ? parseFloat(v('iq_partner_indkomst')) || 0 : undefined;
+    if (civilstandChecked) {
+      parts.push(`7c. Civilstand: Gift/samlevende, partner ${partnerAlder || '?'} år, partner-indkomst ${partnerIndkomst || 0} kr/år efter folkepension`);
+    } else {
+      parts.push(`7c. Civilstand: Enlig`);
+    }
+
     const bruttoindtaegt = v('iq8');
     if (bruttoindtaegt) {
       parts.push(`8. Årlig bruttoindtægt (løn): ${bruttoindtaegt} kr/år`);
@@ -1387,6 +1426,9 @@ Upload derefter PDF'en her øverst til højre.`,
         fri_formue:                  frieMidler > 0 ? frieMidler : undefined,
         fri_formue_kapital_skat_pct: frieMidler > 0 ? frieSkat   : undefined,
         aarlig_varmeudgift:          varmeudgift > 0 ? varmeudgift : undefined,
+        civilstand:                  civilstand,
+        partner_alder:               partnerAlder,
+        partner_indkomst_aar:        partnerIndkomst,
       }),
     });
 
@@ -1864,6 +1906,14 @@ function _collectPayload(includePanel = false) {
     }
     const varmeudgift = parseFloat(iq10?.value);
     if (varmeudgift > 0) payload.aarlig_varmeudgift = varmeudgift;
+    const civilstandChecked = document.getElementById('iq_civilstand')?.checked ?? false;
+    if (document.getElementById('iq_civilstand')) {
+      payload.civilstand = civilstandChecked ? 'gift_samlevende' : 'enlig';
+      if (civilstandChecked) {
+        payload.partner_alder = parseInt(document.getElementById('iq_partner_alder')?.value) || undefined;
+        payload.partner_indkomst_aar = parseFloat(document.getElementById('iq_partner_indkomst')?.value) || 0;
+      }
+    }
   }
   if (Object.keys(produktStartAldre).length) payload.produkt_start_aldre = produktStartAldre;
   if (Object.keys(produktIBuffer).length)    payload.produkt_i_buffer    = produktIBuffer;

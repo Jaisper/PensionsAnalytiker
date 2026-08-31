@@ -220,6 +220,10 @@ async def _extract_with_llm(text: str) -> dict:
             raw = msg.content[0].text.strip()
             raw = re.sub(r"^```(?:json)?\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
+            if not raw:
+                raise ValueError(
+                    f"Tomt svar fra ekstraktions-modellen (stop_reason={msg.stop_reason!r})"
+                )
             return json.loads(raw)
         except Exception as e:
             last_exc = e
@@ -251,9 +255,23 @@ async def parse_pensionsinfo_pdf(pdf_path: str) -> dict:
         return json.loads(cache_path.read_text(encoding="utf-8"))
 
     pages = await asyncio.to_thread(_extract_pages, pdf_path)
-    relevant = _filter_relevant_pages(pages)
-    raw = await _extract_with_llm(relevant)
     full_text = "\n\n".join(f"=== SIDE {i+1} ===\n{p}" for i, p in enumerate(pages) if p)
+    if not full_text.strip():
+        # pdfplumber fandt ingen tekst overhovedet — typisk en scannet/billed-PDF
+        # uden tekstlag. At sende tom tekst til LLM'en giver et tomt/ubrugeligt
+        # svar (json.loads fejler med "Expecting value" uden nogen god forklaring).
+        raise ValueError(
+            "Kunne ikke finde tekst i PDF'en. Rapporten er muligvis en scannet "
+            "kopi (billede) uden tekstlag — prøv at eksportere en ny rapport "
+            "direkte fra pensionsinfo.dk som PDF."
+        )
+    relevant = _filter_relevant_pages(pages)
+    if not relevant.strip():
+        # Ingen sider matchede de forventede overskrifter — sandsynligvis et
+        # andet rapport-layout/version end forventet. Fald tilbage til hele
+        # dokumentet i stedet for at sende tom tekst til LLM'en.
+        relevant = full_text
+    raw = await _extract_with_llm(relevant)
     profil = _to_legacy_format(raw, full_text)
 
     _PDF_CACHE_DIR.mkdir(exist_ok=True)

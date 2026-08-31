@@ -72,7 +72,7 @@ class Kandidat:
     produkt_udb_aar: dict[str, int]
     folkepension_opsaettelse_aar: int
     score: float
-    jaevn_netto_mdr: float
+    jaevn_netto_mdr: float  # i DAGENS købekraft — se _jaevn_niveau_realt, IKKE det samme som resultat["jaevn_netto_mdr"]
     resultat: Optional[dict] = None  # kun udfyldt for top-kandidater, se optimer()
 
 
@@ -154,15 +154,31 @@ def _buffer_underskud(resultat: dict) -> float:
     return sum(max(0.0, -r["buffer_rest"]) for r in pension_raekker)
 
 
+def _jaevn_niveau_realt(resultat: dict) -> float:
+    """`jaevn_netto_mdr` er nominel i det FØRSTE pensionsår — altså ved
+    pensionsalderen, ikke i dag. Er der år mellem i dag og pensionsalderen
+    og inflation sat, er det IKKE det samme som dagens købekraft (samme
+    beløb ganget op med inflationen for ventetiden). `jaevn_mdr_real` for
+    den første pensionsrække er derimod deflateret tilbage til i dag, og er
+    konstant hen over hele pensionsfasen (bortset fra senere tillæg, der kun
+    kan hæve niveauet) — det er DEN, brugeren rent faktisk vil sammenligne
+    med et beløb "i dagens/2025-købekraft"."""
+    pension_raekker = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
+    if not pension_raekker:
+        return resultat["jaevn_netto_mdr"]
+    foerste = pension_raekker[0]
+    return foerste["jaevn_mdr_real"] if foerste["jaevn_mdr_real"] is not None else foerste["jaevn_mdr"]
+
+
 def score(resultat: dict, obj: Objektiv, buffer_underskud_baseline: float) -> tuple[float, float]:
-    """Returnerer (score, jaevn_netto_mdr). Score er det faste, bæredygtige
-    månedsbeløb (samme tal som `jaevn_netto_mdr` i det almindelige diagram)
+    """Returnerer (score, jaevn_niveau_realt). Score er det faste,
+    bæredygtige månedsbeløb i DAGENS købekraft (se `_jaevn_niveau_realt`)
     — højere er bedre, det ER selve målet. Score = -inf hvis planen enten
     bryder en (eventuel) hård bundgrænse, forøger bufferunderskuddet ud over
     default-planens eget (se modulets docstring), eller indeholder et
     fuldstændigt indkomst-hul."""
     jaevn_tabel = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
-    jaevn_niveau = resultat["jaevn_netto_mdr"]
+    jaevn_niveau = _jaevn_niveau_realt(resultat)
     graense = obj.haard_minimum_mdr if obj.haard_minimum_mdr is not None else 0.0
 
     for row in jaevn_tabel:
@@ -197,8 +213,11 @@ def optimer(
     if obj.haard_minimum_mdr is None:
         # Ingen grænse angivet af brugeren: beskyt mod at optimeringen finder
         # en plan der er drastisk værre i et enkelt år end den nuværende,
-        # uden at kræve brugeren selv opfinder et tal.
-        obj = Objektiv(haard_minimum_mdr=round(baseline["jaevn_netto_mdr"] * 0.7))
+        # uden at kræve brugeren selv opfinder et tal. Baseres på det REELLE
+        # (dagens-købekraft) niveau, samme grundlag som selve scoren — ellers
+        # blandes en nominel-ved-pensionsalder-værdi ind i en grænse der
+        # tjekkes mod reelle (nutidskr) tal i score().
+        obj = Objektiv(haard_minimum_mdr=round(_jaevn_niveau_realt(baseline) * 0.7))
     buffer_underskud_baseline = _buffer_underskud(baseline)
 
     alle_produkter = baseline["produkter"]

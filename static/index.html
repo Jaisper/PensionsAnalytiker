@@ -2668,7 +2668,7 @@ async function opdaterAnalyse() {
 // ── Sekventeringsoptimering ("Find bedste udbetalingsrækkefølge") ───────────
 let _sidsteOptimering = null;
 
-function renderOptimeringsResultat(data) {
+function renderOptimeringsResultat(data, ingenAendring = false) {
   const el = document.getElementById('optimering-resultat');
   if (!el) return;
   if (!data || !data.success) { el.innerHTML = ''; el.style.display = 'none'; return; }
@@ -2676,7 +2676,13 @@ function renderOptimeringsResultat(data) {
   const stikproeve = data.mulige_kombinationer > data.evalueret
     ? ` (stikprøve af ${data.mulige_kombinationer.toLocaleString('da-DK')} mulige)` : '';
   el.style.display = '';
-  el.innerHTML = `
+  el.innerHTML = ingenAendring
+    ? `
+    <div style="margin-top:10px;padding:10px 12px;background:#f0f5fa;border-radius:8px;font-size:0.85rem">
+      <strong>Din nuværende plan er allerede den bedste</strong> — intet at anvende
+      (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${stikproeve})
+    </div>`
+    : `
     <div style="margin-top:10px;padding:10px 12px;background:#f0f5fa;border-radius:8px;font-size:0.85rem">
       <strong>Bedste udbetalingsrækkefølge fundet</strong>
       (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${stikproeve})
@@ -2708,10 +2714,23 @@ async function koerOptimering() {
     return;
   }
 
-  _sidsteOptimering = data;
-  renderOptimeringsResultat(data);
-
   const b = data.bedste;
+
+  // Sammenlign vinderplanen mod den NUVÆRENDE, allerede-anvendte plan (ikke
+  // bare mod en tilfældig "naiv" default) — med den nye, strenge år-for-år-
+  // regel finder optimeringen ofte netop den plan brugeren allerede har.
+  // Uden dette tjek ser "Anvend denne plan" ud til at "ikke virke", fordi der
+  // reelt intet er at ændre, ikke fordi knappen fejler.
+  const huidigeStartAldre = {};
+  (_chartData?.produkter || []).forEach(pr => { huidigeStartAldre[pr.key] = pr.start_alder; });
+  const nuvaerendeOpsaettelse = _chartData?.parametre?.folkepension_opsaettelse_aar || 0;
+  const ingenAendring =
+    Object.entries(b.produkt_start_aldre).every(([k, v]) => huidigeStartAldre[k] === v) &&
+    (b.folkepension_opsaettelse_aar || 0) === nuvaerendeOpsaettelse;
+
+  _sidsteOptimering = data;
+  renderOptimeringsResultat(data, ingenAendring);
+
   const startLinjer = Object.entries(b.produkt_start_aldre).map(([k, v]) => `${k}: start ${v} år`).join(', ');
   const opsaetLinje = b.folkepension_opsaettelse_aar > 0
     ? `Folkepension foreslås udskudt ${b.folkepension_opsaettelse_aar} år (forenklet ventetillæg-skøn på 6%/år — IKKE en juridisk præcis beregning).`
@@ -2720,6 +2739,19 @@ async function koerOptimering() {
   const stikproeveNote = data.mulige_kombinationer > data.evalueret
     ? ` (det fulde søgerum har ${data.mulige_kombinationer.toLocaleString('da-DK')} kombinationer — der er brugt en tilfældig stikprøve, ikke en udtømmende gennemgang)`
     : '';
+
+  if (ingenAendring) {
+    await sendSystemTrigger(
+      `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen (${data.evalueret} kombinationer afsøgt${stikproeveNote}, ` +
+      `${data.antal_gennemfoerlige} gennemførlige). Resultatet er at DIN NUVÆRENDE PLAN allerede er den bedste fundne — ` +
+      `ingen anden kombination af start-aldre eller folkepensions-opsætning giver et højere fast månedsbeløb uden at gøre ` +
+      `mindst ét år ringere end det allerede er. Fast månedsbeløb: ${b.jaevn_netto_mdr.toLocaleString('da-DK')} kr/mdr. ` +
+      `Sig det tydeligt til brugeren — der er ikke en "Anvend denne plan"-knap at klikke på her, for der er intet at ændre. ` +
+      `Nævn kort hvorfor (fx: din nuværende rækkefølge undgår allerede unødig modregning/topskat).`
+    );
+    return;
+  }
+
   await sendSystemTrigger(
     `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen. Målet er det højeste FASTE, ` +
     `inflationskorrigerede månedsbeløb — ikke den største samlede sum. ` +
@@ -2735,13 +2767,26 @@ async function koerOptimering() {
 
 async function anvendOptimering() {
   if (!_sidsteOptimering?.bedste || !sessionId) return;
+  // En evt. ventende debounced opdatering (fra et panelfelt brugeren rørte
+  // lige før klik) må ikke fyre bagefter og overskrive planen vi lige har
+  // anvendt med forældede DOM-værdier.
+  clearTimeout(_refreshTimer);
+
   const b = _sidsteOptimering.bedste;
+  // Optimeringen søger kun over løbende produkter — engangsbeløb (fx
+  // aldersopsparing) indgår ikke i b.produkt_start_aldre. Da /api/parametre
+  // erstatter hele produkt_start_aldre-dictet (samme mønster som
+  // tidslinje-trækket bruger), skal vi merge ind i den eksisterende,
+  // FULDE liste, ellers nulstilles enhver allerede trukket engangsbeløb-alder.
+  const eksisterende_start_aldre = _chartData?.produkt_start_aldre || {};
+  const merged_start_aldre = { ...eksisterende_start_aldre, ...b.produkt_start_aldre };
+
   await fetch('/api/parametre', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       session_id: sessionId,
-      produkt_start_aldre: b.produkt_start_aldre,
+      produkt_start_aldre: merged_start_aldre,
       produkt_udb_aar: b.produkt_udb_aar,
       folkepension_opsaettelse_aar: b.folkepension_opsaettelse_aar,
     }),

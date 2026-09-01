@@ -21,20 +21,37 @@ den resterende løbende indkomst — for ethvert forløb med et sent
 indkomst-løft (fx folkepension der først starter år senere) vil dette tal
 helt naturligt ligge over de tidlige års rå indkomst, også for den helt
 uoptimerede default-plan. Det er IKKE i sig selv et problem. Det AFGØRENDE
-er om optimeringen aktivt GØR ET SPECIFIKT ÅR VÆRRE end default-planen
-allerede har det år, blot for at presse et højere (men mindre reelt)
-udjævnet tal frem. Der sammenlignes derfor år for år (alder for alder, se
-`_raa_indkomst_pr_alder`): kandidatens rå, faktisk udbetalte beløb i hvert
-overlappende år skal mindst matche default-planens eget for samme alder.
+er om en kandidat skaber et rå-indkomst-hul der er DYBERE end det værste,
+brugeren allerede selv accepterer i sin egen nuværende plan (se
+`_raa_indkomst_pr_alder`) — IKKE om et enkelt overlappende år isoleret set
+falder i forhold til default-planens EGET tal for netop den alder.
 
-To tidligere, svagere forsøg viste sig utilstrækkelige og er droppet:
-et enkelt-minimum-tjek fangede dybden af et hul men ikke hvor mange år det
-varede ved; et summeret "bufferunderskud"-tjek kollapsede til nul tolerance
-når default-planen selv havde 0 i underskud (almindeligt for profiler uden
-et pre-pensions engangsbeløb) og var samtidig virkningsløst når
-default-planen HAVDE et stort engangsbeløb (bufferen blev aldrig negativ
-for nogen kandidat, uanset hvor langt et produkt blev udskudt). Den
-år-for-år sammenligning der bruges nu er robust over for begge svagheder.
+Tre tidligere, svagere forsøg er droppet undervejs:
+1. Et enkelt-minimum-tjek fangede dybden af et hul men ikke hvor mange år
+   det varede ved.
+2. Et summeret "bufferunderskud"-tjek kollapsede til nul tolerance når
+   default-planen selv havde 0 i underskud (almindeligt for profiler uden
+   et pre-pensions engangsbeløb) og var samtidig virkningsløst når
+   default-planen HAVDE et stort engangsbeløb (bufferen blev aldrig negativ
+   for nogen kandidat, uanset hvor langt et produkt blev udskudt).
+3. En PER-ALDER sammenligning mod default-planens EGET tal for samme alder
+   (kandidatens rå beløb skulle mindst matche default-planens for hver
+   overlappende alder) var for stram: den forhindrede fuldt legitime
+   omlægninger — fx at flytte ét produkts start-alder for at undgå unødig
+   topskat/modregning ved at sprede indkomsten anderledes over årene — blot
+   fordi ÉT specifikt år derved fik lidt mindre end det TILFÆLDIGVIS havde i
+   default-planen, selvom ingen alder nogensinde kom under det NIVEAU
+   brugeren allerede selv lever med et andet sted i sin egen plan. En bruger
+   der selv fandt en bedre rækkefølge ved at trække i tidslinjen kunne derfor
+   opleve at optimeringen forkastede præcis den samme forbedring.
+
+Den nuværende tjek er derfor et ABSOLUT gulv: den enkelte kandidats
+LAVESTE rå alder-indkomst skal mindst matche default-planens EGEN laveste
+rå alder-indkomst (med en lille tolerance) — ikke alder-for-alder, men
+værste-mod-værste. Det bevarer beskyttelsen mod reelle huller (en kandidat
+der presser en alder dybere ned end brugerens eget værste punkt bliver
+stadig diskvalificeret), uden at blokere for at flytte overskud MELLEM
+år der begge allerede ligger over brugerens eget bundniveau.
 
 Søgerummet kan blive langt større end det er praktisk at gennemgå
 udtømmende (fx 5 produkter × 15 aldre × 5 opsætningsår > 1 million
@@ -264,13 +281,13 @@ def _raa_indkomst_pr_alder(resultat: dict) -> dict[int, float]:
     }
 
 
-def score(resultat: dict, obj: Objektiv, baseline_raa_pr_alder: dict[int, float]) -> tuple[float, float]:
+def score(resultat: dict, obj: Objektiv, baseline_laveste_raa: float) -> tuple[float, float]:
     """Returnerer (score, jaevn_niveau_realt). Score er det faste,
     bæredygtige månedsbeløb i DAGENS købekraft — højere er bedre, det ER
     selve målet. Score = -inf hvis planen enten bryder en (eventuel) hård
-    bundgrænse, gør et OVERLAPPENDE år ringere end default-planens eget
-    samme år (se modulets docstring), eller indeholder et fuldstændigt
-    indkomst-hul."""
+    bundgrænse, presser sin EGEN laveste rå alder-indkomst under
+    default-planens EGEN laveste (værste-mod-værste, se modulets docstring),
+    eller indeholder et fuldstændigt indkomst-hul."""
     jaevn_tabel = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
     jaevn_niveau = jaevn_niveau_realt(resultat)
     graense = obj.haard_minimum_mdr if obj.haard_minimum_mdr is not None else 0.0
@@ -281,10 +298,8 @@ def score(resultat: dict, obj: Objektiv, baseline_raa_pr_alder: dict[int, float]
             return float("-inf"), 0.0
 
     candidate_raa = _raa_indkomst_pr_alder(resultat)
-    for alder, baseline_vaerdi in baseline_raa_pr_alder.items():
-        kandidat_vaerdi = candidate_raa.get(alder)
-        if kandidat_vaerdi is not None and kandidat_vaerdi < baseline_vaerdi * RAA_AAR_TOLERANCE:
-            return float("-inf"), 0.0
+    if candidate_raa and min(candidate_raa.values()) < baseline_laveste_raa * RAA_AAR_TOLERANCE:
+        return float("-inf"), 0.0
 
     # Et fuldstændigt indkomst-hul (fx før pensionsalder, eller hvis ALLE
     # produkter er udskudt forbi et givet år) skal disqualificere uanset
@@ -324,6 +339,7 @@ def optimer(
         # (dagens-købekraft) niveau, samme grundlag som selve scoren.
         obj = Objektiv(haard_minimum_mdr=round(jaevn_niveau_realt(baseline) * 0.7))
     baseline_raa_pr_alder = _raa_indkomst_pr_alder(baseline)
+    baseline_laveste_raa = min(baseline_raa_pr_alder.values()) if baseline_raa_pr_alder else 0.0
 
     alle_produkter = baseline["produkter"]
 
@@ -347,7 +363,7 @@ def optimer(
         sete.add(vektor)
         p, _, _ = _parametre_for_vektor(parametre, vektor)
         resultat = generer_udbetalingstabel(profil, p, skat_params)
-        s, jaevn = score(resultat, obj, baseline_raa_pr_alder)
+        s, jaevn = score(resultat, obj, baseline_laveste_raa)
         evaluerede.append((vektor, s, jaevn))
         score_for[vektor] = s
 

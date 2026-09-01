@@ -46,6 +46,25 @@ af deres interval (og dermed rapportere en kunstigt lav følsomhed for netop
 dem). Default-planens egen kombination indgår altid eksplicit, uanset
 stikprøve, så den garanteret er en af de evaluerede kandidater.
 
+En ren tilfældig stikprøve er ALENE ikke nok: ved store søgerum (typisk
+allerede ved 3-4 løbende produkter) er dækningsgraden af 3000 tilfældige
+kombinationer ud af et rum på hundredtusinder ofte under 1%, og en bruger
+der manuelt flytter blot ÉN produkt-bjælke i tidslinjen kan sagtens finde en
+konkret, bedre kombination som stikprøven aldrig ramte — hvorved
+optimeringen fejlagtigt konkluderer "din nuværende plan er allerede den
+bedste". Derfor suppleres stikprøven altid med en GRÅDIG
+KOORDINAT-SØGNING (`_koordinat_udvid`) forankret i brugerens egen
+nuværende plan: for hver beslutningsdimension (hvert produkts start-alder,
+folkepensions-opsætningen) afprøves ALLE dens mulige værdier, mens de
+øvrige holdes fast ved den hidtil bedste vektor, og der rykkes til den
+bedste fundne værdi før næste dimension gennemgås. Det garanterer at enhver
+forbedring der findes ved at flytte ét produkt ad gangen — præcis den måde
+en bruger selv trækker tidslinjen på — bliver evalueret, uafhængigt af
+søgerummets størrelse og uafhængigt af om den tilfældige stikprøve ramte
+den. Et par gentagne runder fanger desuden de fleste sekventielle
+to-produkt-justeringer (flyt produkt A til dets bedste punkt, derefter B ud
+fra As nye værdi, osv.).
+
 "Ingen løsning" er et gyldigt svar: kald altid har_loesning() før resultatet
 præsenteres, og vis aldrig den næstbedste-men-utilstrækkelige plan som var
 den brugbar. Fordi default-planens egen kombination altid indgår og altid
@@ -75,6 +94,7 @@ MAKS_EVALUERINGER_DEFAULT = 3000
 STANDARD_OPSAETTELSE = [0, 1, 2, 3, 5]
 STANDARD_EKSTRA_AAR  = 10  # søg start-aldre op til pensionsalder + dette
 STIKPROEVE_SEED = 20260831  # fast seed — samme profil giver samme resultat hver gang
+KOORDINAT_RUNDER = 3  # antal grådige gennemløb af alle dimensioner, se _koordinat_udvid
 
 # Kandidatens rå (ikke-udjævnede) beløb for et givet år skal mindst udgøre
 # denne andel af default-planens eget rå beløb for SAMME alder — lille
@@ -168,6 +188,37 @@ def _kandidat_vektorer(dimensioner: list[list[tuple]], maks_evalueringer: int, d
         valgt.add(vektor)
         forsoeg += 1
     return list(valgt), mulige
+
+
+def _koordinat_udvid(
+    dimensioner: list[list[tuple]],
+    start_vektor: tuple,
+    evaluer_fn,
+    score_for: dict[tuple, float],
+    runder: int = KOORDINAT_RUNDER,
+) -> None:
+    """Grådig koordinat-optimering forankret i start_vektor (brugerens egen
+    nuværende plan): for hver runde afprøves hver dimension over ALLE dens
+    værdier, mens de øvrige holdes fast ved den hidtil bedste vektor, og der
+    rykkes til den bedste fundne værdi før næste dimension. Kalder
+    evaluer_fn(vektor) for hver afprøvet kombination (som selv dedupper og
+    fylder score_for) — se modulets docstring for hvorfor dette supplement
+    til den tilfældige stikprøve er nødvendigt."""
+    evaluer_fn(start_vektor)
+    bedste_vektor = start_vektor
+    bedste_score = score_for[start_vektor]
+    for _ in range(runder):
+        forbedret = False
+        for dim_idx, dim in enumerate(dimensioner):
+            for vaerdi in dim:
+                kandidat = bedste_vektor[:dim_idx] + (vaerdi,) + bedste_vektor[dim_idx + 1:]
+                evaluer_fn(kandidat)
+                s = score_for[kandidat]
+                if s > bedste_score:
+                    bedste_score, bedste_vektor = s, kandidat
+                    forbedret = True
+        if not forbedret:
+            break
 
 
 def _parametre_for_vektor(base_parametre: dict, vektor: tuple[tuple, ...]) -> tuple[dict, dict, int]:
@@ -287,11 +338,27 @@ def optimer(
     vektorer, mulige_kombinationer = _kandidat_vektorer(dimensioner, maks_evalueringer, default_vektor)
 
     evaluerede: list[tuple[tuple, float, float]] = []  # (vektor, score, jaevn_netto_mdr)
-    for vektor in vektorer:
+    sete: set[tuple] = set()
+    score_for: dict[tuple, float] = {}
+
+    def _evaluer(vektor: tuple) -> None:
+        if vektor in sete:
+            return
+        sete.add(vektor)
         p, _, _ = _parametre_for_vektor(parametre, vektor)
         resultat = generer_udbetalingstabel(profil, p, skat_params)
         s, jaevn = score(resultat, obj, baseline_raa_pr_alder)
         evaluerede.append((vektor, s, jaevn))
+        score_for[vektor] = s
+
+    for vektor in vektorer:
+        _evaluer(vektor)
+
+    # Grådig koordinat-søgning forankret i brugerens nuværende plan — fanger
+    # enkelt-produkt-forbedringer (og typiske sekventielle to-produkt-
+    # justeringer) som en stikprøve over et stort søgerum kan misse, se
+    # modulets docstring.
+    _koordinat_udvid(dimensioner, default_vektor, _evaluer, score_for)
 
     evaluerede.sort(key=lambda x: x[1], reverse=True)
     gennemfoerlige = [e for e in evaluerede if e[1] != float("-inf")]

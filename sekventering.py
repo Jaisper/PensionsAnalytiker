@@ -1,6 +1,6 @@
 """
-Sekventeringsoptimering — søgning over per-produkt start-aldre og
-folkepensions-opsættelse.
+Sekventeringsoptimering — søgning over per-produkt start-aldre,
+ratepensioners udbetalingsperiode, og folkepensions-opsættelse.
 
 Målet er IKKE at maksimere den samlede nutidsværdi af udbetalingerne (det
 belønner lumpede, bagtunge forløb, fordi sen, stor kapital i teorien kan
@@ -11,8 +11,10 @@ som allerede vises i det almindelige udbetalingsdiagram.
 
 En kandidat-kombination er et selvstændigt kald til
 engine.generer_udbetalingstabel (ren funktion, ingen delt tilstand).
-Ratepensioners udbetalingsperiode behandles som brugerens eget, allerede
-trufne valg. Engangsbeløbs udbetalingsår er en fri beslutningsvariabel NÅR
+Ratepensioners udbetalingsperiode er en fri beslutningsvariabel (lovligt
+gulv: `MIN_RATEPENSION_UDB_AAR`, 10 år — livsvarig pensions periode er
+derimod et levetidsskøn, ikke et frit valg, og indgår derfor ikke).
+Engangsbeløbs udbetalingsår er en fri beslutningsvariabel NÅR
 beløbet er markeret til at indgå i bufferen (i_buffer=True, default) — det
 lander under alle omstændigheder i den samme buffer/jaevn-udjævning uanset
 hvornår det udbetales, så dets TIMING er lige så meget en optimerings-
@@ -151,6 +153,9 @@ STANDARD_EKSTRA_AAR  = 10  # søg start-aldre op til pensionsalder + dette
 STIKPROEVE_SEED = 20260831  # fast seed — samme profil giver samme resultat hver gang
 KOORDINAT_RUNDER = 3  # antal grådige gennemløb af alle dimensioner, se _koordinat_udvid
 
+MIN_RATEPENSION_UDB_AAR = 10  # lovkrav: ratepension skal mindst udbetales over 10 år
+STANDARD_PERIODE_INTERVAL = range(MIN_RATEPENSION_UDB_AAR, 31)  # 10-30 år
+
 # Kandidatens LAVESTE rå (ikke-udjævnede) alder-indkomst skal mindst udgøre
 # denne andel af default-planens EGEN laveste — lille tolerance for
 # afrunding, ikke en invitation til at forringe det værste punkt mærkbart.
@@ -208,19 +213,23 @@ def har_loesning(r: OptimeringsResultat) -> bool:
 
 def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: int, nuvaerende_opsaettelse: int):
     """Bygger (noegler, dimensioner) — én dimension pr. beslutningsvariabel.
-    Løbende produkters START-alder, folkepensions-opsætningen, OG
-    udbetalingsåret for ethvert engangsbeløb der er markeret til at indgå i
-    bufferen (i_buffer=True, default) er alle frie beslutningsvariable. Et
-    engangsbeløb havner under alle omstændigheder i den samme buffer/jaevn-
-    udjævning uanset hvornår det udbetales (se engine.py) — når det ER
-    markeret som buffer-egnet, er dets UDBETALINGSÅR derfor lige så meget en
-    fri timing-beslutning som et løbende produkts start-alder, og kan give
-    optimeringen et langt mere direkte værktøj til at udfylde et hul (indsæt
-    engangsbeløbet netop det år) end at flytte rundt på løbende produkter
-    alene. Et engangsbeløb brugeren aktivt har FRAVALGT bufferen for
-    (i_buffer=False, "frie midler" der udbetales direkte) rører optimeringen
-    IKKE — det er en bevidst undtagelse fra udjævningen og skal forblive et
-    fast valg. ATP er slet ikke en del af `produkter`-listen og indgår
+    Løbende produkters START-alder, folkepensions-opsætningen, udbetalingsåret
+    for ethvert engangsbeløb der er markeret til at indgå i bufferen
+    (i_buffer=True, default), OG ratepensioners udbetalingsperiode er alle
+    frie beslutningsvariable. Et engangsbeløb havner under alle omstændigheder
+    i den samme buffer/jaevn-udjævning uanset hvornår det udbetales (se
+    engine.py) — når det ER markeret som buffer-egnet, er dets UDBETALINGSÅR
+    derfor lige så meget en fri timing-beslutning som et løbende produkts
+    start-alder, og kan give optimeringen et langt mere direkte værktøj til
+    at udfylde et hul (indsæt engangsbeløbet netop det år) end at flytte
+    rundt på løbende produkter alene. Et engangsbeløb brugeren aktivt har
+    FRAVALGT bufferen for (i_buffer=False, "frie midler" der udbetales
+    direkte) rører optimeringen IKKE — det er en bevidst undtagelse fra
+    udjævningen og skal forblive et fast valg. Ratepensionens udbetalings-
+    PERIODE (i modsætning til livsvarig pension, hvor perioden er et
+    levetidsskøn, ikke et frit valg) må lovligt ikke være under
+    `MIN_RATEPENSION_UDB_AAR` (10 år) — samme gulv som UI'ets tidslinje-træk
+    håndhæver. ATP er slet ikke en del af `produkter`-listen og indgår
     derfor aldrig."""
     # Den generelle lovmæssige tommelfingerregel (fp_alder - 5) er kun en
     # DEFAULT-hjælp i interviewet — søgerummet skal ALDRIG ekskludere en alder
@@ -238,6 +247,10 @@ def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: 
         interval = standard_interval | {pr["start_alder"]}
         dimensioner.append([("start", key, a) for a in sorted(interval)])
         noegler.append(f"start:{key}")
+        if pr["udb_type"] == "rate":
+            periode_interval = set(STANDARD_PERIODE_INTERVAL) | {pr["udb_aar"]}
+            dimensioner.append([("periode", key, p) for p in sorted(periode_interval)])
+            noegler.append(f"periode:{key}")
     opsaettelse_interval = sorted(set(STANDARD_OPSAETTELSE) | {nuvaerende_opsaettelse})
     dimensioner.append([("opsaet", None, o) for o in opsaettelse_interval])
     noegler.append("opsaet:folkepension")
@@ -302,16 +315,18 @@ def _koordinat_udvid(
 
 def _parametre_for_vektor(base_parametre: dict, vektor: tuple[tuple, ...]) -> tuple[dict, dict, int]:
     # Start med brugerens EGNE eksisterende start-alder-/periode-valg (bl.a.
-    # engangsbeløbenes bevidst valgte udbetalingsår og ratepensionens
-    # udbetalingsperiode, som ingen af dem er en del af søgerummet — se
-    # _byg_soegerum) — vektorens "start"-indgange overskriver kun de løbende
-    # produkter der rent faktisk indgår i optimeringen.
+    # et fravalgt engangsbeløbs bevidst valgte udbetalingsår, som ikke er en
+    # del af søgerummet — se _byg_soegerum) — vektorens "start"/"periode"-
+    # indgange overskriver kun de produkter der rent faktisk indgår i
+    # optimeringen.
     produkt_start_aldre: dict[str, int] = dict(base_parametre.get("produkt_start_aldre", {}))
     produkt_udb_aar: dict[str, int] = dict(base_parametre.get("produkt_udb_aar", {}))
     opsaettelse_aar = 0
     for slag, key, vaerdi in vektor:
         if slag == "start":
             produkt_start_aldre[key] = vaerdi
+        elif slag == "periode":
+            produkt_udb_aar[key] = vaerdi
         elif slag == "opsaet":
             opsaettelse_aar = vaerdi
     p = dict(base_parametre)
@@ -326,12 +341,14 @@ def _default_vektor(baseline_produkter: list[dict], nuvaerende_opsaettelse: int)
     at garantere den altid indgår som kandidat, se _kandidat_vektorer. Skal
     holde nøjagtig samme produkt-filtrering og -rækkefølge som
     _byg_soegerum, da de to vektorers indgange er positions-matchede."""
-    delvektor = tuple(
-        ("start", pr["key"], pr["start_alder"])
-        for pr in baseline_produkter
-        if pr["udb_type"] != "engangsbeloeb" or pr.get("i_buffer", True)
-    )
-    return delvektor + (("opsaet", None, nuvaerende_opsaettelse),)
+    delvektor: list[tuple] = []
+    for pr in baseline_produkter:
+        if pr["udb_type"] == "engangsbeloeb" and not pr.get("i_buffer", True):
+            continue
+        delvektor.append(("start", pr["key"], pr["start_alder"]))
+        if pr["udb_type"] == "rate":
+            delvektor.append(("periode", pr["key"], pr["udb_aar"]))
+    return tuple(delvektor) + (("opsaet", None, nuvaerende_opsaettelse),)
 
 
 def _raa_indkomst_pr_alder(resultat: dict) -> dict[int, float]:

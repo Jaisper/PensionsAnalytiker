@@ -1868,6 +1868,7 @@ let _chartInstance = null;
 let _chartData = null;
 let _chartPanelOpen = true;
 let _tlDrag = null;  // active drag state
+const MIN_RATEPENSION_AAR = 10;  // lovkrav: ratepension skal mindst udbetales over 10 år
 
 // Kommuneskat-lookup (2025-satser, ca.-værdier) — delt mellem submitInterviewForm
 // og _collectPayload, så "Opdater analyse" ikke skal gætte separat.
@@ -1917,11 +1918,19 @@ let _refreshIncludePanel = false;
 
 function _collectPayload(includePanel = false) {
   const produktStartAldre = {};
+  const produktUdbAar = {};
   document.querySelectorAll('.tl-track[data-key]').forEach(track => {
     const key = track.dataset.key;
     if (!key) return;
     const start = parseInt(track.dataset.start);
     if (!isNaN(start)) produktStartAldre[key] = start;
+    // Kun ratepension har en justerbar udbetalingsperiode (se tlBarDown) —
+    // stop-start for andre produkttyper er blot chartets visning af hele
+    // resten af perioden, ikke et reelt valg.
+    if (track.dataset.udbType === 'rate') {
+      const stop = parseInt(track.dataset.stop);
+      if (!isNaN(start) && !isNaN(stop)) produktUdbAar[key] = stop - start;
+    }
   });
   const produktIBuffer = {};
   document.querySelectorAll('[id^="iq_buffer_"]').forEach(inp => {
@@ -1972,6 +1981,7 @@ function _collectPayload(includePanel = false) {
   }
   if (Object.keys(produktStartAldre).length) payload.produkt_start_aldre = produktStartAldre;
   if (Object.keys(produktIBuffer).length)    payload.produkt_i_buffer    = produktIBuffer;
+  if (Object.keys(produktUdbAar).length)     payload.produkt_udb_aar     = produktUdbAar;
   return payload;
 }
 
@@ -2418,9 +2428,12 @@ function renderTimeline(data) {
       : `${startAge}–${stopAge}`;
 
     const minDragAge = 60;  // absolut gulv — konsistent med panel-inputs
+    const isRate = prod.udb_type === 'rate';
     const barTitle = isEngangs
       ? `Engangsudbetaling ${engNetto.toLocaleString('da-DK')} kr netto · træk for at rykke tidspunkt`
-      : `Venstre kant: juster start · Højre kant: juster slut · Midten: flyt · ${startAge}–${stopAge} år`;
+      : isRate
+        ? `Venstre kant: juster start · Højre kant: juster udbetalingsperiode (min. 10 år) · Midten: flyt · ${startAge}–${stopAge} år`
+        : `Venstre kant: juster start · Midten: flyt · fra ${startAge} år, livsvarig`;
 
     html += `<div class="tl-row" data-key="${escapeAttr(prod.key)}" data-idx="${idx}">
       <div class="tl-row-label" title="${label}">${label}</div>
@@ -2428,7 +2441,7 @@ function renderTimeline(data) {
            data-agemin="${ageMin}" data-agemax="${ageMax}" data-span="${span}"
            data-start="${startAge}" data-stop="${stopAge}"
            data-minage="${minDragAge}"
-           data-is-engangs="${isEngangs}" data-key="${escapeAttr(prod.key)}">
+           data-is-engangs="${isEngangs}" data-udb-type="${prod.udb_type || ''}" data-key="${escapeAttr(prod.key)}">
         <div class="tl-bar" id="tl-bar-${idx}" data-idx="${idx}"
              style="left:${leftPct}%;width:${widthPct}%;background:${color}"
              title="${barTitle}">
@@ -2499,6 +2512,10 @@ function tlBarDown(e, idx) {
   const rect   = bar.getBoundingClientRect();
   const xInBar = e.clientX - rect.left;
   const zone   = Math.min(24, rect.width * 0.22);
+  // Kun ratepension har en justerbar udbetalingsperiode — livsvarig pension
+  // løber til levetiden slutter (intet slut-håndtag giver mening) og
+  // engangsbeløb er et enkelt tidspunkt (kun flyt).
+  const kanJustereSlut = track.dataset.udbType === 'rate';
   let handleType;
   if (track.dataset.isEngangs === 'true') {
     handleType = 'move';  // kun flyt — buffer løber automatisk hele perioden
@@ -2506,7 +2523,7 @@ function tlBarDown(e, idx) {
     handleType = 'move';
   } else if (xInBar < zone) {
     handleType = 'start';
-  } else if (xInBar > rect.width - zone) {
+  } else if (kanJustereSlut && xInBar > rect.width - zone) {
     handleType = 'end';
   } else {
     handleType = 'move';
@@ -2523,6 +2540,7 @@ function tlBarTouch(e, idx) {
   const rect   = bar.getBoundingClientRect();
   const xInBar = e.touches[0].clientX - rect.left;
   const zone   = Math.min(24, rect.width * 0.22);
+  const kanJustereSlut = track.dataset.udbType === 'rate';
   let handleType;
   if (track.dataset.isEngangs === 'true') {
     handleType = 'move';
@@ -2530,7 +2548,7 @@ function tlBarTouch(e, idx) {
     handleType = 'move';
   } else if (xInBar < zone) {
     handleType = 'start';
-  } else if (xInBar > rect.width - zone) {
+  } else if (kanJustereSlut && xInBar > rect.width - zone) {
     handleType = 'end';
   } else {
     handleType = 'move';
@@ -2555,6 +2573,7 @@ function tlDragStart(e, idx, handleType) {
     start:     parseInt(track.dataset.start),
     stop:      parseInt(track.dataset.stop),
     isEngangs: track.dataset.isEngangs === 'true',
+    isRate:    track.dataset.udbType === 'rate',
     key:       track.dataset.key,
   };
 
@@ -2580,9 +2599,13 @@ function tlDragStart(e, idx, handleType) {
       _tlDrag.start = newStart;
       _tlDrag.stop  = newStart + dur;
     } else if (_tlDrag.handleType === 'start') {
-      _tlDrag.start = Math.max(_tlDrag.minAge, Math.min(age, _tlDrag.stop - 1));
+      // Ratepension må lovligt ikke udbetales over under 10 år — juster
+      // start-håndtaget kan derfor ikke presse perioden kortere end det.
+      const minVarighed = _tlDrag.isRate ? MIN_RATEPENSION_AAR : 1;
+      _tlDrag.start = Math.max(_tlDrag.minAge, Math.min(age, _tlDrag.stop - minVarighed));
     } else {
-      _tlDrag.stop = Math.max(age, _tlDrag.start + 1);
+      const minVarighed = _tlDrag.isRate ? MIN_RATEPENSION_AAR : 1;
+      _tlDrag.stop = Math.max(age, _tlDrag.start + minVarighed);
     }
     tlUpdateBar(_tlDrag);
   };
@@ -2725,16 +2748,24 @@ async function koerOptimering() {
   // Uden dette tjek ser "Anvend denne plan" ud til at "ikke virke", fordi der
   // reelt intet er at ændre, ikke fordi knappen fejler.
   const huidigeStartAldre = {};
-  (_chartData?.produkter || []).forEach(pr => { huidigeStartAldre[pr.key] = pr.start_alder; });
+  const huidigePerioder = {};
+  (_chartData?.produkter || []).forEach(pr => {
+    huidigeStartAldre[pr.key] = pr.start_alder;
+    if (pr.udb_type === 'rate') huidigePerioder[pr.key] = pr.udb_aar;
+  });
   const nuvaerendeOpsaettelse = _chartData?.parametre?.folkepension_opsaettelse_aar || 0;
   const ingenAendring =
     Object.entries(b.produkt_start_aldre).every(([k, v]) => huidigeStartAldre[k] === v) &&
+    Object.entries(b.produkt_udb_aar || {}).every(([k, v]) => huidigePerioder[k] === v) &&
     (b.folkepension_opsaettelse_aar || 0) === nuvaerendeOpsaettelse;
 
   _sidsteOptimering = data;
   renderOptimeringsResultat(data, ingenAendring);
 
-  const startLinjer = Object.entries(b.produkt_start_aldre).map(([k, v]) => `${k}: start ${v} år`).join(', ');
+  const startLinjer = Object.entries(b.produkt_start_aldre).map(([k, v]) => {
+    const periode = b.produkt_udb_aar?.[k];
+    return periode ? `${k}: start ${v} år, periode ${periode} år` : `${k}: start ${v} år`;
+  }).join(', ');
   const opsaetLinje = b.folkepension_opsaettelse_aar > 0
     ? `Folkepension foreslås udskudt ${b.folkepension_opsaettelse_aar} år (forenklet ventetillæg-skøn på 6%/år — IKKE en juridisk præcis beregning).`
     : 'Folkepension foreslås ikke udskudt.';
@@ -2760,9 +2791,10 @@ async function koerOptimering() {
     `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen. Målet er det højeste FASTE, ` +
     `inflationskorrigerede månedsbeløb der reelt kan udbetales hvert år — ikke den største samlede sum og ikke et gennemsnit ` +
     `der skjuler en flerårig lavindkomst-periode. ` +
-    `Evalueret ${data.evalueret} kombinationer af per-produkt start-aldre, folkepensions-opsætning, og udbetalingsår for ` +
-    `engangsbeløb der er markeret til at indgå i bufferen${stikproeveNote} ` +
-    `(ratepensioners udbetalingsperiode og engangsbeløb der er FRAVALGT bufferen er IKKE en del af søgningen — det er allerede trufne valg), ` +
+    `Evalueret ${data.evalueret} kombinationer af per-produkt start-aldre, ratepensioners udbetalingsperiode ` +
+    `(min. 10 år, lovkrav), folkepensions-opsætning, og udbetalingsår for engangsbeløb der er markeret til at ` +
+    `indgå i bufferen${stikproeveNote} ` +
+    `(engangsbeløb der er FRAVALGT bufferen er IKKE en del af søgningen — det er allerede et truffet valg), ` +
     `heraf ${data.antal_gennemfoerlige} gennemførlige (optimeringen kan aldrig gøre det værste enkeltår eller antallet af lavindkomst-år ringere end det allerede er i din nuværende plan). ` +
     `Bedste fundne plan — start-aldre: ${startLinjer || 'uændret'}. ` +
     `${opsaetLinje} Fast månedsbeløb denne plan giver: ${b.jaevn_netto_mdr.toLocaleString('da-DK')} kr/mdr. ` +

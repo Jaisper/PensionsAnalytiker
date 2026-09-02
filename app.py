@@ -304,8 +304,8 @@ Hvis der derimod findes en "## PARTNERENS UDBETALINGSANALYSE"-sektion i kontekst
 Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsrækkefølge:
 - Målet er at MAKSIMERE det faste, inflationskorrigerede månedsbeløb brugeren kan leve af hele den ønskede periode (`jaevn_netto_mdr`) — IKKE at maksimere den samlede udbetalte sum. Præsenter resultatet som "det højeste faste månedsbeløb vi kunne finde", ikke som en garanti.
 - Optimeringen kan ALDRIG anbefale en plan hvor de tidlige/laveste år bliver ringere end de ville have været uden indblanding — det er en indbygget grænse, ikke noget der skal forklares som en begrænsning.
-- Resultatet er fundet ved at afprøve en lang række kombinationer af per-produkt start-aldre og evt. udskudt folkepension — IKKE ved at forudse fremtiden.
-- Engangsbeløbs udbetalingsår og ratepensioners udbetalingsperiode rører optimeringen IKKE — det er brugerens egne, allerede trufne valg (fra rapporten eller tidslinjen), ikke frie variable.
+- Resultatet er fundet ved at afprøve en lang række kombinationer af per-produkt start-aldre, ratepensioners udbetalingsperiode (min. 10 år, lovkrav), evt. udskudt folkepension, og udbetalingsår for engangsbeløb der indgår i bufferen — IKKE ved at forudse fremtiden.
+- Et engangsbeløb brugeren aktivt har FRAVALGT bufferen for (udbetales direkte, ikke som buffer) rører optimeringen IKKE — det er brugerens eget, allerede trufne valg.
 - Hvis resultatet er "målet kan ikke nås": sig det direkte og eksplicit — foreslå ALDRIG den næstbedste plan som var den en løsning, det ville modsige selve formålet med den hårde grænse.
 - Hvis brugeren har fået foreslået udskudt folkepension (`folkepension_opsaettelse_aar > 0`): gør klart at ventetillægget (6 %/år) er et **forenklet skøn**, ikke den juridisk præcise ventetillægsberegning — den rigtige regel er mere kompleks.
 - Nævn at optimeringen kun ser på brugerens egne produkter — en eventuel partners egen pension indgår ikke i søgningen.

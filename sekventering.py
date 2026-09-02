@@ -45,13 +45,29 @@ Tre tidligere, svagere forsøg er droppet undervejs:
    der selv fandt en bedre rækkefølge ved at trække i tidslinjen kunne derfor
    opleve at optimeringen forkastede præcis den samme forbedring.
 
-Den nuværende tjek er derfor et ABSOLUT gulv: den enkelte kandidats
-LAVESTE rå alder-indkomst skal mindst matche default-planens EGEN laveste
-rå alder-indkomst (med en lille tolerance) — ikke alder-for-alder, men
-værste-mod-værste. Det bevarer beskyttelsen mod reelle huller (en kandidat
-der presser en alder dybere ned end brugerens eget værste punkt bliver
-stadig diskvalificeret), uden at blokere for at flytte overskud MELLEM
-år der begge allerede ligger over brugerens eget bundniveau.
+Den nuværende tjek er derfor todelt — ét mål for DYBDE, ét for VARIGHED,
+fordi et rent dybde-mål viste sig utilstrækkeligt alene (se nedenfor):
+
+1. DYBDE (absolut gulv): den enkelte kandidats LAVESTE rå alder-indkomst
+   skal mindst matche default-planens EGEN laveste rå alder-indkomst (med
+   en lille tolerance) — ikke alder-for-alder, men værste-mod-værste. Det
+   tillader at flytte overskud MELLEM år der begge allerede ligger over
+   brugerens eget bundniveau, uden at et enkelt værste punkt bliver dybere.
+
+2. VARIGHED ("hardship"-år): et rent dybde-gulv opdaget i praksis IKKE hvor
+   MANGE år der ligger lavt — en kandidat kan sagtens holde sig lige akkurat
+   over default-planens værste enkeltpunkt i en hel årrække uden reelt at
+   forbedre noget, blot ved at sprede et helt årti med lav indkomst ud i
+   stedet for ét enkelt lavpunkt. Derfor tælles også hvor mange år
+   kandidatens rå indkomst ligger under en fast, meningsfuld andel
+   (`HARDSHIP_ANDEL_AF_JAEVN`) af det UDJÆVNEDE niveau — et niveau der reelt
+   betyder markant lavere levestandard end det udjævnede tal lover — og
+   dette antal må højst overstige default-planens EGET antal med en lille,
+   fast tolerance (`HARDSHIP_EKSTRA_AAR_TILLADT`). Fordi tærsklen er en fast
+   andel af niveauet (ikke en sum sammenlignet med baseline), kollapser den
+   hverken til nul tolerance når baseline selv har 0 "hardship"-år, eller
+   bliver virkningsløs ved et stort engangsbeløb — begge de svagheder der
+   fældede den tidligere "bufferunderskud"-tilgang.
 
 Søgerummet kan blive langt større end det er praktisk at gennemgå
 udtømmende (fx 5 produkter × 15 aldre × 5 opsætningsår > 1 million
@@ -113,11 +129,17 @@ STANDARD_EKSTRA_AAR  = 10  # søg start-aldre op til pensionsalder + dette
 STIKPROEVE_SEED = 20260831  # fast seed — samme profil giver samme resultat hver gang
 KOORDINAT_RUNDER = 3  # antal grådige gennemløb af alle dimensioner, se _koordinat_udvid
 
-# Kandidatens rå (ikke-udjævnede) beløb for et givet år skal mindst udgøre
-# denne andel af default-planens eget rå beløb for SAMME alder — lille
-# tolerance for afrunding, ikke en invitation til at forringe et
-# overlappende år mærkbart.
+# Kandidatens LAVESTE rå (ikke-udjævnede) alder-indkomst skal mindst udgøre
+# denne andel af default-planens EGEN laveste — lille tolerance for
+# afrunding, ikke en invitation til at forringe det værste punkt mærkbart.
 RAA_AAR_TOLERANCE = 0.97
+
+# Et år tælles som "hardship" hvis den rå indkomst falder under denne andel
+# af det udjævnede niveau — dvs. markant under det brugeren reelt er stillet
+# i udsigt. Bruges til at begrænse VARIGHEDEN af lavindkomst-år, ikke kun
+# dybden af det enkelte værste punkt (se modulets docstring).
+HARDSHIP_ANDEL_AF_JAEVN = 0.5
+HARDSHIP_EKSTRA_AAR_TILLADT = 1
 
 
 @dataclass
@@ -281,13 +303,16 @@ def _raa_indkomst_pr_alder(resultat: dict) -> dict[int, float]:
     }
 
 
-def score(resultat: dict, obj: Objektiv, baseline_laveste_raa: float) -> tuple[float, float]:
+def score(
+    resultat: dict, obj: Objektiv, baseline_laveste_raa: float, baseline_hardship_aar: int
+) -> tuple[float, float]:
     """Returnerer (score, jaevn_niveau_realt). Score er det faste,
     bæredygtige månedsbeløb i DAGENS købekraft — højere er bedre, det ER
     selve målet. Score = -inf hvis planen enten bryder en (eventuel) hård
     bundgrænse, presser sin EGEN laveste rå alder-indkomst under
-    default-planens EGEN laveste (værste-mod-værste, se modulets docstring),
-    eller indeholder et fuldstændigt indkomst-hul."""
+    default-planens EGEN laveste (dybde), har flere "hardship"-år end
+    default-planen (varighed — se modulets docstring), eller indeholder et
+    fuldstændigt indkomst-hul."""
     jaevn_tabel = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
     jaevn_niveau = jaevn_niveau_realt(resultat)
     graense = obj.haard_minimum_mdr if obj.haard_minimum_mdr is not None else 0.0
@@ -298,8 +323,13 @@ def score(resultat: dict, obj: Objektiv, baseline_laveste_raa: float) -> tuple[f
             return float("-inf"), 0.0
 
     candidate_raa = _raa_indkomst_pr_alder(resultat)
-    if candidate_raa and min(candidate_raa.values()) < baseline_laveste_raa * RAA_AAR_TOLERANCE:
-        return float("-inf"), 0.0
+    if candidate_raa:
+        if min(candidate_raa.values()) < baseline_laveste_raa * RAA_AAR_TOLERANCE:
+            return float("-inf"), 0.0
+        hardship_graense = jaevn_niveau * HARDSHIP_ANDEL_AF_JAEVN
+        hardship_aar = sum(1 for v in candidate_raa.values() if v < hardship_graense)
+        if hardship_aar > baseline_hardship_aar + HARDSHIP_EKSTRA_AAR_TILLADT:
+            return float("-inf"), 0.0
 
     # Et fuldstændigt indkomst-hul (fx før pensionsalder, eller hvis ALLE
     # produkter er udskudt forbi et givet år) skal disqualificere uanset
@@ -340,6 +370,10 @@ def optimer(
         obj = Objektiv(haard_minimum_mdr=round(jaevn_niveau_realt(baseline) * 0.7))
     baseline_raa_pr_alder = _raa_indkomst_pr_alder(baseline)
     baseline_laveste_raa = min(baseline_raa_pr_alder.values()) if baseline_raa_pr_alder else 0.0
+    baseline_jaevn = jaevn_niveau_realt(baseline)
+    baseline_hardship_aar = sum(
+        1 for v in baseline_raa_pr_alder.values() if v < baseline_jaevn * HARDSHIP_ANDEL_AF_JAEVN
+    )
 
     alle_produkter = baseline["produkter"]
 
@@ -363,7 +397,7 @@ def optimer(
         sete.add(vektor)
         p, _, _ = _parametre_for_vektor(parametre, vektor)
         resultat = generer_udbetalingstabel(profil, p, skat_params)
-        s, jaevn = score(resultat, obj, baseline_laveste_raa)
+        s, jaevn = score(resultat, obj, baseline_laveste_raa, baseline_hardship_aar)
         evaluerede.append((vektor, s, jaevn))
         score_for[vektor] = s
 

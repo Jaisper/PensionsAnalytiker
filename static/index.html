@@ -2272,6 +2272,33 @@ function renderChart(data) {
     });
   }
 
+  // Bufferformue (kr, IKKE kr/mdr) — den stående saldo af lige nu ikke-udbetalte
+  // engangsbeløb + akkumuleret overskud. Vises kun som flows (til/fra buffer pr.
+  // måned) ovenfor, aldrig den stående SALDO selv — for et stort engangsbeløb ser
+  // bufferen derfor ud til at "forsvinde" uden spor. Vist på en separat akse
+  // (kr, ikke kr/mdr) da saldoen typisk er en størrelsesorden større end de
+  // månedlige søjler og ellers ville gøre dem usynligt små.
+  const harBufferSaldo = jaevnTabel.some(r => Math.abs(r.buffer_rest || 0) > 0);
+  if (harBufferSaldo) {
+    datasets.push({
+      type: 'line',
+      label: 'Bufferformue (kr, højre akse)',
+      data: tabel.map(row => {
+        const jr = jaevnTabel.find(r => r.alder === row.alder);
+        return jr ? Math.round(jr.buffer_rest || 0) : null;
+      }),
+      borderColor: '#b45309',
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+      pointRadius: 0,
+      fill: false,
+      stack: undefined,
+      yAxisID: 'buffer',
+      order: -4,
+      _bufferSaldo: true,
+    });
+  }
+
   // Fri formue linje (separat — kapitalindkomstskat)
   const ff = data.fri_formue_analyse;
   if (ff && ff.mdr_netto > 0) {
@@ -2338,6 +2365,15 @@ function renderChart(data) {
           },
           beginAtZero: true,
         },
+        buffer: {
+          position: 'right',
+          title: { display: true, text: 'Bufferformue (kr)', font: { size: 11 } },
+          ticks: {
+            font: { size: 10 },
+            callback: v => v.toLocaleString('da-DK'),
+          },
+          grid: { drawOnChartArea: false },
+        },
       },
       plugins: {
         legend: {
@@ -2353,6 +2389,9 @@ function renderChart(data) {
                 return ` ${ctx.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr (engangsbeløb — ikke til skala)`;
               }
               const v = ctx.parsed.y;
+              if (ctx.dataset._bufferSaldo) {
+                return ` ${ctx.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr`;
+              }
               if (!v) return null;
               return ` ${ctx.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr/mdr`;
             },

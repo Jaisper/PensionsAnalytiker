@@ -425,8 +425,27 @@
 #chart-panel-header:hover { background: #cfe0f5; }
 #chart-panel-header .ctitle { font-size: 0.82rem; font-weight: 600; color: #1a3a5c; }
 #chart-panel-toggle { font-size: 0.78rem; color: #5578a0; }
-#chart-panel-body { padding: 16px 24px 18px; max-height: 48vh; overflow-y: auto; }
+#chart-panel-body { padding: 16px 24px 18px; }
 .chart-wrap { position: relative; height: 260px; margin-bottom: 12px; }
+
+/* Split-screen: primær bruger og partner side om side, hver med egen scroll
+   (se person-col) — falder tilbage til stablet visning på smalle skærme.
+   Grid (ikke flex) undgår flexbox's "auto-minimum-size"-kollaps, hvor en
+   flex-item med overflow:auto og flex-basis 0 klapper sammen til højde 0
+   selvom dens indhold (og en eksplicit height) tilsiger andet. */
+#chart-split { display: grid; grid-template-columns: 1fr; gap: 20px; align-items: start; }
+#chart-split.dual { grid-template-columns: 1fr 1fr; }
+.person-col { min-width: 0; height: 48vh; overflow-y: auto; }
+#chart-split.dual .person-col + .person-col { border-left: 1px solid #c8d8e8; padding-left: 20px; }
+.person-col-title { font-size: 0.8rem; font-weight: 600; color: #1a3a5c; margin-bottom: 8px; }
+@media (max-width: 820px) {
+  #chart-split.dual { grid-template-columns: 1fr; }
+  #chart-split.dual .person-col + .person-col { border-left: none; padding-left: 0; border-top: 1px solid #c8d8e8; padding-top: 14px; }
+}
+#husstand-total {
+  margin-top: 14px; padding: 10px 14px; background: #dceaf8; border-radius: 8px;
+  font-size: 0.85rem; color: #1a3a5c;
+}
 
 /* Timeline */
 .tl-wrap { margin-top: 10px; }
@@ -527,10 +546,23 @@
     <span id="chart-panel-toggle">&#x25BC; Skjul</span>
   </div>
   <div id="chart-panel-body">
-    <div class="chart-wrap">
-      <canvas id="pension-chart"></canvas>
+    <div id="chart-split">
+      <div class="person-col" id="person-col-primary">
+        <div class="person-col-title" id="person-col-title-primary">Dig</div>
+        <div class="chart-wrap">
+          <canvas id="pension-chart"></canvas>
+        </div>
+        <div class="tl-wrap" id="timeline-container"></div>
+      </div>
+      <div class="person-col" id="person-col-partner" style="display:none">
+        <div class="person-col-title" id="person-col-title-partner">Partner</div>
+        <div class="chart-wrap">
+          <canvas id="pension-chart-partner"></canvas>
+        </div>
+        <div class="tl-wrap" id="timeline-container-partner"></div>
+      </div>
     </div>
-    <div class="tl-wrap" id="timeline-container"></div>
+    <div id="husstand-total" style="display:none"></div>
     <div class="chart-actions">
       <button class="chart-btn primary" onclick="opdaterAnalyse()">&#x21BB; Opdater analyse (Tabel 1-3)</button>
       <button class="chart-btn secondary" onclick="koerOptimering()">&#x1F50D; Find bedste udbetalingsrækkefølge</button>
@@ -1850,7 +1882,9 @@ const CHART_COLORS = [
 const FP_COLOR  = '#f97316';
 const ATP_COLOR = '#eab308';
 let _chartInstance = null;
+let _chartInstancePartner = null;
 let _chartData = null;
+let _chartDataPartner = null;
 let _chartPanelOpen = true;
 let _tlDrag = null;  // active drag state
 const MIN_RATEPENSION_AAR = 10;  // lovkrav: ratepension skal mindst udbetales over 10 år
@@ -1904,7 +1938,9 @@ let _refreshIncludePanel = false;
 function _collectPayload(includePanel = false) {
   const produktStartAldre = {};
   const produktUdbAar = {};
-  document.querySelectorAll('.tl-track[data-key]').forEach(track => {
+  // Scopet til target="primary" — split-screen-diagrammet kan have partnerens
+  // egne tl-track-elementer i DOM'en samtidig (se _collectPartnerPayload).
+  document.querySelectorAll('#timeline-container .tl-track[data-key]').forEach(track => {
     const key = track.dataset.key;
     if (!key) return;
     const start = parseInt(track.dataset.start);
@@ -1986,6 +2022,7 @@ async function _runEngineRefresh() {
     _chartData = await res.json();
     renderChart(_chartData);
     renderTimeline(_chartData);
+    _opdaterHusstandTotal();
     if (status) {
       status.style.color = '#16a34a';
       status.textContent = '✓ Opdateret';
@@ -2028,9 +2065,104 @@ async function loadAndRenderChart() {
     if (pt) pt.textContent = '▶ Vis';
     _parametrePanelOpen = false;
   }
+  loadAndRenderPartnerChart();  // no-op (skjuler kolonnen) hvis der ingen partner-analyse er
 }
 
-function renderChart(data) {
+// ── Split-screen: partnerens egen, uafhængige udbetalingsplan ──────────────
+// Spejler _collectPayload/_runEngineRefresh/scheduleRefresh/loadAndRenderChart
+// ovenfor, men navngiver felterne partner_* og rammer /engine-partner i
+// stedet — se _byg_params_partner i app.py for hvorfor de to ALDRIG må dele
+// produkt-nøgle-namespace.
+let _partnerRefreshTimer = null;
+let _partnerHarAnalyse = false;
+
+function _collectPartnerPayload() {
+  const produktStartAldre = {};
+  const produktUdbAar = {};
+  document.querySelectorAll('#timeline-container-partner .tl-track[data-key]').forEach(track => {
+    const key = track.dataset.key;
+    if (!key) return;
+    const start = parseInt(track.dataset.start);
+    if (!isNaN(start)) produktStartAldre[key] = start;
+    if (track.dataset.udbType === 'rate') {
+      const stop = parseInt(track.dataset.stop);
+      if (!isNaN(start) && !isNaN(stop)) produktUdbAar[key] = stop - start;
+    }
+  });
+  const payload = { session_id: sessionId };
+  if (Object.keys(produktStartAldre).length) payload.partner_produkt_start_aldre = produktStartAldre;
+  if (Object.keys(produktUdbAar).length)     payload.partner_produkt_udb_aar     = produktUdbAar;
+  return payload;
+}
+
+async function _runPartnerEngineRefresh() {
+  if (!sessionId) return;
+  await fetch('/api/parametre', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(_collectPartnerPayload()),
+  }).catch(() => null);
+
+  const res = await fetch(`/api/session/${sessionId}/engine-partner`).catch(() => null);
+  if (res?.ok) {
+    _chartDataPartner = await res.json();
+    renderChart(_chartDataPartner, { canvasId: 'pension-chart-partner', instanceKey: 'partner' });
+    renderTimeline(_chartDataPartner, { containerId: 'timeline-container-partner', target: 'partner' });
+    _opdaterHusstandTotal();
+  }
+}
+
+function schedulePartnerRefresh(delayMs = 300) {
+  if (!sessionId || !_chartDataPartner) return;
+  clearTimeout(_partnerRefreshTimer);
+  _partnerRefreshTimer = setTimeout(_runPartnerEngineRefresh, delayMs);
+}
+
+async function loadAndRenderPartnerChart() {
+  if (!sessionId) return;
+  const res = await fetch(`/api/session/${sessionId}/engine-partner`).catch(() => null);
+  const col = document.getElementById('person-col-partner');
+  const split = document.getElementById('chart-split');
+  if (!res || !res.ok) {
+    // Ingen fuld partner-profil/civilstand/pensionsalder sat endnu — skjul
+    // kolonnen igen (fx hvis partneren netop er blevet fjernet) og gå
+    // tilbage til én-kolonne-layoutet.
+    _partnerHarAnalyse = false;
+    if (col) col.style.display = 'none';
+    if (split) split.classList.remove('dual');
+    _opdaterHusstandTotal();
+    return;
+  }
+  _chartDataPartner = await res.json();
+  _partnerHarAnalyse = true;
+  if (col) col.style.display = '';
+  if (split) split.classList.add('dual');
+  renderChart(_chartDataPartner, { canvasId: 'pension-chart-partner', instanceKey: 'partner' });
+  renderTimeline(_chartDataPartner, { containerId: 'timeline-container-partner', target: 'partner' });
+  const titlePrimary = document.getElementById('person-col-title-primary');
+  if (titlePrimary) titlePrimary.textContent = 'Dig';
+  const titlePartner = document.getElementById('person-col-title-partner');
+  if (titlePartner) titlePartner.textContent = 'Partner';
+  _opdaterHusstandTotal();
+}
+
+function _opdaterHusstandTotal() {
+  const el = document.getElementById('husstand-total');
+  if (!el) return;
+  if (!_partnerHarAnalyse || !_chartData || !_chartDataPartner) {
+    el.style.display = 'none';
+    return;
+  }
+  const egen    = _chartData.jaevn_netto_mdr || 0;
+  const partner = _chartDataPartner.jaevn_netto_mdr || 0;
+  el.style.display = '';
+  el.innerHTML = `<strong>Samlet husstand:</strong> ${(egen + partner).toLocaleString('da-DK')} kr/mdr ` +
+    `<span style="opacity:0.75">(dig: ${egen.toLocaleString('da-DK')} + partner: ${partner.toLocaleString('da-DK')})</span>`;
+}
+
+function renderChart(data, opts = {}) {
+  const canvasId = opts.canvasId || 'pension-chart';
+  const instanceKey = opts.instanceKey || 'primary';
   const tabel        = data.tabel;
   const produkter    = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
   const engangs      = data.engangsbeloeb || [];
@@ -2295,10 +2427,11 @@ function renderChart(data) {
     });
   }
 
-  const ctx = document.getElementById('pension-chart').getContext('2d');
-  if (_chartInstance) _chartInstance.destroy();
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  const bestaaendeInstans = instanceKey === 'partner' ? _chartInstancePartner : _chartInstance;
+  if (bestaaendeInstans) bestaaendeInstans.destroy();
 
-  _chartInstance = new Chart(ctx, {
+  const nyInstans = new Chart(ctx, {
     type: 'bar',
     data: { labels, datasets },
     options: {
@@ -2347,12 +2480,16 @@ function renderChart(data) {
       },
     },
   });
+  if (instanceKey === 'partner') _chartInstancePartner = nyInstans;
+  else _chartInstance = nyInstans;
 }
 
 // ── Timeline ──────────────────────────────────────────────────────────────────────────
 
-function renderTimeline(data) {
-  const container = document.getElementById('timeline-container');
+function renderTimeline(data, opts = {}) {
+  const containerId = opts.containerId || 'timeline-container';
+  const target = opts.target || 'primary';
+  const container = document.getElementById(containerId);
   if (!container) return;
 
   const produkter = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
@@ -2412,14 +2549,15 @@ function renderTimeline(data) {
         ? `Venstre kant: juster start · Højre kant: juster udbetalingsperiode (min. 10 år) · Midten: flyt · ${startAge}–${stopAge} år`
         : `Venstre kant: juster start · Midten: flyt · fra ${startAge} år, livsvarig`;
 
-    html += `<div class="tl-row" data-key="${escapeAttr(prod.key)}" data-idx="${idx}">
+    const elId = `${target}-${idx}`;
+    html += `<div class="tl-row" data-key="${escapeAttr(prod.key)}" data-idx="${elId}">
       <div class="tl-row-label" title="${label}">${label}</div>
-      <div class="tl-track" id="tl-track-${idx}"
+      <div class="tl-track" id="tl-track-${elId}"
            data-agemin="${ageMin}" data-agemax="${ageMax}" data-span="${span}"
            data-start="${startAge}" data-stop="${stopAge}"
-           data-minage="${minDragAge}"
+           data-minage="${minDragAge}" data-target="${target}"
            data-is-engangs="${isEngangs}" data-udb-type="${prod.udb_type || ''}" data-key="${escapeAttr(prod.key)}">
-        <div class="tl-bar" id="tl-bar-${idx}" data-idx="${idx}"
+        <div class="tl-bar" id="tl-bar-${elId}" data-idx="${elId}"
              style="left:${leftPct}%;width:${widthPct}%;background:${color}"
              title="${barTitle}">
           <span class="tl-bar-label" style="padding:0 4px;pointer-events:none;overflow:hidden;font-size:0.6rem">${barLabel}</span>
@@ -2458,17 +2596,19 @@ function renderTimeline(data) {
   html += `</div>`;  // tl-track-area
   container.innerHTML = html;
 
-  // Event delegation — capture-phase listeners på container (overlever innerHTML-reset)
+  // Event delegation — capture-phase listeners på container (overlever innerHTML-reset).
+  // idx er en "target-N"-streng (fx "partner-2"), ikke et rent tal — den bruges
+  // udelukkende til at genopbygge de unikke element-id'er, aldrig aritmetisk.
   const _tlHandleDown = (e) => {
     const bar = e.target.closest('.tl-bar[data-idx]');
     if (!bar) return;
     e.stopPropagation();
-    tlBarDown(e, parseInt(bar.dataset.idx));
+    tlBarDown(e, bar.dataset.idx);
   };
   const _tlHandleTouch = (e) => {
     const bar = e.target.closest('.tl-bar[data-idx]');
     if (!bar) return;
-    tlBarTouch(e, parseInt(bar.dataset.idx));
+    tlBarTouch(e, bar.dataset.idx);
   };
   // Fjern evt. gamle listeners inden re-binding
   if (container._tlHandleDown) {
@@ -2552,6 +2692,7 @@ function tlDragStart(e, idx, handleType) {
     isEngangs: track.dataset.isEngangs === 'true',
     isRate:    track.dataset.udbType === 'rate',
     key:       track.dataset.key,
+    target:    track.dataset.target || 'primary',
   };
 
   // Gem klik-offset så baren ikke hopper ved første klik
@@ -2630,6 +2771,11 @@ function tlUpdateBar(d) {
 }
 
 function tlApplyChanges(d) {
+  if (d.target === 'partner') {
+    if (!_chartDataPartner) return;
+    schedulePartnerRefresh(0);
+    return;
+  }
   if (!_chartData) return;
   // Synk panel-inputs med den nye position
   const key = d.key;
@@ -2665,6 +2811,7 @@ async function opdaterAnalyse() {
     _chartData = await res.json();
     renderChart(_chartData);
     renderTimeline(_chartData);
+    _opdaterHusstandTotal();
   }
   if (status) status.textContent = '';
 
@@ -2818,6 +2965,7 @@ async function anvendOptimering() {
     _chartData = await res.json();
     renderChart(_chartData);
     renderTimeline(_chartData);
+    _opdaterHusstandTotal();
   }
   await sendSystemTrigger('Jeg har anvendt den foreslåede udbetalingsrækkefølge. Bekræft kort at tidslinjen/diagrammet nu er opdateret med denne plan.');
 }

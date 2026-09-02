@@ -298,7 +298,8 @@ Hvis brugeren har angivet civilstand "gift eller samlevende":
 Hvis der derimod findes en "## PARTNERENS UDBETALINGSANALYSE"-sektion i konteksten (partneren har uploadet sin egen rapport):
 - Partnerens tal er nu en FULD, egen beregning — egne produkter, egen tidslinje, egen skat — ikke længere et overslag. Præsenter den som en klart adskilt sektion, ligesom den fremstår i konteksten.
 - Den ENESTE tilnærmelse der stadig gælder er selve samspils-koblingen: det kombinerede indtægtsgrundlag for pensionstillæg/tillægsprocent er stadig en forenklet tilnærmelse til § 29-reglerne — nævn det kort, men lad være med at gentage hele forbeholdet for hver eneste tabel.
-- Diagrammet/tidslinjen i UI'et viser fortsat kun brugerens EGNE produkter — partnerens tal findes kun i chatten som tekst.
+- Udbetalingsdiagrammet viser nu BEGGE i et split-screen — brugerens egen kolonne ("Dig") og partnerens ("Partner") side om side, hver med sin egen uafhængige, trækbare tidslinje og uafhængig scroll, plus en samlet husstands-sum nederst. Nævn dette hvis brugeren spørger hvordan de justerer partnerens produkter — de trækker direkte i partnerens egen tidslinje, ligesom deres egen.
+- Sekventeringsoptimeringen ("Find bedste udbetalingsrækkefølge") ser stadig KUN på brugerens egne produkter — den optimerer ikke partnerens tidslinje.
 
 ## SEKVENTERINGSOPTIMERING — "FIND BEDSTE UDBETALINGSRÆKKEFØLGE"
 Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsrækkefølge:
@@ -346,6 +347,10 @@ def _engine_cache_key(session: dict) -> str:
         "produkt_udb_aar":    json.dumps(params.get("produkt_udb_aar", {}), sort_keys=True),
         "folkepension_opsaettelse_aar": params.get("folkepension_opsaettelse_aar"),
         "partner_pensionsalder": params.get("partner_pensionsalder"),
+        "partner_produkt_start_aldre": json.dumps(params.get("partner_produkt_start_aldre", {}), sort_keys=True),
+        "partner_produkt_i_buffer":    json.dumps(params.get("partner_produkt_i_buffer", {}), sort_keys=True),
+        "partner_produkt_udb_aar":     json.dumps(params.get("partner_produkt_udb_aar", {}), sort_keys=True),
+        "partner_folkepension_opsaettelse_aar": params.get("partner_folkepension_opsaettelse_aar"),
         "profil_partner_id":  id(session.get("profil_partner")),
         "profil_id":          id(profil),
     }
@@ -394,6 +399,47 @@ def _kapital_skat_type_fra_historik(session: dict) -> str | None:
     return resultat
 
 
+def _civilstand_fra_params(params: dict) -> str:
+    civilstand = params.get("civilstand")
+    if civilstand is None:
+        civilstand = "enlig" if params.get("enlig", True) else "gift_samlevende"
+    return civilstand
+
+
+def _byg_params_partner(params: dict) -> dict | None:
+    """Bygger partnerens beregningsparametre (Fase D husstandskobling) ud fra
+    den primære brugers params — eller None hvis der ikke er en fuld
+    partner-profil/civilstand/partner-pensionsalder til at understøtte det.
+    Genbruger primærens økonomiske antagelser (afkast/inflation/kommune-/
+    kirkeskat), men partnerens EGEN udbetalingstidslinje (start-aldre/
+    buffer/periode/FP-opsætning — split-screen-diagrammet) er deres egen,
+    uafhængige valg og skal ALDRIG blande sig med primærens produkt-nøgler.
+    Brugt tre steder (_kør_engine, /api/optimer, /api/session/.../engine-
+    partner) — holdt ét sted så de tre aldrig kan drifte fra hinanden."""
+    civilstand = _civilstand_fra_params(params)
+    if civilstand != "gift_samlevende" or not params.get("partner_pensionsalder"):
+        return None
+    params_partner = {
+        k: v for k, v in params.items()
+        if k not in ("produkt_start_aldre", "produkt_i_buffer", "produkt_udb_aar",
+                     "folkepension_opsaettelse_aar", "civilstand", "partner_alder",
+                     "partner_indkomst_aar", "partner_pensionsalder",
+                     "partner_produkt_start_aldre", "partner_produkt_i_buffer",
+                     "partner_produkt_udb_aar", "partner_folkepension_opsaettelse_aar")
+    }
+    params_partner["pensionsalder"] = int(params["partner_pensionsalder"])
+    params_partner["civilstand"] = "gift_samlevende"
+    if params.get("partner_produkt_start_aldre") is not None:
+        params_partner["produkt_start_aldre"] = params["partner_produkt_start_aldre"]
+    if params.get("partner_produkt_i_buffer") is not None:
+        params_partner["produkt_i_buffer"] = params["partner_produkt_i_buffer"]
+    if params.get("partner_produkt_udb_aar") is not None:
+        params_partner["produkt_udb_aar"] = params["partner_produkt_udb_aar"]
+    if params.get("partner_folkepension_opsaettelse_aar") is not None:
+        params_partner["folkepension_opsaettelse_aar"] = params["partner_folkepension_opsaettelse_aar"]
+    return params_partner
+
+
 def _kør_engine(session_id: str) -> str:
     """Kør deterministisk beregning hvis pensionsalder er oplyst. Returnerer formateret tekst."""
     session = sessions.get(session_id, {})
@@ -416,30 +462,18 @@ def _kør_engine(session_id: str) -> str:
                 if "kapital" in (p.get("produkttype") or "").lower():
                     p["skat_type"] = kapital_skat
 
-        civilstand = params.get("civilstand")
-        if civilstand is None:
-            civilstand = "enlig" if params.get("enlig", True) else "gift_samlevende"
+        civilstand = _civilstand_fra_params(params)
         partner_alder = params.get("partner_alder")
 
         profil_partner = session.get("profil_partner")
         result_text_partner = None
-        if profil_partner and civilstand == "gift_samlevende" and params.get("partner_pensionsalder"):
-            # Fase D — fuld partner-profil. Genbrug primærens antagelser
-            # (afkast/inflation/kommune-/kirkeskat), men uden primærens
-            # produkt-specifikke overrides (start-aldre/perioder/buffer),
-            # som slet ikke matcher partnerens produkt-nøgler.
-            params_partner = {
-                k: v for k, v in params.items()
-                if k not in ("produkt_start_aldre", "produkt_i_buffer", "produkt_udb_aar",
-                             "folkepension_opsaettelse_aar", "civilstand", "partner_alder",
-                             "partner_indkomst_aar", "partner_pensionsalder")
-            }
-            params_partner["pensionsalder"] = int(params["partner_pensionsalder"])
-            params_partner["civilstand"] = "gift_samlevende"
+        params_partner = _byg_params_partner(params) if profil_partner else None
+        if params_partner is not None:
             husstand_resultat = husstand.beregn_husstand(
                 profil_kopi, params, copy.deepcopy(profil_partner), params_partner,
             )
             result = husstand_resultat["a"]
+            session["engine_output_partner"] = husstand_resultat["b"]
             result_text_partner = format_engine_til_llm(husstand_resultat["b"])
             skat = None  # allerede anvendt inde i beregn_husstand
         else:
@@ -1100,6 +1134,15 @@ class Parametre(BaseModel):
     produkt_udb_aar: dict | None = None
     folkepension_opsaettelse_aar: int | None = None
     partner_pensionsalder: int | None = None
+    # Partnerens EGEN udbetalingstidslinje (Fase D split-screen) — spejler
+    # produkt_start_aldre/produkt_i_buffer/produkt_udb_aar/folkepension_
+    # opsaettelse_aar ovenfor, men navngivet separat da partnerens
+    # produkt-nøgler kommer fra deres EGEN rapport og lever i sessionens
+    # egen "beregningsparametre_partner"-boble, ikke den primære brugers.
+    partner_produkt_start_aldre: dict | None = None
+    partner_produkt_i_buffer: dict | None = None
+    partner_produkt_udb_aar: dict | None = None
+    partner_folkepension_opsaettelse_aar: int | None = None
 
 
 @app.post("/api/parametre")
@@ -1128,6 +1171,11 @@ async def gem_parametre(req: Parametre):
     if req.produkt_udb_aar is not None:               p["produkt_udb_aar"] = req.produkt_udb_aar
     if req.folkepension_opsaettelse_aar is not None:  p["folkepension_opsaettelse_aar"] = req.folkepension_opsaettelse_aar
     if req.partner_pensionsalder is not None:         p["partner_pensionsalder"] = req.partner_pensionsalder
+    if req.partner_produkt_start_aldre is not None:   p["partner_produkt_start_aldre"] = req.partner_produkt_start_aldre
+    if req.partner_produkt_i_buffer is not None:      p["partner_produkt_i_buffer"] = req.partner_produkt_i_buffer
+    if req.partner_produkt_udb_aar is not None:       p["partner_produkt_udb_aar"] = req.partner_produkt_udb_aar
+    if req.partner_folkepension_opsaettelse_aar is not None:
+        p["partner_folkepension_opsaettelse_aar"] = req.partner_folkepension_opsaettelse_aar
 
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")
@@ -1184,6 +1232,36 @@ async def get_engine_data(session_id: str):
     })
 
 
+@app.get("/api/session/{session_id}/engine-partner")
+async def get_engine_data_partner(session_id: str):
+    """Samme facon som /engine, men for partnerens fulde, uafhængige
+    udbetalingsplan (Fase D split-screen-diagram) — kun tilgængeligt når en
+    fuld partner-profil + civilstand + partner-pensionsalder er sat."""
+    if session_id not in sessions:
+        raise HTTPException(404, "Session ikke fundet")
+    session = sessions[session_id]
+    if session.get("profil") and session.get("beregningsparametre"):
+        _kør_engine(session_id)  # udfylder/opdaterer engine_output_partner via samme cache
+    result = session.get("engine_output_partner")
+    if not result:
+        return JSONResponse({"error": "Ingen partner-beregning endnu"}, status_code=404)
+    params = session.get("beregningsparametre", {})
+    return JSONResponse({
+        "tabel": result["tabel"],
+        "produkter": result["produkter"],
+        "engangsbeloeb": result.get("engangsbeloeb", []),
+        "fp_alder": result["fp_alder"],
+        "pensionsalder": result["pensionsalder"],
+        "tabel_start": result["tabel_start"],
+        "parametre": result["parametre"],
+        "jaevn_netto_mdr": result.get("jaevn_netto_mdr", 0),
+        "jaevn_tabel": result.get("jaevn_tabel", []),
+        "produkt_start_aldre": params.get("partner_produkt_start_aldre", {}),
+        "produkt_i_buffer":   params.get("partner_produkt_i_buffer", {}),
+        "fri_formue_analyse": result.get("fri_formue_analyse"),
+    })
+
+
 @app.post("/api/optimer")
 async def optimer_udbetalingsplan(req: dict):
     session_id = req.get("session_id")
@@ -1205,25 +1283,16 @@ async def optimer_udbetalingsplan(req: dict):
 
     # Samme husstands-detektion som _kør_engine — uden den ville optimeringen
     # score kandidater mod et husstands-uafhængigt (forkert) indtægtsgrundlag
-    # for enhver bruger der har uploadet en fuld partner-profil.
-    civilstand = params.get("civilstand")
-    if civilstand is None:
-        civilstand = "enlig" if params.get("enlig", True) else "gift_samlevende"
+    # for enhver bruger der har uploadet en fuld partner-profil. Partnerens
+    # egen, manuelt justerede tidslinje (split-screen-diagrammet) indgår i
+    # den koblede baseline via _byg_params_partner, ellers ville optimeringen
+    # score mod partnerens u-justerede default-plan.
     profil_partner = session.get("profil_partner")
-    kwargs_partner = {}
-    if profil_partner and civilstand == "gift_samlevende" and params.get("partner_pensionsalder"):
-        params_partner = {
-            k: v for k, v in params.items()
-            if k not in ("produkt_start_aldre", "produkt_i_buffer", "produkt_udb_aar",
-                         "folkepension_opsaettelse_aar", "civilstand", "partner_alder",
-                         "partner_indkomst_aar", "partner_pensionsalder")
-        }
-        params_partner["pensionsalder"] = int(params["partner_pensionsalder"])
-        params_partner["civilstand"] = "gift_samlevende"
-        kwargs_partner = {
-            "profil_partner": copy.deepcopy(profil_partner),
-            "parametre_partner": params_partner,
-        }
+    params_partner = _byg_params_partner(params) if profil_partner else None
+    kwargs_partner = {
+        "profil_partner": copy.deepcopy(profil_partner),
+        "parametre_partner": params_partner,
+    } if params_partner is not None else {}
 
     haard_minimum = req.get("haard_minimum_mdr")
     obj = sekventering.Objektiv(

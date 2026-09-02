@@ -1332,6 +1332,18 @@ Upload derefter PDF'en her øverst til højre.`,
     }).catch(() => null);
     await loadAndRenderPartnerChart();
     if (status) { status.style.color = '#1a7a4a'; status.textContent = '✓ Partnerens analyse er beregnet — se diagrammet nedenfor.'; }
+    // loadAndRenderPartnerChart() henter kun diagram-data — den detaljerede
+    // tekst-analyse (Tabel 1-3-ækvivalenten, allerede bygget server-side som
+    // "## PARTNERENS UDBETALINGSANALYSE") bliver først vist når LLM'en rent
+    // faktisk bliver bedt om at skrive den, ligesom opdaterAnalyse() gør for
+    // brugerens egen analyse.
+    if (_partnerHarAnalyse) {
+      await sendSystemTrigger(
+        'Jeg har lige beregnet partnerens egen pensionsanalyse (uafhængige antagelser, egen tidslinje). ' +
+        'Præsenter partnerens fulde analyse (svarende til Tabel 1-3, men for partneren) som en klart adskilt sektion i chatten, ' +
+        'ligesom "## PARTNERENS UDBETALINGSANALYSE" står i konteksten — ikke kun en kort omtale.'
+      );
+    }
   }
 
   function autoFillStartAldre() {

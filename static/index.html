@@ -1086,7 +1086,7 @@ Upload derefter PDF'en her øverst til højre.`,
               <div id="partner_upload_status" style="font-size:0.8rem;margin-top:4px"></div>
               <div id="partner_pensionsalder_row" style="display:none;margin-top:6px;align-items:center;gap:8px">
                 <span style="font-size:0.85rem;color:#2a3a4a;min-width:150px">Partners ønskede pensionsalder</span>
-                <input type="number" id="iq_partner_pensionsalder" min="55" max="80" step="1" style="width:70px">
+                <input type="number" id="iq_partner_pensionsalder" min="55" max="80" step="1" style="width:70px" onchange="onPartnerPensionsalderChange()">
                 <span class="unit">år</span>
               </div>
             </div>
@@ -1250,10 +1250,38 @@ Upload derefter PDF'en her øverst til højre.`,
       if (letFelter) letFelter.style.display = 'none';
       const pensionsalderRow = document.getElementById('partner_pensionsalder_row');
       if (pensionsalderRow) pensionsalderRow.style.display = 'flex';
+      // Hvis brugerens EGEN analyse allerede kører (fx partner uploadet efter
+      // det oprindelige interview), er der ingen "Start analyse"-knap tilbage
+      // der ville have vist split-screen-diagrammet — prøv derfor selv, i
+      // tilfælde af at pensionsalderen allerede er udfyldt fra et tidligere
+      // forsøg. Ellers venter vi på onPartnerPensionsalderChange() nedenfor.
+      if (sessionId && _chartData) onPartnerPensionsalderChange();
     } catch (e) {
       status.style.color = '#c0392b';
       status.textContent = `Kunne ikke indlæse rapporten: ${e.message}`;
     }
+  }
+
+  // Kaldes når partnerens ønskede pensionsalder udfyldes/ændres — det er det
+  // sidste stykke information _byg_params_partner() (app.py) kræver for at
+  // beregne partnerens egen plan. Uden dette kald sker der intet synligt før
+  // brugeren tilfældigvis trigger en anden genberegning (fx ved at trække i
+  // sin egen tidslinje) — split-screen-diagrammet ville se ud til slet ikke
+  // at virke, selvom backend-data'en er klar.
+  async function onPartnerPensionsalderChange() {
+    if (!sessionId) return;
+    const pensionsalder = parseInt(document.getElementById('iq_partner_pensionsalder')?.value);
+    if (!pensionsalder) return;
+    await fetch('/api/parametre', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        partner_pensionsalder: pensionsalder,
+        civilstand: document.getElementById('iq_civilstand')?.checked ? 'gift_samlevende' : undefined,
+      }),
+    }).catch(() => null);
+    await loadAndRenderPartnerChart();
   }
 
   function autoFillStartAldre() {
@@ -2811,8 +2839,8 @@ async function opdaterAnalyse() {
     _chartData = await res.json();
     renderChart(_chartData);
     renderTimeline(_chartData);
-    _opdaterHusstandTotal();
   }
+  await loadAndRenderPartnerChart();  // no-op (skjuler kolonnen) hvis ingen partner-analyse
   if (status) status.textContent = '';
 
   await sendSystemTrigger(

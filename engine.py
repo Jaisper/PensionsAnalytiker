@@ -37,7 +37,7 @@ class SkatParametre:
     kirkeskat: float   = KIRKESKAT_DEFAULT
     enlig: bool        = True
     # Husstand/ægtefælle (Fase B) — enlig skelner stadig kun enlig vs. gift for
-    # TILLAEGSPROCENT_ENLIG/GIFT og VARMETILLAEG-satserne. Disse to felter
+    # TILLAEGSPROCENT_ENLIG/GIFT-satserne. Disse to felter
     # afgør DEROVER om det er "gift, partner ikke pensionist" eller "gift,
     # begge pensionister" der vælges — se _vaelg_pensionstillaeg_regel().
     partner_foedselsaar: Optional[int] = None
@@ -242,8 +242,8 @@ def folkepension_pensionstillaeg_aar(
 
 
 def beregn_tillaegsprocent(indtaegt_aar: float, enlig: bool) -> int:
-    """Den personlige tillægsprocent (0–100), som styrer ældrecheck,
-    mediecheck og varmetillæg. Falder i HELE procentpoint (ikke lineært) —
+    """Den personlige tillægsprocent (0–100), som styrer ældrecheck og
+    mediecheck. Falder i HELE procentpoint (ikke lineært) —
     en SELVSTÆNDIG regel, ikke en afledning af pensionstillæggets aftrapning.
     Rammer nul ved en langt lavere indkomst end pensionstillægget gør."""
     regel = satser_2026.TILLAEGSPROCENT_ENLIG if enlig else satser_2026.TILLAEGSPROCENT_GIFT
@@ -258,13 +258,11 @@ def beregn_tillaegsprocent(indtaegt_aar: float, enlig: bool) -> int:
 def beregn_tillaegsstyrede_ydelser(
     tillaegsprocent: int,
     likvid_formue: float,
-    aarlig_varmeudgift: float,
-    enlig: bool,
 ) -> dict:
-    """Ældrecheck, mediecheck og varmetillæg — alle styret af den personlige
+    """Ældrecheck og mediecheck — begge styret af den personlige
     tillægsprocent. Formuegrænsen er en HÅRD tærskel, men gælder KUN
-    ældrechecken (jf. samspil.ts) — mediecheck og varmetillæg er ikke
-    formueafhængige: én krone over grænsen koster kun ældrechecken."""
+    ældrechecken (jf. samspil.ts): én krone over grænsen koster kun
+    ældrechecken."""
     tp = tillaegsprocent / 100
     formue_ok = likvid_formue <= satser_2026.LIKVID_FORMUEGRAENSE.vaerdi
 
@@ -276,19 +274,9 @@ def beregn_tillaegsstyrede_ydelser(
     if tillaegsprocent == 100:
         mediecheck = satser_2026.MEDIECHECK.vaerdi
 
-    varmetillaeg = 0.0
-    if aarlig_varmeudgift > 0 and tillaegsprocent > 0:
-        egen = (
-            satser_2026.VARMETILLAEG_EGENBETALING_ENLIG.vaerdi
-            if enlig else satser_2026.VARMETILLAEG_EGENBETALING_GIFT.vaerdi
-        )
-        maks = satser_2026.VARMETILLAEG_MAKSIMALT.vaerdi
-        varmetillaeg = min(maks, max(0.0, aarlig_varmeudgift - egen)) * tp
-
     return {
         "aeldrecheck":    aeldrecheck,
         "mediecheck":     mediecheck,
-        "varmetillaeg":   varmetillaeg,
         "formue_ok":      formue_ok,
     }
 
@@ -368,9 +356,8 @@ def generer_udbetalingstabel(
     folkepension_opsaettelse_aar = int(parametre.get("folkepension_opsaettelse_aar", 0) or 0)
 
     # Genbruger det eksisterende "fri_formue"-felt til formuegrænsen for
-    # ældrecheck/varmetillæg — det er allerede "likvid opsparing ud over pension".
+    # ældrecheck — det er allerede "likvid opsparing ud over pension".
     likvid_formue      = float(parametre.get("fri_formue", 0) or 0)
-    aarlig_varmeudgift = float(parametre.get("aarlig_varmeudgift", 0) or 0)
 
     person      = profil.get("person", {})
     foedselsaar = _foedselsaar_fra_profil(profil)
@@ -663,9 +650,7 @@ def generer_udbetalingstabel(
             tillaeg_mdr   = tillaeg_aar / 12
 
             tillaegsprocent = beregn_tillaegsprocent(indtaegtsgrundlag_aar, skat_params.enlig)
-            ydelser = beregn_tillaegsstyrede_ydelser(
-                tillaegsprocent, likvid_formue, aarlig_varmeudgift, skat_params.enlig
-            )
+            ydelser = beregn_tillaegsstyrede_ydelser(tillaegsprocent, likvid_formue)
             # Ældrechecken er skattepligtig personlig indkomst uden AM-bidrag —
             # beskattes forholdsmæssigt ligesom FP/ATP (lille afvigelse mulig,
             # se note ved skatteeksemplet: den indgår ikke selv i det total_pi
@@ -676,19 +661,18 @@ def generer_udbetalingstabel(
                 if aeldrecheck_aar > 0 else 0.0
             )
             aeldrecheck_mdr  = aeldrecheck_netto_aar / 12
-            # Mediecheck og varmetillæg regnes skattefri (samme antagelse som
-            # kildepakken — uverificeret sammen med selve satserne).
+            # Mediecheck regnes skattefri (samme antagelse som kildepakken —
+            # uverificeret sammen med selve satsen).
             mediecheck_mdr   = ydelser["mediecheck"] / 12
-            varmetillaeg_mdr = ydelser["varmetillaeg"] / 12
         else:
             fp_mdr_netto = tillaeg_mdr = 0.0
             tillaegsprocent = 0
-            aeldrecheck_mdr = mediecheck_mdr = varmetillaeg_mdr = 0.0
+            aeldrecheck_mdr = mediecheck_mdr = 0.0
 
         total_netto_mdr = (
             sum(d["mdr_netto"] for d in produkt_data.values())
             + fp_mdr_netto + tillaeg_mdr + atp_mdr_netto
-            + aeldrecheck_mdr + mediecheck_mdr + varmetillaeg_mdr
+            + aeldrecheck_mdr + mediecheck_mdr
         )
 
         # Realværdi: deflatér med inflation siden i dag
@@ -724,7 +708,6 @@ def generer_udbetalingstabel(
             "tillaegsprocent": tillaegsprocent,
             "aeldrecheck_mdr":   aeldrecheck_mdr,
             "mediecheck_mdr":    mediecheck_mdr,
-            "varmetillaeg_mdr":  varmetillaeg_mdr,
             "total_netto_mdr": total_netto_mdr,
             "total_netto_aar": total_netto_mdr * 12,
             "real_netto_mdr":  real_netto_mdr,
@@ -1449,8 +1432,6 @@ def format_engine_til_llm(result: dict) -> str:
             ydelse_bits.append(f"ældrecheck {row['aeldrecheck_mdr']:,.0f}".replace(",", "."))
         if row.get("mediecheck_mdr"):
             ydelse_bits.append(f"mediecheck {row['mediecheck_mdr']:,.0f}".replace(",", "."))
-        if row.get("varmetillaeg_mdr"):
-            ydelse_bits.append(f"varmetillæg {row['varmetillaeg_mdr']:,.0f}".replace(",", "."))
         if ydelse_bits:
             note_parts.append(f"+{' + '.join(ydelse_bits)} kr/mdr")
         note = "; ".join(note_parts) if note_parts else "—"

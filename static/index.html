@@ -1101,15 +1101,6 @@ Upload derefter PDF'en her øverst til højre.`,
             <option value="42">Aktier, høj indkomst (42%)</option>
           </select>
         </td>
-      </tr>
-      <tr>
-        <td class="ql"><strong>10.</strong> Årlig varmeudgift
-          <div class="qdesc">Bruges til at vurdere ret til varmetillæg som folkepensionist — kun relevant ved lav øvrig indkomst</div>
-        </td>
-        <td class="qi">
-          <input type="number" id="iq10" placeholder="0" min="0" step="1000">
-          <span class="unit">kr/år</span>
-        </td>
       </tr>`;
 
     const steps = `
@@ -1425,11 +1416,6 @@ Upload derefter PDF'en her øverst til højre.`,
       parts.push(`9. Fri formue: ${Math.round(frieMidler).toLocaleString('da-DK')} kr. (kapitalbeskatning: ${frieSkat}%)`);
     }
 
-    const varmeudgift = parseFloat(v('iq10'));
-    if (varmeudgift > 0) {
-      parts.push(`10. Årlig varmeudgift: ${Math.round(varmeudgift).toLocaleString('da-DK')} kr/år`);
-    }
-
     const msg = 'Mine svar:\n' + parts.join('\n');
 
     clearFieldErrors();
@@ -1475,7 +1461,6 @@ Upload derefter PDF'en her øverst til højre.`,
         produkt_i_buffer:     Object.keys(produktIBuffer).length ? produktIBuffer : undefined,
         fri_formue:                  frieMidler > 0 ? frieMidler : undefined,
         fri_formue_kapital_skat_pct: frieMidler > 0 ? frieSkat   : undefined,
-        aarlig_varmeudgift:          varmeudgift > 0 ? varmeudgift : undefined,
         civilstand:                  civilstand,
         partner_alder:               partnerAlder,
         partner_indkomst_aar:        partnerIndkomst,
@@ -1949,7 +1934,6 @@ function _collectPayload(includePanel = false) {
     const iq7  = document.getElementById('iq7');
     const iq9  = document.getElementById('iq9');
     const iq9b = document.getElementById('iq9b');
-    const iq10 = document.getElementById('iq10');
     if (iq1?.value)  payload.netto_indbetaling = Math.round((parseFloat(iq1.value) || 0) * 12);
     if (iq2?.value)  payload.afkast_pct    = parseFloat(iq2.value);
     if (iq2b?.value) payload.inflation_pct = parseFloat(iq2b.value);
@@ -1966,8 +1950,6 @@ function _collectPayload(includePanel = false) {
       payload.fri_formue = frieMidler;
       payload.fri_formue_kapital_skat_pct = parseFloat(iq9b?.value) || 28;
     }
-    const varmeudgift = parseFloat(iq10?.value);
-    if (varmeudgift > 0) payload.aarlig_varmeudgift = varmeudgift;
     const civilstandChecked = document.getElementById('iq_civilstand')?.checked ?? false;
     if (document.getElementById('iq_civilstand')) {
       payload.civilstand = civilstandChecked ? 'gift_samlevende' : 'enlig';
@@ -2198,7 +2180,7 @@ function renderChart(data) {
     stack: 'a',
   });
 
-  // Ældrecheck/mediecheck/varmetillæg — styret af den personlige tillægsprocent,
+  // Ældrecheck/mediecheck — styret af den personlige tillægsprocent,
   // en HELT ANDEN og langt strengere skala end pensionstillæggets aftrapning ovenfor.
   if (tabel.some(r => (r.aeldrecheck_mdr || 0) > 0)) {
     datasets.push({
@@ -2216,16 +2198,6 @@ function renderChart(data) {
       data: tabel.map(r => Math.round(r.mediecheck_mdr || 0)),
       backgroundColor: '#facc15cc',
       borderColor: '#facc15',
-      borderWidth: 1,
-      stack: 'a',
-    });
-  }
-  if (tabel.some(r => (r.varmetillaeg_mdr || 0) > 0)) {
-    datasets.push({
-      label: 'Varmetillæg',
-      data: tabel.map(r => Math.round(r.varmetillaeg_mdr || 0)),
-      backgroundColor: '#38bdf8cc',
-      borderColor: '#38bdf8',
       borderWidth: 1,
       stack: 'a',
     });
@@ -2423,12 +2395,17 @@ function renderTimeline(data) {
     const engNetto = isEngangs
       ? (prod.skat_type === 'A' ? Math.round((prod.fv || 0) * 0.60) : Math.round(prod.fv || 0))
       : 0;
+    const isRate = prod.udb_type === 'rate';
+    // Ratepension: vis både år-til-år-intervallet og den samlede periode, så
+    // varigheden (den nu justerbare søgevariabel) er til at se uden at skulle
+    // regne start/slut sammen selv. Livsvarig pension har ingen fast slutalder.
     const barLabel = isEngangs
       ? `${startAge} år · ${engNetto.toLocaleString('da-DK')} kr`
-      : `${startAge}–${stopAge}`;
+      : isRate
+        ? `${startAge}–${stopAge} år (${stopAge - startAge} år i alt)`
+        : `${startAge} år→`;
 
     const minDragAge = 60;  // absolut gulv — konsistent med panel-inputs
-    const isRate = prod.udb_type === 'rate';
     const barTitle = isEngangs
       ? `Engangsudbetaling ${engNetto.toLocaleString('da-DK')} kr netto · træk for at rykke tidspunkt`
       : isRate
@@ -2445,7 +2422,7 @@ function renderTimeline(data) {
         <div class="tl-bar" id="tl-bar-${idx}" data-idx="${idx}"
              style="left:${leftPct}%;width:${widthPct}%;background:${color}"
              title="${barTitle}">
-          <span class="tl-bar-label" style="padding:0 4px;pointer-events:none;overflow:hidden;font-size:0.6rem">${startAge}</span>
+          <span class="tl-bar-label" style="padding:0 4px;pointer-events:none;overflow:hidden;font-size:0.6rem">${barLabel}</span>
         </div>
       </div>
     </div>`;
@@ -2641,9 +2618,14 @@ function tlUpdateBar(d) {
   const widthPct = Math.max(1, pct(d.stop) - leftPct);
   bar.style.left  = leftPct + '%';
   bar.style.width = widthPct + '%';
-  bar.title = `${d.start}–${d.stop} år`;
   const lbl = bar.querySelector('.tl-bar-label');
-  if (lbl) lbl.textContent = `${d.start}–${d.stop}`;
+  const nyLabel = d.isEngangs
+    ? `${d.start} år`
+    : d.isRate
+      ? `${d.start}–${d.stop} år (${d.stop - d.start} år i alt)`
+      : `${d.start} år→`;
+  bar.title = nyLabel;
+  if (lbl) lbl.textContent = nyLabel;
 
 }
 

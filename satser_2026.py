@@ -80,7 +80,7 @@ TILLAEG_GIFT_BEGGE_PENSIONISTER = {
 # ── Personlig tillægsprocent — SELVSTÆNDIG regel, ikke en afledning af
 # pensionstillæggets aftrapning. Falder trinvis (Math.floor), langt stejlere,
 # og rammer nul VÆSENTLIGT lavere i indkomst end pensionstillægget gør.
-# Styrer ældrecheck, mediecheck og varmetillæg — IKKE selve pensionstillægget.
+# Styrer ældrecheck og mediecheck — IKKE selve pensionstillægget.
 TILLAEGSPROCENT_ENLIG = {
     "bundfradrag": Sats("fp.tillaegsprocent.enlig.bund", 35_700, "Satser 2026: 100% ved <= 35.700 kr."),
     "trinstoerrelse": Sats("fp.tillaegsprocent.enlig.trin", 635, "Satser 2026: -1 pct.point pr. 635 kr."),
@@ -97,9 +97,6 @@ LIKVID_FORMUEGRAENSE = Sats("yd.formuegraense", 108_000, "Satser 2026 (samme for
 AELDRECHECK = Sats("yd.aeldrecheck", 26_900, "Satser 2026, supplerende pensionsydelse")
 AELDRECHECK_SKATTEPLIGTIG = Sats("yd.aeldrecheck.skat", True, "Beskattes som anden pensionsindkomst")
 MEDIECHECK = Sats("yd.mediecheck", 1_552, "Satser 2026; kræver tillægsprocent 100", verificeret=False)
-VARMETILLAEG_EGENBETALING_ENLIG = Sats("yd.varme.egen.enlig", 6_300, "Satser 2026", verificeret=False)
-VARMETILLAEG_EGENBETALING_GIFT = Sats("yd.varme.egen.gift", 9_450, "Satser 2026", verificeret=False)
-VARMETILLAEG_MAKSIMALT = Sats("yd.varme.maks", 9_000, "Anslået loft — skal verificeres", verificeret=False)
 
 # ── Folkepensions-opsættelse (sekventeringsoptimering) ───────────────────────
 # Forenklet ventetillæg-tilnærmelse, porteret 1:1 fra pension-core (samme

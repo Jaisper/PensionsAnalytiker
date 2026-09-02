@@ -347,15 +347,14 @@ def _engine_cache_key(session: dict) -> str:
         "produkt_udb_aar":    json.dumps(params.get("produkt_udb_aar", {}), sort_keys=True),
         "folkepension_opsaettelse_aar": params.get("folkepension_opsaettelse_aar"),
         "partner_pensionsalder": params.get("partner_pensionsalder"),
-        "partner_produkt_start_aldre": json.dumps(params.get("partner_produkt_start_aldre", {}), sort_keys=True),
-        "partner_produkt_i_buffer":    json.dumps(params.get("partner_produkt_i_buffer", {}), sort_keys=True),
-        "partner_produkt_udb_aar":     json.dumps(params.get("partner_produkt_udb_aar", {}), sort_keys=True),
-        "partner_folkepension_opsaettelse_aar": params.get("partner_folkepension_opsaettelse_aar"),
-        "partner_afkast_pct":      params.get("partner_afkast_pct"),
-        "partner_inflation_pct":   params.get("partner_inflation_pct"),
-        "partner_udbetaling_aar":  params.get("partner_udbetaling_aar"),
-        "partner_kommuneskat_pct": params.get("partner_kommuneskat_pct"),
-        "partner_kirkeskat_pct":   params.get("partner_kirkeskat_pct"),
+        # De ni partner_*-overrides — samme liste _byg_params_partner() bruger,
+        # så et felt der tæller for beregningen aldrig kan glemmes her (en
+        # glemt cache-nøgle er en STILLE fejl: uændret hash -> gammel,
+        # forældet analyse serveres uden nogen fejlmeddelelse nogen steder).
+        **{
+            k: (json.dumps(v, sort_keys=True) if isinstance(v, dict) else v)
+            for k, v in ((k, params.get(k)) for k in _PARTNER_OVERRIDE_KEYS)
+        },
         "profil_partner_id":  id(session.get("profil_partner")),
         "profil_id":          id(profil),
     }
@@ -416,6 +415,11 @@ _PARTNER_OVERRIDE_KEYS = (
     "partner_folkepension_opsaettelse_aar", "partner_afkast_pct", "partner_inflation_pct",
     "partner_udbetaling_aar", "partner_kommuneskat_pct", "partner_kirkeskat_pct",
 )
+# Rene personlige facts om den PRIMÆRE bruger — ikke "antagelser" partneren
+# kan overtage som fornuftig default. Skal ALDRIG kopieres ind i partnerens
+# egne parametre (partneren har ingen tilsvarende partner_*-override for
+# disse; engine.py's egne 0-fallbacks er det korrekte "intet sat" for dem).
+_PRIMÆR_KUN_KEYS = ("netto_indbetaling", "fri_formue", "fri_formue_kapital_skat_pct", "loenvaekst_pct")
 
 
 def _byg_params_partner(params: dict) -> dict | None:
@@ -428,6 +432,9 @@ def _byg_params_partner(params: dict) -> dict | None:
     analyse", og skal ALDRIG blande sig med primærens felter. Kun hvis et
     partner_*-felt IKKE er sat falder det tilbage til primærens egen værdi
     (bagudkompatibelt med det gamle, lette overslags-flow uden disse felter).
+    Rene personlige facts om primæren (`_PRIMÆR_KUN_KEYS`) har derimod INGEN
+    fallback-semantik og udelades altid — partneren har sin egen opsparing
+    og formue, aldrig primærens.
     Brugt tre steder (_kør_engine, /api/optimer, /api/session/.../engine-
     partner) — holdt ét sted så de tre aldrig kan drifte fra hinanden."""
     civilstand = _civilstand_fra_params(params)
@@ -437,28 +444,15 @@ def _byg_params_partner(params: dict) -> dict | None:
         k: v for k, v in params.items()
         if k not in ("produkt_start_aldre", "produkt_i_buffer", "produkt_udb_aar",
                      "folkepension_opsaettelse_aar", "civilstand", "partner_alder",
-                     "partner_indkomst_aar", "partner_pensionsalder", *_PARTNER_OVERRIDE_KEYS)
+                     "partner_indkomst_aar", "partner_pensionsalder",
+                     *_PARTNER_OVERRIDE_KEYS, *_PRIMÆR_KUN_KEYS)
     }
     params_partner["pensionsalder"] = int(params["partner_pensionsalder"])
     params_partner["civilstand"] = "gift_samlevende"
-    if params.get("partner_produkt_start_aldre") is not None:
-        params_partner["produkt_start_aldre"] = params["partner_produkt_start_aldre"]
-    if params.get("partner_produkt_i_buffer") is not None:
-        params_partner["produkt_i_buffer"] = params["partner_produkt_i_buffer"]
-    if params.get("partner_produkt_udb_aar") is not None:
-        params_partner["produkt_udb_aar"] = params["partner_produkt_udb_aar"]
-    if params.get("partner_folkepension_opsaettelse_aar") is not None:
-        params_partner["folkepension_opsaettelse_aar"] = params["partner_folkepension_opsaettelse_aar"]
-    if params.get("partner_afkast_pct") is not None:
-        params_partner["afkast_pct"] = params["partner_afkast_pct"]
-    if params.get("partner_inflation_pct") is not None:
-        params_partner["inflation_pct"] = params["partner_inflation_pct"]
-    if params.get("partner_udbetaling_aar") is not None:
-        params_partner["udbetaling_aar"] = params["partner_udbetaling_aar"]
-    if params.get("partner_kommuneskat_pct") is not None:
-        params_partner["kommuneskat_pct"] = params["partner_kommuneskat_pct"]
-    if params.get("partner_kirkeskat_pct") is not None:
-        params_partner["kirkeskat_pct"] = params["partner_kirkeskat_pct"]
+    for kilde_noegle in _PARTNER_OVERRIDE_KEYS:
+        vaerdi = params.get(kilde_noegle)
+        if vaerdi is not None:
+            params_partner[kilde_noegle.removeprefix("partner_")] = vaerdi
     return params_partner
 
 
@@ -499,6 +493,11 @@ def _kør_engine(session_id: str) -> str:
             result_text_partner = format_engine_til_llm(husstand_resultat["b"])
             skat = None  # allerede anvendt inde i beregn_husstand
         else:
+            # Ryd en evt. tidligere partner-beregning — ellers bliver
+            # /api/session/.../engine-partner ved med at svare 200 med en
+            # forældet plan efter fx civilstand er slået fra igen, og
+            # split-screen-kolonnen/husstands-summen forbliver forkert synlig.
+            session["engine_output_partner"] = None
             skat = SkatParametre.fra_pct(
                 kommuneskat_pct=float(params.get("kommuneskat_pct", 25.0)),
                 kirkeskat_pct=float(params.get("kirkeskat_pct", 0.7)),
@@ -1203,16 +1202,13 @@ async def gem_parametre(req: Parametre):
     if req.produkt_udb_aar is not None:               p["produkt_udb_aar"] = req.produkt_udb_aar
     if req.folkepension_opsaettelse_aar is not None:  p["folkepension_opsaettelse_aar"] = req.folkepension_opsaettelse_aar
     if req.partner_pensionsalder is not None:         p["partner_pensionsalder"] = req.partner_pensionsalder
-    if req.partner_produkt_start_aldre is not None:   p["partner_produkt_start_aldre"] = req.partner_produkt_start_aldre
-    if req.partner_produkt_i_buffer is not None:      p["partner_produkt_i_buffer"] = req.partner_produkt_i_buffer
-    if req.partner_produkt_udb_aar is not None:       p["partner_produkt_udb_aar"] = req.partner_produkt_udb_aar
-    if req.partner_folkepension_opsaettelse_aar is not None:
-        p["partner_folkepension_opsaettelse_aar"] = req.partner_folkepension_opsaettelse_aar
-    if req.partner_afkast_pct is not None:            p["partner_afkast_pct"] = req.partner_afkast_pct
-    if req.partner_inflation_pct is not None:         p["partner_inflation_pct"] = req.partner_inflation_pct
-    if req.partner_udbetaling_aar is not None:        p["partner_udbetaling_aar"] = req.partner_udbetaling_aar
-    if req.partner_kommuneskat_pct is not None:       p["partner_kommuneskat_pct"] = req.partner_kommuneskat_pct
-    if req.partner_kirkeskat_pct is not None:         p["partner_kirkeskat_pct"] = req.partner_kirkeskat_pct
+    # De ni partner_*-overrides — samme _PARTNER_OVERRIDE_KEYS som
+    # _byg_params_partner()/_engine_cache_key() bruger, så et nyt felt kun
+    # skal tilføjes ét sted (tuplen) for at blive gemt, cachet OG anvendt.
+    for _noegle in _PARTNER_OVERRIDE_KEYS:
+        _vaerdi = getattr(req, _noegle)
+        if _vaerdi is not None:
+            p[_noegle] = _vaerdi
 
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")

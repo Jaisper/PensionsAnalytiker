@@ -11,10 +11,15 @@ som allerede vises i det almindelige udbetalingsdiagram.
 
 En kandidat-kombination er et selvstændigt kald til
 engine.generer_udbetalingstabel (ren funktion, ingen delt tilstand).
-Ratepensioners udbetalingsperiode og engangsbeløbs udbetalingsår behandles
-begge som brugerens egne, allerede trufne valg — kun START-alderen pr.
-løbende produkt og folkepensions-opsætningen er reelt frie
-beslutningsvariable her.
+Ratepensioners udbetalingsperiode behandles som brugerens eget, allerede
+trufne valg. Engangsbeløbs udbetalingsår er en fri beslutningsvariabel NÅR
+beløbet er markeret til at indgå i bufferen (i_buffer=True, default) — det
+lander under alle omstændigheder i den samme buffer/jaevn-udjævning uanset
+hvornår det udbetales, så dets TIMING er lige så meget en optimerings-
+variabel som et løbende produkts start-alder, og giver et mere direkte
+værktøj til at udfylde et indkomst-hul end at flytte løbende produkter
+alene. Et engangsbeløb brugeren aktivt har fravalgt bufferen for
+(i_buffer=False) rører optimeringen ikke.
 
 VIGTIGT om realisme: `jaevn_netto_mdr` er en fremadskuende udjævning af HELE
 den resterende løbende indkomst — for ethvert forløb med et sent
@@ -135,11 +140,14 @@ KOORDINAT_RUNDER = 3  # antal grådige gennemløb af alle dimensioner, se _koord
 RAA_AAR_TOLERANCE = 0.97
 
 # Et år tælles som "hardship" hvis den rå indkomst falder under denne andel
-# af det udjævnede niveau — dvs. markant under det brugeren reelt er stillet
-# i udsigt. Bruges til at begrænse VARIGHEDEN af lavindkomst-år, ikke kun
-# dybden af det enkelte værste punkt (se modulets docstring).
-HARDSHIP_ANDEL_AF_JAEVN = 0.5
-HARDSHIP_EKSTRA_AAR_TILLADT = 1
+# af det udjævnede niveau — dvs. mærkbart under det brugeren reelt er
+# stillet i udsigt. Bruges til at begrænse VARIGHEDEN af lavindkomst-år,
+# ikke kun dybden af det enkelte værste punkt (se modulets docstring). Sat
+# højt (85%) og uden ekstra tolerance, fordi det udjævnede tal skal kunne
+# betragtes som reelt udbetalbart hvert år — ikke kun i gennemsnit over en
+# lang periode.
+HARDSHIP_ANDEL_AF_JAEVN = 0.85
+HARDSHIP_EKSTRA_AAR_TILLADT = 0
 
 
 @dataclass
@@ -176,12 +184,20 @@ def har_loesning(r: OptimeringsResultat) -> bool:
 
 def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: int, nuvaerende_opsaettelse: int):
     """Bygger (noegler, dimensioner) — én dimension pr. beslutningsvariabel.
-    Engangsbeløb (aldersopsparing/kapitalpension) får IKKE en
-    start-alder-dimension — det er brugerens egen, bevidst valgte
-    udbetalingsår, og optimeringen må ikke flytte rundt på et allerede
-    truffet valg. Kun START-alderen pr. løbende produkt og
-    folkepensions-opsætningen er reelt frie beslutningsvariable her (ATP er
-    slet ikke en del af `produkter`-listen og indgår derfor aldrig)."""
+    Løbende produkters START-alder, folkepensions-opsætningen, OG
+    udbetalingsåret for ethvert engangsbeløb der er markeret til at indgå i
+    bufferen (i_buffer=True, default) er alle frie beslutningsvariable. Et
+    engangsbeløb havner under alle omstændigheder i den samme buffer/jaevn-
+    udjævning uanset hvornår det udbetales (se engine.py) — når det ER
+    markeret som buffer-egnet, er dets UDBETALINGSÅR derfor lige så meget en
+    fri timing-beslutning som et løbende produkts start-alder, og kan give
+    optimeringen et langt mere direkte værktøj til at udfylde et hul (indsæt
+    engangsbeløbet netop det år) end at flytte rundt på løbende produkter
+    alene. Et engangsbeløb brugeren aktivt har FRAVALGT bufferen for
+    (i_buffer=False, "frie midler" der udbetales direkte) rører optimeringen
+    IKKE — det er en bevidst undtagelse fra udjævningen og skal forblive et
+    fast valg. ATP er slet ikke en del af `produkter`-listen og indgår
+    derfor aldrig."""
     # Den generelle lovmæssige tommelfingerregel (fp_alder - 5) er kun en
     # DEFAULT-hjælp i interviewet — søgerummet skal ALDRIG ekskludere en alder
     # brugeren faktisk allerede har valgt (hverken pensionsalderen generelt
@@ -192,7 +208,7 @@ def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: 
     noegler: list[str] = []
     dimensioner: list[list[tuple]] = []
     for pr in baseline_produkter:
-        if pr["udb_type"] == "engangsbeloeb":
+        if pr["udb_type"] == "engangsbeloeb" and not pr.get("i_buffer", True):
             continue
         key = pr["key"]
         interval = standard_interval | {pr["start_alder"]}
@@ -283,10 +299,13 @@ def _parametre_for_vektor(base_parametre: dict, vektor: tuple[tuple, ...]) -> tu
 
 def _default_vektor(baseline_produkter: list[dict], nuvaerende_opsaettelse: int) -> tuple:
     """Bygger den vektor der svarer til brugerens NUVÆRENDE plan — bruges til
-    at garantere den altid indgår som kandidat, se _kandidat_vektorer."""
+    at garantere den altid indgår som kandidat, se _kandidat_vektorer. Skal
+    holde nøjagtig samme produkt-filtrering og -rækkefølge som
+    _byg_soegerum, da de to vektorers indgange er positions-matchede."""
     delvektor = tuple(
         ("start", pr["key"], pr["start_alder"])
-        for pr in baseline_produkter if pr["udb_type"] != "engangsbeloeb"
+        for pr in baseline_produkter
+        if pr["udb_type"] != "engangsbeloeb" or pr.get("i_buffer", True)
     )
     return delvektor + (("opsaet", None, nuvaerende_opsaettelse),)
 

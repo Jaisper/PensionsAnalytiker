@@ -2747,8 +2747,9 @@ async function koerOptimering() {
     await sendSystemTrigger(
       `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen (${data.evalueret} kombinationer afsøgt${stikproeveNote}, ` +
       `${data.antal_gennemfoerlige} gennemførlige). Resultatet er at DIN NUVÆRENDE PLAN allerede er den bedste fundne — ` +
-      `ingen anden kombination af start-aldre eller folkepensions-opsætning giver et højere fast månedsbeløb uden at gøre ` +
-      `mindst ét år ringere end det allerede er. Fast månedsbeløb: ${b.jaevn_netto_mdr.toLocaleString('da-DK')} kr/mdr. ` +
+      `ingen anden kombination af start-aldre, engangsbeløbs-timing eller folkepensions-opsætning giver et højere fast ` +
+      `månedsbeløb uden enten at forringe det værste enkeltår eller skabe flere lavindkomst-år end du allerede har. ` +
+      `Fast månedsbeløb: ${b.jaevn_netto_mdr.toLocaleString('da-DK')} kr/mdr. ` +
       `Sig det tydeligt til brugeren — der er ikke en "Anvend denne plan"-knap at klikke på her, for der er intet at ændre. ` +
       `Nævn kort hvorfor (fx: din nuværende rækkefølge undgår allerede unødig modregning/topskat).`
     );
@@ -2757,10 +2758,12 @@ async function koerOptimering() {
 
   await sendSystemTrigger(
     `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen. Målet er det højeste FASTE, ` +
-    `inflationskorrigerede månedsbeløb — ikke den største samlede sum. ` +
-    `Evalueret ${data.evalueret} kombinationer af per-produkt start-aldre og folkepensions-opsætning${stikproeveNote} ` +
-    `(engangsbeløbs udbetalingsår og ratepensioners udbetalingsperiode er IKKE en del af søgningen — det er allerede trufne valg), ` +
-    `heraf ${data.antal_gennemfoerlige} gennemførlige (optimeringen kan aldrig gøre et overlappende år ringere end det allerede er i din nuværende plan). ` +
+    `inflationskorrigerede månedsbeløb der reelt kan udbetales hvert år — ikke den største samlede sum og ikke et gennemsnit ` +
+    `der skjuler en flerårig lavindkomst-periode. ` +
+    `Evalueret ${data.evalueret} kombinationer af per-produkt start-aldre, folkepensions-opsætning, og udbetalingsår for ` +
+    `engangsbeløb der er markeret til at indgå i bufferen${stikproeveNote} ` +
+    `(ratepensioners udbetalingsperiode og engangsbeløb der er FRAVALGT bufferen er IKKE en del af søgningen — det er allerede trufne valg), ` +
+    `heraf ${data.antal_gennemfoerlige} gennemførlige (optimeringen kan aldrig gøre det værste enkeltår eller antallet af lavindkomst-år ringere end det allerede er i din nuværende plan). ` +
     `Bedste fundne plan — start-aldre: ${startLinjer || 'uændret'}. ` +
     `${opsaetLinje} Fast månedsbeløb denne plan giver: ${b.jaevn_netto_mdr.toLocaleString('da-DK')} kr/mdr. ` +
     `Præsenter denne anbefaling kort i punktform og forklar kort hvorfor rækkefølgen giver mening (fx skattemæssig timing eller undgåelse af modregning). ` +
@@ -2776,11 +2779,12 @@ async function anvendOptimering() {
   clearTimeout(_refreshTimer);
 
   const b = _sidsteOptimering.bedste;
-  // Optimeringen søger kun over løbende produkter — engangsbeløb (fx
-  // aldersopsparing) indgår ikke i b.produkt_start_aldre. Da /api/parametre
-  // erstatter hele produkt_start_aldre-dictet (samme mønster som
-  // tidslinje-trækket bruger), skal vi merge ind i den eksisterende,
-  // FULDE liste, ellers nulstilles enhver allerede trukket engangsbeløb-alder.
+  // Optimeringen søger IKKE over engangsbeløb der er fravalgt bufferen
+  // (i_buffer=false) — de indgår derfor ikke i b.produkt_start_aldre. Da
+  // /api/parametre erstatter hele produkt_start_aldre-dictet (samme mønster
+  // som tidslinje-trækket bruger), skal vi merge ind i den eksisterende,
+  // FULDE liste, ellers nulstilles enhver allerede trukket alder for et
+  // sådant fravalgt engangsbeløb.
   const eksisterende_start_aldre = _chartData?.produkt_start_aldre || {};
   const merged_start_aldre = { ...eksisterende_start_aldre, ...b.produkt_start_aldre };
 

@@ -1084,10 +1084,29 @@ Upload derefter PDF'en her øverst til højre.`,
               <div class="qdesc" style="margin-bottom:5px">Har du partnerens egen PensionsInfo-rapport? Så bliver beregningen fuldt præcis i stedet for et overslag.</div>
               <input type="file" id="iq_partner_pdf" accept="application/pdf" style="font-size:0.8rem" onchange="uploadPartnerRapport()">
               <div id="partner_upload_status" style="font-size:0.8rem;margin-top:4px"></div>
-              <div id="partner_pensionsalder_row" style="display:none;margin-top:6px;align-items:center;gap:8px">
-                <span style="font-size:0.85rem;color:#2a3a4a;min-width:150px">Partners ønskede pensionsalder</span>
-                <input type="number" id="iq_partner_pensionsalder" min="55" max="80" step="1" style="width:70px" onchange="onPartnerPensionsalderChange()">
-                <span class="unit">år</span>
+              <div id="partner_setup_form" style="display:none;margin-top:8px">
+                <div class="qdesc" style="margin-bottom:6px">Partnerens egne antagelser — helt uafhængige af dine egne ovenfor. Din egen analyse ændres ikke af noget herunder.</div>
+                <div style="display:grid;grid-template-columns:auto auto;gap:6px 10px;align-items:center;max-width:340px">
+                  <span style="font-size:0.85rem;color:#2a3a4a">Ønsket pensionsalder</span>
+                  <div><input type="number" id="iq_partner_pensionsalder" min="55" max="80" step="1" style="width:70px"> <span class="unit">år</span></div>
+                  <span style="font-size:0.85rem;color:#2a3a4a">Forventet afkast</span>
+                  <div><input type="number" id="iq_partner_afkast" min="0" max="15" step="0.1" style="width:70px"> <span class="unit">%</span></div>
+                  <span style="font-size:0.85rem;color:#2a3a4a">Inflation</span>
+                  <div><input type="number" id="iq_partner_inflation" min="0" max="10" step="0.1" style="width:70px"> <span class="unit">%</span></div>
+                  <span style="font-size:0.85rem;color:#2a3a4a">Udbetalingsperiode</span>
+                  <div><input type="number" id="iq_partner_udbperiode" min="5" max="40" step="1" style="width:70px"> <span class="unit">år</span></div>
+                  <span style="font-size:0.85rem;color:#2a3a4a">Bopælskommune</span>
+                  <div><input type="text" id="iq_partner_kommune" style="width:120px"></div>
+                  <span style="font-size:0.85rem;color:#2a3a4a">Kirkeskat</span>
+                  <div>
+                    <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer">
+                      <input type="checkbox" id="iq_partner_kirkeskat" checked onchange="togglePartnerKirkeskat()">
+                      <input type="number" id="iq_partner_kirkeskat_pct" value="0.7" min="0.1" max="2" step="0.1" style="width:55px"> <span class="unit">%</span>
+                    </label>
+                  </div>
+                </div>
+                <button class="chart-btn primary" style="margin-top:8px" onclick="beregnPartnerAnalyse()">Beregn partnerens analyse &rarr;</button>
+                <div id="partner_setup_status" style="font-size:0.8rem;margin-top:4px"></div>
               </div>
             </div>
           </div>
@@ -1245,43 +1264,74 @@ Upload derefter PDF'en her øverst til højre.`,
 
       _partnerUploaded = true;
       status.style.color = '#1a7a4a';
-      status.textContent = `✓ ${data.navn || 'Partners rapport'} indlæst — beregningen er nu fuldt præcis for partneren.`;
+      status.textContent = `✓ ${data.navn || 'Partners rapport'} indlæst — udfyld partnerens egne antagelser nedenfor.`;
       const letFelter = document.getElementById('partner_let_felter');
       if (letFelter) letFelter.style.display = 'none';
-      const pensionsalderRow = document.getElementById('partner_pensionsalder_row');
-      if (pensionsalderRow) pensionsalderRow.style.display = 'flex';
-      // Hvis brugerens EGEN analyse allerede kører (fx partner uploadet efter
-      // det oprindelige interview), er der ingen "Start analyse"-knap tilbage
-      // der ville have vist split-screen-diagrammet — prøv derfor selv, i
-      // tilfælde af at pensionsalderen allerede er udfyldt fra et tidligere
-      // forsøg. Ellers venter vi på onPartnerPensionsalderChange() nedenfor.
-      if (sessionId && _chartData) onPartnerPensionsalderChange();
+      const form = document.getElementById('partner_setup_form');
+      if (form) form.style.display = '';
+      // Foreudfyld med DIN egne nuværende værdier — ren bekvemmelighed, ikke
+      // en binding. Partnerens felter er fra nu af deres EGNE, uafhængige
+      // tal; intet herfra sendes før "Beregn partnerens analyse" klikkes, og
+      // intet af dette rører nogensinde din egen, allerede beregnede analyse.
+      const kopier = (fraId, tilId) => {
+        const fra = document.getElementById(fraId), til = document.getElementById(tilId);
+        if (fra && til && !til.value) til.value = fra.value;
+      };
+      kopier('iq2', 'iq_partner_afkast');
+      kopier('iq2b', 'iq_partner_inflation');
+      kopier('iq4', 'iq_partner_udbperiode');
+      kopier('iq7', 'iq_partner_kommune');
+      const kirkeskatPrimaer = document.getElementById('iq_kirkeskat');
+      if (kirkeskatPrimaer) document.getElementById('iq_partner_kirkeskat').checked = kirkeskatPrimaer.checked;
+      kopier('iq_kirkeskat_pct', 'iq_partner_kirkeskat_pct');
+      togglePartnerKirkeskat();
     } catch (e) {
       status.style.color = '#c0392b';
       status.textContent = `Kunne ikke indlæse rapporten: ${e.message}`;
     }
   }
 
-  // Kaldes når partnerens ønskede pensionsalder udfyldes/ændres — det er det
-  // sidste stykke information _byg_params_partner() (app.py) kræver for at
-  // beregne partnerens egen plan. Uden dette kald sker der intet synligt før
-  // brugeren tilfældigvis trigger en anden genberegning (fx ved at trække i
-  // sin egen tidslinje) — split-screen-diagrammet ville se ud til slet ikke
-  // at virke, selvom backend-data'en er klar.
-  async function onPartnerPensionsalderChange() {
+  function togglePartnerKirkeskat() {
+    const checked = document.getElementById('iq_partner_kirkeskat')?.checked;
+    const pct = document.getElementById('iq_partner_kirkeskat_pct');
+    if (pct) pct.disabled = !checked;
+  }
+
+  // Samler ALLE partnerens antagelser i ét eksplicit skridt og gemmer dem
+  // samlet — mere robust end spredte per-felt onchange-håndtag (som viste
+  // sig upålidelige: nemt at overse ét felt og ende med en delvist
+  // opdateret, uigennemsigtig tilstand). Rører KUN partner_*-navngivne
+  // felter, aldrig de tilsvarende felter for brugerens egen analyse.
+  async function beregnPartnerAnalyse() {
     if (!sessionId) return;
     const pensionsalder = parseInt(document.getElementById('iq_partner_pensionsalder')?.value);
-    if (!pensionsalder) return;
+    const status = document.getElementById('partner_setup_status');
+    if (!pensionsalder) {
+      if (status) { status.style.color = '#c0392b'; status.textContent = 'Udfyld partnerens ønskede pensionsalder først.'; }
+      return;
+    }
+    if (status) { status.style.color = '#5578a0'; status.textContent = '⟳ Beregner partnerens analyse…'; }
+    const kirkeskatChecked = document.getElementById('iq_partner_kirkeskat')?.checked ?? true;
     await fetch('/api/parametre', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: sessionId,
+        civilstand: 'gift_samlevende',
         partner_pensionsalder: pensionsalder,
-        civilstand: document.getElementById('iq_civilstand')?.checked ? 'gift_samlevende' : undefined,
+        // Bevidst IKKE "|| undefined" her — 0% er en gyldig (om end usædvanlig)
+        // afkast-/inflationsantagelse, og "|| undefined" ville tavst droppe den.
+        // Et tomt felt giver NaN, som JSON.stringify allerede korrekt serialiserer
+        // til null (= "ikke sat" for backend'ens Optional-felter).
+        partner_afkast_pct: parseFloat(document.getElementById('iq_partner_afkast')?.value),
+        partner_inflation_pct: parseFloat(document.getElementById('iq_partner_inflation')?.value),
+        partner_udbetaling_aar: parseInt(document.getElementById('iq_partner_udbperiode')?.value),
+        partner_kommuneskat_pct: kommuneskatPctFor(document.getElementById('iq_partner_kommune')?.value || ''),
+        partner_kirkeskat_pct: kirkeskatChecked ? (parseFloat(document.getElementById('iq_partner_kirkeskat_pct')?.value) || 0.7) : 0.0,
       }),
     }).catch(() => null);
     await loadAndRenderPartnerChart();
+    if (status) { status.style.color = '#1a7a4a'; status.textContent = '✓ Partnerens analyse er beregnet — se diagrammet nedenfor.'; }
   }
 
   function autoFillStartAldre() {

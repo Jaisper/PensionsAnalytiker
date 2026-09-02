@@ -296,7 +296,7 @@ Hvis brugeren har angivet civilstand "gift eller samlevende":
 - Der er IKKE regnet en selvstændig udbetalingsplan for partneren — kun brugerens egen tidslinje/produkter vises. Sig det tydeligt hvis brugeren spørger til partnerens egen pension.
 
 Hvis der derimod findes en "## PARTNERENS UDBETALINGSANALYSE"-sektion i konteksten (partneren har uploadet sin egen rapport):
-- Partnerens tal er nu en FULD, egen beregning — egne produkter, egen tidslinje, egen skat — ikke længere et overslag. Præsenter den som en klart adskilt sektion, ligesom den fremstår i konteksten.
+- Partnerens tal er nu en FULD, egen beregning — egne produkter, egen tidslinje, egen skat, OG egne økonomiske antagelser (afkast, inflation, kommune-/kirkeskat, udbetalingsperiode — sat via "Beregn partnerens analyse", helt uafhængigt af brugerens egne) — ikke længere et overslag. Præsenter den som en klart adskilt sektion, ligesom den fremstår i konteksten.
 - Den ENESTE tilnærmelse der stadig gælder er selve samspils-koblingen: det kombinerede indtægtsgrundlag for pensionstillæg/tillægsprocent er stadig en forenklet tilnærmelse til § 29-reglerne — nævn det kort, men lad være med at gentage hele forbeholdet for hver eneste tabel.
 - Udbetalingsdiagrammet viser nu BEGGE i et split-screen — brugerens egen kolonne ("Dig") og partnerens ("Partner") side om side, hver med sin egen uafhængige, trækbare tidslinje og uafhængig scroll, plus en samlet husstands-sum nederst. Nævn dette hvis brugeren spørger hvordan de justerer partnerens produkter — de trækker direkte i partnerens egen tidslinje, ligesom deres egen.
 - Sekventeringsoptimeringen ("Find bedste udbetalingsrækkefølge") ser stadig KUN på brugerens egne produkter — den optimerer ikke partnerens tidslinje.
@@ -351,6 +351,11 @@ def _engine_cache_key(session: dict) -> str:
         "partner_produkt_i_buffer":    json.dumps(params.get("partner_produkt_i_buffer", {}), sort_keys=True),
         "partner_produkt_udb_aar":     json.dumps(params.get("partner_produkt_udb_aar", {}), sort_keys=True),
         "partner_folkepension_opsaettelse_aar": params.get("partner_folkepension_opsaettelse_aar"),
+        "partner_afkast_pct":      params.get("partner_afkast_pct"),
+        "partner_inflation_pct":   params.get("partner_inflation_pct"),
+        "partner_udbetaling_aar":  params.get("partner_udbetaling_aar"),
+        "partner_kommuneskat_pct": params.get("partner_kommuneskat_pct"),
+        "partner_kirkeskat_pct":   params.get("partner_kirkeskat_pct"),
         "profil_partner_id":  id(session.get("profil_partner")),
         "profil_id":          id(profil),
     }
@@ -406,14 +411,23 @@ def _civilstand_fra_params(params: dict) -> str:
     return civilstand
 
 
+_PARTNER_OVERRIDE_KEYS = (
+    "partner_produkt_start_aldre", "partner_produkt_i_buffer", "partner_produkt_udb_aar",
+    "partner_folkepension_opsaettelse_aar", "partner_afkast_pct", "partner_inflation_pct",
+    "partner_udbetaling_aar", "partner_kommuneskat_pct", "partner_kirkeskat_pct",
+)
+
+
 def _byg_params_partner(params: dict) -> dict | None:
     """Bygger partnerens beregningsparametre (Fase D husstandskobling) ud fra
     den primære brugers params — eller None hvis der ikke er en fuld
     partner-profil/civilstand/partner-pensionsalder til at understøtte det.
-    Genbruger primærens økonomiske antagelser (afkast/inflation/kommune-/
-    kirkeskat), men partnerens EGEN udbetalingstidslinje (start-aldre/
-    buffer/periode/FP-opsætning — split-screen-diagrammet) er deres egen,
-    uafhængige valg og skal ALDRIG blande sig med primærens produkt-nøgler.
+    Partnerens EGNE antagelser (afkast/inflation/kommune-/kirkeskat,
+    udbetalingsperiode, produkt-tidslinje — split-screen-diagrammet) er
+    deres egne, uafhængige valg, sat eksplicit via "Beregn partnerens
+    analyse", og skal ALDRIG blande sig med primærens felter. Kun hvis et
+    partner_*-felt IKKE er sat falder det tilbage til primærens egen værdi
+    (bagudkompatibelt med det gamle, lette overslags-flow uden disse felter).
     Brugt tre steder (_kør_engine, /api/optimer, /api/session/.../engine-
     partner) — holdt ét sted så de tre aldrig kan drifte fra hinanden."""
     civilstand = _civilstand_fra_params(params)
@@ -423,9 +437,7 @@ def _byg_params_partner(params: dict) -> dict | None:
         k: v for k, v in params.items()
         if k not in ("produkt_start_aldre", "produkt_i_buffer", "produkt_udb_aar",
                      "folkepension_opsaettelse_aar", "civilstand", "partner_alder",
-                     "partner_indkomst_aar", "partner_pensionsalder",
-                     "partner_produkt_start_aldre", "partner_produkt_i_buffer",
-                     "partner_produkt_udb_aar", "partner_folkepension_opsaettelse_aar")
+                     "partner_indkomst_aar", "partner_pensionsalder", *_PARTNER_OVERRIDE_KEYS)
     }
     params_partner["pensionsalder"] = int(params["partner_pensionsalder"])
     params_partner["civilstand"] = "gift_samlevende"
@@ -437,6 +449,16 @@ def _byg_params_partner(params: dict) -> dict | None:
         params_partner["produkt_udb_aar"] = params["partner_produkt_udb_aar"]
     if params.get("partner_folkepension_opsaettelse_aar") is not None:
         params_partner["folkepension_opsaettelse_aar"] = params["partner_folkepension_opsaettelse_aar"]
+    if params.get("partner_afkast_pct") is not None:
+        params_partner["afkast_pct"] = params["partner_afkast_pct"]
+    if params.get("partner_inflation_pct") is not None:
+        params_partner["inflation_pct"] = params["partner_inflation_pct"]
+    if params.get("partner_udbetaling_aar") is not None:
+        params_partner["udbetaling_aar"] = params["partner_udbetaling_aar"]
+    if params.get("partner_kommuneskat_pct") is not None:
+        params_partner["kommuneskat_pct"] = params["partner_kommuneskat_pct"]
+    if params.get("partner_kirkeskat_pct") is not None:
+        params_partner["kirkeskat_pct"] = params["partner_kirkeskat_pct"]
     return params_partner
 
 
@@ -1143,6 +1165,16 @@ class Parametre(BaseModel):
     partner_produkt_i_buffer: dict | None = None
     partner_produkt_udb_aar: dict | None = None
     partner_folkepension_opsaettelse_aar: int | None = None
+    # Partnerens EGNE økonomiske antagelser — helt uafhængige af den primære
+    # brugers (Fase D+, split-screen). Sat eksplicit af brugeren via "Beregn
+    # partnerens analyse" — falder ellers tilbage til primærens egne værdier
+    # i _byg_params_partner(), så det gamle, lette flow (uden disse felter)
+    # fortsat virker uændret.
+    partner_afkast_pct: float | None = None
+    partner_inflation_pct: float | None = None
+    partner_udbetaling_aar: int | None = None
+    partner_kommuneskat_pct: float | None = None
+    partner_kirkeskat_pct: float | None = None
 
 
 @app.post("/api/parametre")
@@ -1176,6 +1208,11 @@ async def gem_parametre(req: Parametre):
     if req.partner_produkt_udb_aar is not None:       p["partner_produkt_udb_aar"] = req.partner_produkt_udb_aar
     if req.partner_folkepension_opsaettelse_aar is not None:
         p["partner_folkepension_opsaettelse_aar"] = req.partner_folkepension_opsaettelse_aar
+    if req.partner_afkast_pct is not None:            p["partner_afkast_pct"] = req.partner_afkast_pct
+    if req.partner_inflation_pct is not None:         p["partner_inflation_pct"] = req.partner_inflation_pct
+    if req.partner_udbetaling_aar is not None:        p["partner_udbetaling_aar"] = req.partner_udbetaling_aar
+    if req.partner_kommuneskat_pct is not None:       p["partner_kommuneskat_pct"] = req.partner_kommuneskat_pct
+    if req.partner_kirkeskat_pct is not None:         p["partner_kirkeskat_pct"] = req.partner_kirkeskat_pct
 
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")

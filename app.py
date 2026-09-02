@@ -315,7 +315,7 @@ Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsræk
 - AM-bidrag: 8% | Bundskat: 12,01%
 - Progressiv topskat (personlig indkomst, hvert trin har sit eget skatteloft jf. PSL §19):
   mellemskat 7,5% over 641.200 kr (loft 44,57%) | topskat 7,5% over 777.900 kr (loft 52,07%) | top-topskat 5% over 2.592.700 kr (loft 57,07%)
-- Folkepension: 7.955 kr/mdr | ATP: ca. 1.825 kr/mdr | PAL-skat: 15,3%
+- Folkepension: 7.955 kr/mdr | ATP: ca. 1.825 kr/mdr (begge i dagens takst — satsreguleres nominelt med den valgte inflationsantagelse hvert år frem, så deres KØBEKRAFT holdes konstant, i stedet for at blive udhulet over et 20-30-årigt forløb) | PAL-skat: 15,3%
 - Pensionstillæg max (enlig): 104.748 kr/år — modregnes 30,9% af indtægtsgrundlag over 99.200 kr/år (gift: 53.604 kr/år, 32%/16% over 198.800 kr)
 - Ældrecheck: op til 26.900 kr/år (skattepligtig) | Mediecheck: uverificeret sats, nævn dette hvis den vises
 """

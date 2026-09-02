@@ -560,6 +560,20 @@ def generer_udbetalingstabel(
     tabel_slut = max(pensionsalder + udbetaling_aar, latest_stopper)
     tabel = []
     for alder in range(tabel_start, tabel_slut + 1):
+        # Folkepension og ATP satsreguleres hvert år i virkeligheden (jf.
+        # satsreguleringsloven, som følger den almindelige lønudvikling) —
+        # uden dette ville deres reelle (købekrafts-)værdi stille og roligt
+        # udhules gennem et 20-30-årigt pensionsforløb, mens private
+        # pensionsprodukter (der forrentes) ikke gør. Genbruger den
+        # eksisterende inflations-antagelse som et FORSIGTIGT skøn for
+        # satsreguleringen — den følger reelt lønudviklingen, som historisk
+        # har oversteget prisinflationen en smule, så dette er en nedre
+        # grænse for den forventede regulering, ikke en juridisk præcis sats.
+        aar_fra_nu       = max(0, alder - alder_nu) if alder_nu else (alder - pensionsalder)
+        sats_escalering  = (1 + inflation_pct) ** aar_fra_nu
+        fp_grundbeloeb_mdr = FOLKEPENSION_MDR * sats_escalering
+        atp_mdr_esc        = atp_mdr * sats_escalering
+
         # ATP starter altid ved den almindelige fp_alder — folkepensions-
         # opsætning (Fase C) udskyder KUN folkepensionens grundbeløb/tillæg/
         # tillægsprocent-styrede ydelser, ligesom sekventering.ts's model,
@@ -582,8 +596,8 @@ def generer_udbetalingstabel(
 
         pi_med_am  = privat_s_brutto * (1 - AM_BIDRAG)
         pi_uden_am = (
-            (FOLKEPENSION_MDR * 12 * fp_venteprocent if har_fp else 0.0)
-            + (atp_mdr * 12 if har_atp else 0.0)
+            (fp_grundbeloeb_mdr * 12 * fp_venteprocent if har_fp else 0.0)
+            + (atp_mdr_esc * 12 if har_atp else 0.0)
         )
         total_pi   = pi_med_am + pi_uden_am
 
@@ -625,7 +639,7 @@ def generer_udbetalingstabel(
         # ATP er upåvirket af en evt. folkepensions-opsætning (samme som
         # `har_atp` andre steder i denne løkke) — bruger derfor har_atp, IKKE
         # har_fp, som i opsættelses-år ville udelukke allerede udbetalt ATP.
-        indtaegtsgrundlag_aar = privat_s_brutto + (atp_mdr * 12 if har_atp else 0.0)
+        indtaegtsgrundlag_aar = privat_s_brutto + (atp_mdr_esc * 12 if har_atp else 0.0)
         if har_fp and partner_er_fp:
             kalenderaar = date.today().year + (alder - alder_nu)
             if skat_params.partner_indkomst_pr_kalenderaar is not None and kalenderaar in skat_params.partner_indkomst_pr_kalenderaar:
@@ -634,13 +648,13 @@ def generer_udbetalingstabel(
                 indtaegtsgrundlag_aar += skat_params.partner_indkomst_aar
 
         if har_atp:
-            atp_netto_aar = _netto_s_uden_am(float(atp_mdr * 12), skat_params, total_pi, float(atp_mdr * 12))
+            atp_netto_aar = _netto_s_uden_am(float(atp_mdr_esc * 12), skat_params, total_pi, float(atp_mdr_esc * 12))
             atp_mdr_netto = atp_netto_aar / 12
         else:
             atp_mdr_netto = 0.0
 
         if har_fp:
-            fp_brutto_aar = FOLKEPENSION_MDR * 12 * fp_venteprocent
+            fp_brutto_aar = fp_grundbeloeb_mdr * 12 * fp_venteprocent
             fp_netto_aar  = _netto_s_uden_am(fp_brutto_aar, skat_params, total_pi, fp_brutto_aar)
             fp_mdr_netto  = fp_netto_aar / 12
             # Ventetillægget (Fase C, forenklet — se satser_2026.py) forhøjer
@@ -675,9 +689,9 @@ def generer_udbetalingstabel(
             + aeldrecheck_mdr + mediecheck_mdr
         )
 
-        # Realværdi: deflatér med inflation siden i dag
-        years_from_now = max(0, alder - alder_nu) if alder_nu else (alder - pensionsalder)
-        real_deflator   = (1 + inflation_pct) ** years_from_now if inflation_pct > 0 else 1.0
+        # Realværdi: deflatér med inflation siden i dag (samme antal år som
+        # satsreguleringen af FP/ATP ovenfor — se aar_fra_nu).
+        real_deflator   = (1 + inflation_pct) ** aar_fra_nu if inflation_pct > 0 else 1.0
         real_netto_mdr  = round(total_netto_mdr / real_deflator) if inflation_pct > 0 else None
 
         # "over_topskat" dækker nu ethvert af de tre progressive trin (mellem-,
@@ -699,9 +713,9 @@ def generer_udbetalingstabel(
             "alder":           alder,
             "aar_nr":          alder - pensionsalder + 1,
             "produkter":       produkt_data,
-            "fp_mdr_brutto":   float(FOLKEPENSION_MDR) * fp_venteprocent if har_fp else 0.0,
+            "fp_mdr_brutto":   float(fp_grundbeloeb_mdr) * fp_venteprocent if har_fp else 0.0,
             "fp_mdr_netto":    fp_mdr_netto,
-            "atp_mdr_brutto":  float(atp_mdr) if har_atp else 0.0,
+            "atp_mdr_brutto":  float(atp_mdr_esc) if har_atp else 0.0,
             "atp_mdr_netto":   atp_mdr_netto,
             "tillaeg_mdr":     tillaeg_mdr,
             "indtaegtsgrundlag_aar": indtaegtsgrundlag_aar,

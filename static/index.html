@@ -46,6 +46,19 @@
     }
     #upload-label:hover { background: rgba(255,255,255,0.25); }
     #file-input { display: none; }
+    #household-tab-links { display: flex; gap: 8px; }
+    .header-btn {
+      cursor: pointer;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-family: inherit;
+      transition: background 0.2s;
+    }
+    .header-btn:hover { background: rgba(255,255,255,0.25); }
     #upload-status { font-size: 0.8rem; opacity: 0.85; max-width: 220px; }
     #upload-status.ok { color: #7fe07f; }
     #upload-status.err { color: #ff9494; }
@@ -493,6 +506,10 @@
     <label id="upload-label" for="file-input" aria-label="Upload PDF-rapport fra PensionsInfo">&#x2B06; Upload rapport</label>
     <input type="file" id="file-input" accept=".pdf">
     <span id="upload-status">Ingen rapport uploadet</span>
+    <span id="household-tab-links" style="display:none">
+      <button type="button" class="header-btn" onclick="aabnPartnerFaneblad()">&#x1F465; Partner/ægtefælle</button>
+      <button type="button" class="header-btn" onclick="aabnSamletFaneblad()">&#x1F4CA; Samlet oversigt</button>
+    </span>
   </div>
 </header>
 
@@ -609,6 +626,124 @@
     localStorage.setItem('pensionSessionId', sessionId);
   }
 
+  // ── Partner/Samlet i egen browser-fane ───────────────────────────────────
+  // window.open (ikke et in-page faneblad) — partnerens/den samlede visning
+  // får sin egen adresselinje/historik/luk-knap, adskilt fra din egen
+  // analyse. ?session bruger den EKSISTERENDE husstands-session (ikke en ny),
+  // så partner-uploaden lander i samme session's profil_partner som i dag.
+  function aabnPartnerFaneblad() {
+    if (!sessionId) return;
+    window.open(`${location.pathname}?session=${encodeURIComponent(sessionId)}&view=partner`, '_blank');
+  }
+  function aabnSamletFaneblad() {
+    if (!sessionId) return;
+    window.open(`${location.pathname}?session=${encodeURIComponent(sessionId)}&view=samlet`, '_blank');
+  }
+
+  function _skjulPrimaerVisning() {
+    document.getElementById('upload-area').style.display = 'none';
+    document.getElementById('profil-panel').style.display = 'none';
+    document.getElementById('quick-questions').style.display = 'none';
+    document.querySelector('main').style.display = 'none';
+    document.getElementById('input-area').style.display = 'none';
+    document.getElementById('privacy-footer').style.display = 'none';
+  }
+
+  function initPartnerOnlyView() {
+    document.title = 'Partnerens pensionsanalyse — PensionsAnalytiker';
+    document.querySelector('header h1').textContent = 'Partnerens pensionsanalyse';
+    document.getElementById('version-tag').textContent = 'Uploader og beregner uafhængigt af din egen analyse';
+    _skjulPrimaerVisning();
+    _activeTab = 'partner';
+
+    // Samme struktur som headerens EGEN "Upload rapport": en styled knap (ikke
+    // et rå filfelt) der bor UDENFOR #parametre-panel-body, så den overlever
+    // buildInterviewForm()'s innerHTML-udskiftning af panelet. Genbruger selve
+    // #upload-area-pladsen i headeren, som _skjulPrimaerVisning() lige skjulte.
+    const uploadArea = document.getElementById('upload-area');
+    uploadArea.style.display = 'flex';
+    uploadArea.innerHTML = `
+      <label id="upload-label" for="iq_partner_pdf">&#x2B06; Upload partner rapport</label>
+      <input type="file" id="iq_partner_pdf" accept="application/pdf" style="display:none" onchange="uploadPartnerRapport()">
+      <span id="partner_upload_status">Ingen rapport uploadet</span>`;
+
+    // INGEN parameterfelter (heller ikke alder/indkomst) vises før rapporten
+    // rent faktisk er indlæst — panelet forbliver skjult indtil da.
+    const panel = document.getElementById('parametre-panel');
+    document.getElementById('parametre-panel-header').style.display = 'none';
+    document.getElementById('parametre-panel-body').innerHTML = '';
+    panel.style.display = 'none';
+
+    document.getElementById('person-tabs').style.display = 'none';
+    document.querySelector('.chart-actions').style.display = 'none';
+    document.getElementById('chart-panel-header').style.display = 'none';
+    document.getElementById('chart-panel').style.display = 'block';
+
+    // loadAndRenderPartnerChart() viser selv #person-tabs igen ved succes —
+    // både ved dette første kald og ved et senere gen-kald via "Beregn
+    // partnerens analyse" — men "Dig"/"Samlet" har ingen data at vise i denne
+    // fokuserede, selvstændige fane. En observer holder den skjult uanset
+    // hvornår den delte funktion prøver at vise den igen.
+    const tabs = document.getElementById('person-tabs');
+    new MutationObserver(() => {
+      if (tabs.style.display !== 'none') tabs.style.display = 'none';
+    }).observe(tabs, { attributes: true, attributeFilter: ['style'] });
+
+    loadAndRenderPartnerChart().catch(() => null);
+  }
+
+  async function initSamletOnlyView() {
+    document.title = 'Samlet husstandsoversigt — PensionsAnalytiker';
+    document.querySelector('header h1').textContent = 'Samlet husstandsoversigt';
+    document.getElementById('version-tag').textContent = 'Din og partnerens analyse, lagt sammen';
+    _skjulPrimaerVisning();
+    document.getElementById('parametre-panel').style.display = 'none';
+    document.getElementById('chart-panel').style.display = 'none';
+
+    const wrap = document.createElement('div');
+    wrap.id = 'samlet-standalone-view';
+    wrap.style.cssText = 'max-width:640px;margin:24px auto;padding:0 20px;';
+    document.body.insertBefore(wrap, document.getElementById('parametre-panel'));
+    wrap.innerHTML = '<p style="color:#5578a0">Henter jeres analyser…</p>';
+
+    const [egenRes, partnerRes] = await Promise.all([
+      fetch(`/api/session/${sessionId}/engine`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`/api/session/${sessionId}/engine-partner`).then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+
+    if (!egenRes) {
+      wrap.innerHTML = '<p style="color:#c0392b">Din egen analyse er endnu ikke beregnet. Gennemfør interviewet i din egen fane først.</p>';
+      return;
+    }
+    if (!partnerRes) {
+      wrap.innerHTML = `<p style="color:#c0392b">Partnerens analyse er endnu ikke beregnet.</p>
+        <button class="chart-btn primary" onclick="aabnPartnerFaneblad()">&#x1F465; Åbn faneblad "Partner/ægtefælle"</button>`;
+      return;
+    }
+
+    const egen    = egenRes.jaevn_netto_mdr || 0;
+    const partner = partnerRes.jaevn_netto_mdr || 0;
+    const fmt = n => Math.round(n).toLocaleString('da-DK');
+    wrap.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+        <div style="background:#eef4fb;border-radius:10px;padding:14px 16px">
+          <div style="font-size:0.8rem;color:#5578a0;margin-bottom:4px">Dig</div>
+          <div style="font-size:1.3rem;font-weight:600;color:#1a3a5c">${fmt(egen)} kr/mdr</div>
+          <div style="font-size:0.78rem;color:#5578a0;margin-top:2px">jævnt niveau, pensionsalder ${egenRes.pensionsalder ?? '—'}</div>
+        </div>
+        <div style="background:#eef4fb;border-radius:10px;padding:14px 16px">
+          <div style="font-size:0.8rem;color:#5578a0;margin-bottom:4px">Partner</div>
+          <div style="font-size:1.3rem;font-weight:600;color:#1a3a5c">${fmt(partner)} kr/mdr</div>
+          <div style="font-size:0.78rem;color:#5578a0;margin-top:2px">jævnt niveau, pensionsalder ${partnerRes.pensionsalder ?? '—'}</div>
+        </div>
+      </div>
+      <div style="background:#dceaf8;border-radius:10px;padding:16px 18px">
+        <div style="font-size:0.85rem;color:#1a3a5c">Samlet husstand</div>
+        <div style="font-size:1.6rem;font-weight:700;color:#1a3a5c">${fmt(egen + partner)} kr/mdr</div>
+      </div>
+      <p style="font-size:0.76rem;color:#888;margin-top:14px">Begge beløb er allerede beregnet med jeres koblede pensionstillæg/tillægsprocent — det er ikke to uafhængige overslag lagt sammen.</p>`;
+  }
+
   // ── Upload ────────────────────────────────────────────────────────────────
   document.getElementById('file-input').addEventListener('change', async (e) => {
     const file = e.target.files[0];
@@ -645,6 +780,7 @@
         updateProfilPanel(data.profil);
         updateQuickButtons(data.profil);
         document.getElementById('welcome').style.display = 'none';
+        document.getElementById('household-tab-links').style.display = 'flex';
 
         // Start interview automatisk
         if (data.start_interview) {
@@ -1057,60 +1193,6 @@ Upload derefter PDF'en her øverst til højre.`,
             <span class="unit">%</span>
           </div>
         </td>
-      </tr>
-      <tr>
-        <td class="ql" style="vertical-align:top"><strong>7c.</strong> Civilstand
-          <div class="qdesc">Gift/samlevende har en anden aftrapningssats for pensionstillæg end enlige</div>
-        </td>
-        <td class="qi" style="white-space:normal;vertical-align:top">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:5px">
-            <input type="checkbox" id="iq_civilstand" onchange="toggleCivilstand()">
-            <span style="font-size:0.85rem;color:#2a3a4a">Gift eller samlevende (fælles økonomi)</span>
-          </label>
-          <div id="civilstand_wrap" style="display:none">
-            <div id="partner_let_felter">
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
-                <span style="font-size:0.85rem;color:#2a3a4a;min-width:90px">Partners alder</span>
-                <input type="number" id="iq_partner_alder" min="18" max="110" step="1" style="width:70px">
-              </div>
-              <div style="display:flex;align-items:center;gap:8px">
-                <span style="font-size:0.85rem;color:#2a3a4a;min-width:90px">Partners indkomst</span>
-                <input type="number" id="iq_partner_indkomst" placeholder="0" min="0" step="10000" style="width:100px">
-                <span class="unit">kr/år efter folkepension</span>
-              </div>
-              <div class="qdesc" style="margin-top:4px">Bruges til et overslag over jeres samlede indtægtsgrundlag for pensionstillæg/tillægsprocent — den præcise modregningsregel for gifte par er mere kompleks end dette værktøj modellerer.</div>
-            </div>
-            <div style="margin-top:8px;padding-top:8px;border-top:1px solid #dde6ee">
-              <div class="qdesc" style="margin-bottom:5px">Har du partnerens egen PensionsInfo-rapport? Så bliver beregningen fuldt præcis i stedet for et overslag.</div>
-              <input type="file" id="iq_partner_pdf" accept="application/pdf" style="font-size:0.8rem" onchange="uploadPartnerRapport()">
-              <div id="partner_upload_status" style="font-size:0.8rem;margin-top:4px"></div>
-              <div id="partner_setup_form" style="display:none;margin-top:8px">
-                <div class="qdesc" style="margin-bottom:6px">Partnerens egne antagelser — helt uafhængige af dine egne ovenfor. Din egen analyse ændres ikke af noget herunder.</div>
-                <div style="display:grid;grid-template-columns:auto auto;gap:6px 10px;align-items:center;max-width:340px">
-                  <span style="font-size:0.85rem;color:#2a3a4a">Ønsket pensionsalder</span>
-                  <div><input type="number" id="iq_partner_pensionsalder" min="55" max="80" step="1" style="width:70px"> <span class="unit">år</span></div>
-                  <span style="font-size:0.85rem;color:#2a3a4a">Forventet afkast</span>
-                  <div><input type="number" id="iq_partner_afkast" min="0" max="15" step="0.1" style="width:70px"> <span class="unit">%</span></div>
-                  <span style="font-size:0.85rem;color:#2a3a4a">Inflation</span>
-                  <div><input type="number" id="iq_partner_inflation" min="0" max="10" step="0.1" style="width:70px"> <span class="unit">%</span></div>
-                  <span style="font-size:0.85rem;color:#2a3a4a">Udbetalingsperiode</span>
-                  <div><input type="number" id="iq_partner_udbperiode" min="5" max="40" step="1" style="width:70px"> <span class="unit">år</span></div>
-                  <span style="font-size:0.85rem;color:#2a3a4a">Bopælskommune</span>
-                  <div><input type="text" id="iq_partner_kommune" style="width:120px"></div>
-                  <span style="font-size:0.85rem;color:#2a3a4a">Kirkeskat</span>
-                  <div>
-                    <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer">
-                      <input type="checkbox" id="iq_partner_kirkeskat" checked onchange="togglePartnerKirkeskat()">
-                      <input type="number" id="iq_partner_kirkeskat_pct" value="0.7" min="0.1" max="2" step="0.1" style="width:55px"> <span class="unit">%</span>
-                    </label>
-                  </div>
-                </div>
-                <button class="chart-btn primary" style="margin-top:8px" onclick="beregnPartnerAnalyse()">Beregn partnerens analyse &rarr;</button>
-                <div id="partner_setup_status" style="font-size:0.8rem;margin-top:4px"></div>
-              </div>
-            </div>
-          </div>
-        </td>
       </tr>`;
 
     // Q8: Årlig bruttoindtægt — vis hvis pensionsopsparing tyder på topskat-relevans
@@ -1238,22 +1320,21 @@ Upload derefter PDF'en her øverst til højre.`,
     if (wrap) wrap.style.display = checked ? '' : 'none';
   }
 
-  function toggleCivilstand() {
-    const checked = document.getElementById('iq_civilstand')?.checked;
-    const wrap = document.getElementById('civilstand_wrap');
-    if (wrap) wrap.style.display = checked ? '' : 'none';
-  }
-
   let _partnerUploaded = false;
+  let _partnerProfil = null;
 
+  // Bruges KUN i den selvstændige "Partner/ægtefælle"-fane (initPartnerOnlyView) —
+  // efter upload bygges PRÆCIS samme spørgeformular som for den primære bruger
+  // (buildInterviewForm, genbrugt uændret), udfyldt fra partnerens egen rapport,
+  // i stedet for et forkortet alder+indkomst-overslag før nogen rapport findes.
   async function uploadPartnerRapport() {
     const input  = document.getElementById('iq_partner_pdf');
     const status = document.getElementById('partner_upload_status');
     const file = input?.files?.[0];
     if (!file || !sessionId) return;
 
-    status.style.color = '#5578a0';
-    status.textContent = '⟳ Indlæser partners rapport…';
+    status.className = 'busy';
+    status.textContent = 'Analyserer rapport...';
 
     const formData = new FormData();
     formData.append('file', file);
@@ -1263,31 +1344,19 @@ Upload derefter PDF'en her øverst til højre.`,
       if (!res.ok || !data.success) throw new Error(data.detail || 'Ukendt fejl');
 
       _partnerUploaded = true;
-      status.style.color = '#1a7a4a';
-      status.textContent = `✓ ${data.navn || 'Partners rapport'} indlæst — udfyld partnerens egne antagelser nedenfor.`;
-      const letFelter = document.getElementById('partner_let_felter');
-      if (letFelter) letFelter.style.display = 'none';
-      const form = document.getElementById('partner_setup_form');
-      if (form) form.style.display = '';
-      // Foreudfyld med DIN egne nuværende værdier — ren bekvemmelighed, ikke
-      // en binding. Partnerens felter er fra nu af deres EGNE, uafhængige
-      // tal; intet herfra sendes før "Beregn partnerens analyse" klikkes, og
-      // intet af dette rører nogensinde din egen, allerede beregnede analyse.
-      const kopier = (fraId, tilId) => {
-        const fra = document.getElementById(fraId), til = document.getElementById(tilId);
-        if (fra && til && !til.value) til.value = fra.value;
-      };
-      kopier('iq2', 'iq_partner_afkast');
-      kopier('iq2b', 'iq_partner_inflation');
-      kopier('iq4', 'iq_partner_udbperiode');
-      kopier('iq7', 'iq_partner_kommune');
-      const kirkeskatPrimaer = document.getElementById('iq_kirkeskat');
-      if (kirkeskatPrimaer) document.getElementById('iq_partner_kirkeskat').checked = kirkeskatPrimaer.checked;
-      kopier('iq_kirkeskat_pct', 'iq_partner_kirkeskat_pct');
-      togglePartnerKirkeskat();
+      _partnerProfil = data.profil_partner;
+      status.className = 'ok';
+      status.textContent = `✓ ${data.navn || 'Rapport'} indlæst`;
+      document.getElementById('parametre-panel').style.display = 'block';
+      buildInterviewForm(_partnerProfil);
+      const submitBtn = document.getElementById('iform-submit-btn');
+      if (submitBtn) {
+        submitBtn.textContent = 'Beregn partnerens analyse →';
+        submitBtn.onclick = submitPartnerInterviewForm;
+      }
     } catch (e) {
-      status.style.color = '#c0392b';
-      status.textContent = `Kunne ikke indlæse rapporten: ${e.message}`;
+      status.className = 'err';
+      status.textContent = `✗ ${e.message}`;
     }
   }
 
@@ -1297,66 +1366,129 @@ Upload derefter PDF'en her øverst til højre.`,
     if (pct) pct.disabled = !checked;
   }
 
-  // Samler ALLE partnerens antagelser i ét eksplicit skridt og gemmer dem
-  // samlet — mere robust end spredte per-felt onchange-håndtag (som viste
-  // sig upålidelige: nemt at overse ét felt og ende med en delvist
-  // opdateret, uigennemsigtig tilstand). Rører KUN partner_*-navngivne
-  // felter, aldrig de tilsvarende felter for brugerens egen analyse.
-  async function beregnPartnerAnalyse() {
-    if (!sessionId || isStreaming) return;
-    const pensionsalder = parseInt(document.getElementById('iq_partner_pensionsalder')?.value);
-    const status = document.getElementById('partner_setup_status');
-    if (!pensionsalder) {
-      if (status) { status.style.color = '#c0392b'; status.textContent = 'Udfyld partnerens ønskede pensionsalder først.'; }
+  // Spejler submitInterviewForm() PRÆCIS — samme felter (iq1-iq9b), samme
+  // validering, samme udledning af saldi/start-aldre/kapitalbeskatning — kun
+  // POST-nøglerne har et "partner_"-præfiks, og der sendes ingen chat-besked
+  // (partnerens egen fane har ingen chat; resultatet vises som diagram herunder).
+  async function submitPartnerInterviewForm() {
+    const profil = _partnerProfil;
+    const tidligst = profil?.tidligste_pensionsalder ?? 65;
+
+    const nuvaerende = profil?.person?.alder || 0;
+    const pensionsalderVal = parseInt(document.getElementById('iq3')?.value || '0');
+    const iq1Val = parseFloat(document.getElementById('iq1')?.value || '-1');
+    const afkastVal = parseFloat(document.getElementById('iq2')?.value || '-1');
+
+    clearFieldErrors();
+    if (isNaN(iq1Val) || iq1Val < 0) {
+      showFieldError('iq1', 'Angiv en gyldig månedlig netto-indbetaling (0 eller mere).');
       return;
     }
-    if (status) { status.style.color = '#5578a0'; status.textContent = '⟳ Beregner partnerens analyse…'; }
-    const kirkeskatChecked = document.getElementById('iq_partner_kirkeskat')?.checked ?? true;
-    // "|| standard" ville tavst erstatte et bevidst indtastet 0 med standarden
-    // (falsk-nul-fejl) — brug i stedet Number.isNaN, der kun rammer et TOMT felt.
-    const naNTilDefault = (v, standard) => Number.isNaN(v) ? standard : v;
-    const partnerKommuneVaerdi = document.getElementById('iq_partner_kommune')?.value?.trim();
+    if (nuvaerende && pensionsalderVal <= nuvaerende) {
+      showFieldError('iq3', `Pensionsalder skal være højere end partnerens nuværende alder (${nuvaerende} år).`);
+      return;
+    }
+    if (pensionsalderVal < 55 || pensionsalderVal > 85) {
+      showFieldError('iq3', 'Pensionsalder skal være mellem 55 og 85 år.');
+      return;
+    }
+    if (isNaN(afkastVal) || afkastVal < 0 || afkastVal > 20) {
+      showFieldError('iq2', 'Forventet afkast skal være mellem 0% og 20%.');
+      return;
+    }
+
+    const v = id => document.getElementById(id)?.value?.trim() ?? '';
+    const iq1Mdr = parseFloat(v('iq1')) || 0;
+    const iq1Aar = Math.round(iq1Mdr * 12);
+    const inflationVal = parseFloat(v('iq2b')) || 2.0;
+    const kirkeskatChecked = document.getElementById('iq_kirkeskat')?.checked ?? true;
+    const kirkeskatPct = kirkeskatChecked ? (parseFloat(v('iq_kirkeskat_pct')) || 0.7) : 0.0;
+
+    const hasKapital = (profil?.ordninger || []).some(o =>
+      (o.produkttype || '').toLowerCase().includes('kapitalpension'));
+    let kapitalSkatType;
+    if (hasKapital) {
+      const k = v('iq5');
+      kapitalSkatType = k === 'ja' ? 'F' : 'A';
+    }
+
+    const nrCount = {};
+    (profil?.pensionsprodukter || []).forEach(p => {
+      const nr = p.aftalenr || '';
+      if (nr) nrCount[nr] = (nrCount[nr] || 0) + 1;
+    });
+    const multiNrs = Object.keys(nrCount).filter(nr => nrCount[nr] > 1);
+    const sortPT = pt => { const s=(pt||'').toLowerCase(); return s.includes('rate')?0:s.includes('livsvarig')||s.includes('livrente')?1:s.includes('aldersopsparing')?2:3; };
+    const multiProds = multiNrs.flatMap(nr =>
+      (profil?.pensionsprodukter || []).filter(p => p.aftalenr === nr))
+      .sort((a,b) => sortPT(a.produkttype) - sortPT(b.produkttype));
+    const saldiOverrides = [];
+    if (multiProds.length > 1) {
+      const mode = document.querySelector('input[name="iq6mode"]:checked')?.value ?? 'sal';
+      if (mode === 'sal') {
+        multiProds.forEach((p, i) => {
+          const saldo = parseFloat(document.getElementById(`iq6sal_${i}`)?.value || '0');
+          if (saldo > 0) saldiOverrides.push({ aftalenr: p.aftalenr, produkttype: p.produkttype, saldo });
+        });
+      }
+    }
+
+    const loebendeKeys = computeProductKeys(profil);
+    const produktStartAldre = {};
+    const produktIBuffer = {};
+    if (loebendeKeys.length > 0) {
+      const pensionsalderVal2 = parseInt(v('iq3')) || 65;
+      loebendeKeys.forEach(({key, isEngangs}, idx) => {
+        const startAlder = parseInt(document.getElementById(`iq_start_${idx}`)?.value || pensionsalderVal2);
+        produktStartAldre[key] = startAlder;
+        if (isEngangs) {
+          produktIBuffer[key] = document.getElementById(`iq_buffer_${idx}`)?.checked !== false;
+        }
+      });
+    }
+
+    const kommune = v('iq7');
+    const kommuneskatPct = kommuneskatPctFor(kommune);
+    const frieMidler = parseFloat(v('iq9'));
+    const frieSkat   = parseFloat(document.getElementById('iq9b')?.value || '28');
+
+    clearFieldErrors();
+    const submitBtn = document.getElementById('iform-submit-btn');
+    if (submitBtn) submitBtn.textContent = 'Beregner…';
+    if (_parametrePanelOpen) toggleParametrePanel();
+
     await fetch('/api/parametre', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: sessionId,
         civilstand: 'gift_samlevende',
-        partner_pensionsalder: pensionsalder,
-        // Bevidst IKKE "|| undefined" her — 0% er en gyldig (om end usædvanlig)
-        // afkast-/inflationsantagelse, og "|| undefined" ville tavst droppe den.
-        // Et tomt felt giver NaN, som JSON.stringify allerede korrekt serialiserer
-        // til null (= "ikke sat" for backend'ens Optional-felter).
-        partner_afkast_pct: parseFloat(document.getElementById('iq_partner_afkast')?.value),
-        partner_inflation_pct: parseFloat(document.getElementById('iq_partner_inflation')?.value),
-        partner_udbetaling_aar: parseInt(document.getElementById('iq_partner_udbperiode')?.value),
-        // kommuneskatPctFor() returnerer ALTID et tal (default 25.0) — kald den kun
-        // når partneren rent faktisk har indtastet en kommune, ellers udelades feltet
-        // helt, så det korrekt falder tilbage til PRIMÆRENS kommuneskat i stedet for
-        // altid at ende på den generiske standardsats.
-        partner_kommuneskat_pct: partnerKommuneVaerdi ? kommuneskatPctFor(partnerKommuneVaerdi) : undefined,
-        partner_kirkeskat_pct: kirkeskatChecked
-          ? naNTilDefault(parseFloat(document.getElementById('iq_partner_kirkeskat_pct')?.value), 0.7)
-          : 0.0,
+        partner_pensionsalder:       parseInt(v('iq3')) || tidligst,
+        partner_netto_indbetaling:   iq1Aar,
+        partner_afkast_pct:          parseFloat(v('iq2')) || 4.0,
+        partner_inflation_pct:       inflationVal,
+        partner_udbetaling_aar:      parseInt(v('iq4')) || 30,
+        partner_kommuneskat_pct:     kommuneskatPct,
+        partner_kirkeskat_pct:       kirkeskatPct,
+        partner_produkt_start_aldre: Object.keys(produktStartAldre).length ? produktStartAldre : undefined,
+        partner_produkt_i_buffer:    Object.keys(produktIBuffer).length ? produktIBuffer : undefined,
+        partner_saldi_overrides:     saldiOverrides.length ? saldiOverrides : undefined,
+        partner_fri_formue:                  frieMidler > 0 ? frieMidler : undefined,
+        partner_fri_formue_kapital_skat_pct: frieMidler > 0 ? frieSkat   : undefined,
+        partner_kapital_skat_type:  kapitalSkatType,
       }),
-    }).catch(() => null);
-    const lykkedes = await loadAndRenderPartnerChart();
-    await _refreshPrimaryChartOnly();  // husstandskoblingen påvirker ofte også PRIMÆRENS egne tal
-    _opdaterHusstandTotal();
-    if (lykkedes) await switchPersonTab('partner');  // vis resultatet med det samme
-    if (status) { status.style.color = '#1a7a4a'; status.textContent = '✓ Partnerens analyse er beregnet — se fanebladet "Partner".'; }
-    // loadAndRenderPartnerChart() henter kun diagram-data — den detaljerede
-    // tekst-analyse (Tabel 1-3-ækvivalenten, allerede bygget server-side som
-    // "## PARTNERENS UDBETALINGSANALYSE") bliver først vist når LLM'en rent
-    // faktisk bliver bedt om at skrive den, ligesom opdaterAnalyse() gør for
-    // brugerens egen analyse.
-    if (_partnerHarAnalyse) {
-      await sendSystemTrigger(
-        'Jeg har lige beregnet partnerens egen pensionsanalyse (uafhængige antagelser, egen tidslinje). ' +
-        'Præsenter partnerens fulde analyse (svarende til Tabel 1-3, men for partneren) som en klart adskilt sektion i chatten, ' +
-        'ligesom "## PARTNERENS UDBETALINGSANALYSE" står i konteksten — ikke kun en kort omtale.'
-      );
-    }
+    });
+
+    if (submitBtn) submitBtn.textContent = '(Gen)beregn analyse →';
+    const stepAnalyse = document.getElementById('step-analyse');
+    if (stepAnalyse) stepAnalyse.classList.add('active');
+
+    // loadAndRenderPartnerChart() gengiver kun diagrammet hvis _activeTab
+    // allerede er 'partner' — et tidligere, mislykket forsøg (før upload) kan
+    // have nulstillet den til 'primary' via dens egen 404-fallback.
+    _activeTab = 'partner';
+    await loadAndRenderPartnerChart();
+    document.getElementById('chart-panel').style.display = 'block';
   }
 
   function autoFillStartAldre() {
@@ -1526,20 +1658,6 @@ Upload derefter PDF'en her øverst til højre.`,
     parts.push(`7. Kommune: ${kommune || 'ikke oplyst (brug landsgennemsnit 25%)'}`);
     parts.push(`7b. Kirkeskat: ${kirkeskatPct}%`);
 
-    const civilstandChecked = document.getElementById('iq_civilstand')?.checked ?? false;
-    const civilstand = civilstandChecked ? 'gift_samlevende' : 'enlig';
-    const partnerPensionsalder = civilstandChecked && _partnerUploaded
-      ? parseInt(v('iq_partner_pensionsalder')) || undefined : undefined;
-    const partnerAlder    = civilstandChecked && !_partnerUploaded ? parseInt(v('iq_partner_alder')) || undefined : undefined;
-    const partnerIndkomst = civilstandChecked && !_partnerUploaded ? parseFloat(v('iq_partner_indkomst')) || 0 : undefined;
-    if (civilstandChecked && _partnerUploaded) {
-      parts.push(`7c. Civilstand: Gift/samlevende, partners egen rapport uploadet, ønsket pensionsalder ${partnerPensionsalder || '?'} år`);
-    } else if (civilstandChecked) {
-      parts.push(`7c. Civilstand: Gift/samlevende, partner ${partnerAlder || '?'} år, partner-indkomst ${partnerIndkomst || 0} kr/år efter folkepension`);
-    } else {
-      parts.push(`7c. Civilstand: Enlig`);
-    }
-
     const bruttoindtaegt = v('iq8');
     if (bruttoindtaegt) {
       parts.push(`8. Årlig bruttoindtægt (løn): ${bruttoindtaegt} kr/år`);
@@ -1596,10 +1714,6 @@ Upload derefter PDF'en her øverst til højre.`,
         produkt_i_buffer:     Object.keys(produktIBuffer).length ? produktIBuffer : undefined,
         fri_formue:                  frieMidler > 0 ? frieMidler : undefined,
         fri_formue_kapital_skat_pct: frieMidler > 0 ? frieSkat   : undefined,
-        civilstand:                  civilstand,
-        partner_alder:               partnerAlder,
-        partner_indkomst_aar:        partnerIndkomst,
-        partner_pensionsalder:       partnerPensionsalder,
       }),
     });
 
@@ -2104,16 +2218,6 @@ function _collectPayload(includePanel = false) {
     if (frieMidler > 0) {
       payload.fri_formue = frieMidler;
       payload.fri_formue_kapital_skat_pct = parseFloat(iq9b?.value) || 28;
-    }
-    const civilstandChecked = document.getElementById('iq_civilstand')?.checked ?? false;
-    if (document.getElementById('iq_civilstand')) {
-      payload.civilstand = civilstandChecked ? 'gift_samlevende' : 'enlig';
-      if (civilstandChecked && _partnerUploaded) {
-        payload.partner_pensionsalder = parseInt(document.getElementById('iq_partner_pensionsalder')?.value) || undefined;
-      } else if (civilstandChecked) {
-        payload.partner_alder = parseInt(document.getElementById('iq_partner_alder')?.value) || undefined;
-        payload.partner_indkomst_aar = parseFloat(document.getElementById('iq_partner_indkomst')?.value) || 0;
-      }
     }
   }
   if (Object.keys(produktStartAldre).length) payload.produkt_start_aldre = produktStartAldre;
@@ -3179,7 +3283,28 @@ function gemAnalyse() {
   URL.revokeObjectURL(url);
 }
 
-  init();
+  // Partner/Samlet åbnes som en RIGTIG separat browser-fane (window.open),
+  // ikke som et faneblad inde i samme dokument — ?session=X binder den til
+  // den ALLEREDE eksisterende husstands-session i stedet for at oprette (eller
+  // via localStorage genbruge) en ny, uafhængig session.
+  // Afventer DOMContentLoaded: #privacy-footer ligger i markup'et EFTER dette
+  // <script>-tag, så et synkront kald her (fx via _skjulPrimaerVisning) ville
+  // ramme den før parseren har nået den — DOMContentLoaded fyrer først når
+  // hele dokumentet, inkl. det trailing markup, er parset færdigt.
+  document.addEventListener('DOMContentLoaded', () => {
+    const _bootParams = new URLSearchParams(location.search);
+    const _bootView = _bootParams.get('view');
+    const _bootSession = _bootParams.get('session');
+    if (_bootSession && _bootView === 'partner') {
+      sessionId = _bootSession;
+      initPartnerOnlyView();
+    } else if (_bootSession && _bootView === 'samlet') {
+      sessionId = _bootSession;
+      initSamletOnlyView();
+    } else {
+      init();
+    }
+  });
 </script>
 <div id="privacy-footer">
   &#x1F512; Data behandles midlertidigt i hukommelsen og sendes til Anthropics API. Ingen data gemmes permanent.

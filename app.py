@@ -347,7 +347,13 @@ def _engine_cache_key(session: dict) -> str:
         "produkt_udb_aar":    json.dumps(params.get("produkt_udb_aar", {}), sort_keys=True),
         "folkepension_opsaettelse_aar": params.get("folkepension_opsaettelse_aar"),
         "partner_pensionsalder": params.get("partner_pensionsalder"),
-        # De ni partner_*-overrides — samme liste _byg_params_partner() bruger,
+        "partner_kapital_skat_type": params.get("partner_kapital_skat_type"),
+        # partner_saldi_overrides er IKKE med her, af samme grund som primærens
+        # saldi_overrides heller ikke er: begge muterer profilen IN PLACE (og
+        # bliver aldrig selv gemt som et param-felt), så id(profil) i cache-
+        # nøglen nedenfor ikke ændres af overriden alene — uændret, præ-
+        # eksisterende adfærd, ikke noget nyt her.
+        # De partner_*-overrides — samme liste _byg_params_partner() bruger,
         # så et felt der tæller for beregningen aldrig kan glemmes her (en
         # glemt cache-nøgle er en STILLE fejl: uændret hash -> gammel,
         # forældet analyse serveres uden nogen fejlmeddelelse nogen steder).
@@ -414,12 +420,35 @@ _PARTNER_OVERRIDE_KEYS = (
     "partner_produkt_start_aldre", "partner_produkt_i_buffer", "partner_produkt_udb_aar",
     "partner_folkepension_opsaettelse_aar", "partner_afkast_pct", "partner_inflation_pct",
     "partner_udbetaling_aar", "partner_kommuneskat_pct", "partner_kirkeskat_pct",
+    "partner_netto_indbetaling", "partner_fri_formue", "partner_fri_formue_kapital_skat_pct",
 )
-# Rene personlige facts om den PRIMÆRE bruger — ikke "antagelser" partneren
-# kan overtage som fornuftig default. Skal ALDRIG kopieres ind i partnerens
-# egne parametre (partneren har ingen tilsvarende partner_*-override for
-# disse; engine.py's egne 0-fallbacks er det korrekte "intet sat" for dem).
+# Rene personlige facts om den PRIMÆRE bruger. Skal ALDRIG bruges som
+# fallback-default for partnerens tilsvarende felt (i modsætning til fx
+# afkast_pct, hvor det ER fornuftigt at partneren arver primærens antagelse
+# indtil de sætter deres egen) — partneren har sin egen opsparing og formue,
+# aldrig primærens. De har hver deres partner_*-override i
+# _PARTNER_OVERRIDE_KEYS ovenfor; kun uden den (intet sat) gælder engine.py's
+# egne 0-fallbacks. loenvaekst_pct har intet UI-spørgsmål og derfor ingen
+# partner-override overhovedet.
 _PRIMÆR_KUN_KEYS = ("netto_indbetaling", "fri_formue", "fri_formue_kapital_skat_pct", "loenvaekst_pct")
+
+
+def _anvend_saldi_overrides(profil: dict, overrides: list) -> None:
+    """Overskriver saldi for navngivne produkter (aftalenr+type) i en profil —
+    delt mellem primærens og partnerens Q6-saldi-override (samme match-logik,
+    kun profilen der muteres er forskellig)."""
+    for ov in overrides:
+        nr    = str(ov.get("aftalenr") or "")
+        ptype = (ov.get("produkttype") or "").lower()
+        saldo = float(ov.get("saldo") or 0)
+        for pp in profil.get("pensionsprodukter", []):
+            if (str(pp.get("aftalenr") or "") == nr and
+                    (pp.get("produkttype") or "").lower() == ptype):
+                pp["opsparing"] = saldo
+        for o in profil.get("ordninger", []):
+            if (str(o.get("aftalenr") or "") == nr and
+                    (o.get("produkttype") or "").lower() == ptype):
+                o["opsparing"] = saldo
 
 
 def _byg_params_partner(params: dict) -> dict | None:
@@ -481,15 +510,37 @@ def _kør_engine(session_id: str) -> str:
         civilstand = _civilstand_fra_params(params)
         partner_alder = params.get("partner_alder")
 
+        def _tilfoej_fri_formue_analyse(result_person: dict, params_person: dict, alder_nu_person: int) -> None:
+            fri_formue_person = params_person.get("fri_formue")
+            if fri_formue_person and fri_formue_person > 0:
+                result_person["fri_formue_analyse"] = beregn_fri_formue_tabel(
+                    fri_formue=float(fri_formue_person),
+                    r_gross=float(params_person.get("afkast_pct", 4.0)) / 100,
+                    udbetaling_aar=int(params_person.get("udbetaling_aar", 30)),
+                    pensionsalder=int(params_person["pensionsalder"]),
+                    alder_nu=alder_nu_person,
+                    kapital_skat_pct=float(params_person.get("fri_formue_kapital_skat_pct") or 33.0),
+                )
+            else:
+                result_person["fri_formue_analyse"] = None
+
         profil_partner = session.get("profil_partner")
         result_text_partner = None
         params_partner = _byg_params_partner(params) if profil_partner else None
         if params_partner is not None:
+            profil_partner_kopi = copy.deepcopy(profil_partner)
+            partner_kapital_skat = params.get("partner_kapital_skat_type")
+            if partner_kapital_skat:
+                for p in profil_partner_kopi.get("pensionsprodukter", []):
+                    if "kapital" in (p.get("produkttype") or "").lower():
+                        p["skat_type"] = partner_kapital_skat
             husstand_resultat = husstand.beregn_husstand(
-                profil_kopi, params, copy.deepcopy(profil_partner), params_partner,
+                profil_kopi, params, profil_partner_kopi, params_partner,
             )
             result = husstand_resultat["a"]
             session["engine_output_partner"] = husstand_resultat["b"]
+            alder_nu_partner = int((profil_partner.get("person") or {}).get("alder") or 0)
+            _tilfoej_fri_formue_analyse(husstand_resultat["b"], params_partner, alder_nu_partner)
             result_text_partner = format_engine_til_llm(husstand_resultat["b"])
             skat = None  # allerede anvendt inde i beregn_husstand
         else:
@@ -507,20 +558,8 @@ def _kør_engine(session_id: str) -> str:
             )
             result = generer_udbetalingstabel(profil_kopi, params, skat)
             result["scenarier"] = generer_scenarier(copy.deepcopy(profil_kopi), params, skat)
-        fri_formue = params.get("fri_formue")
-        if fri_formue and fri_formue > 0:
-            alder_nu = int((session.get("profil") or {}).get("person", {}).get("alder") or 0)
-            skat_pct = float(params.get("fri_formue_kapital_skat_pct") or 33.0)
-            result["fri_formue_analyse"] = beregn_fri_formue_tabel(
-                fri_formue=float(fri_formue),
-                r_gross=float(params.get("afkast_pct", 4.0)) / 100,
-                udbetaling_aar=int(params.get("udbetaling_aar", 30)),
-                pensionsalder=int(params["pensionsalder"]),
-                alder_nu=alder_nu,
-                kapital_skat_pct=skat_pct,
-            )
-        else:
-            result["fri_formue_analyse"] = None
+        alder_nu = int((session.get("profil") or {}).get("person", {}).get("alder") or 0)
+        _tilfoej_fri_formue_analyse(result, params, alder_nu)
         session["engine_output"] = result
         result_text = format_engine_til_llm(result)
         if result_text_partner:
@@ -1010,10 +1049,21 @@ async def upload_partner_rapport(session_id: str, file: UploadFile = File(...)):
         sessions[session_id]["profil_partner"] = profil_partner
         sessions[session_id]["profil_partner_tekst"] = profil_partner_tekst
 
+        # Samme oprensning som /api/upload/{session_id} — appen skal kunne
+        # bygge PRÆCIS samme spørgeformular (buildInterviewForm) for partneren
+        # som for den primære bruger, udfyldt med deres egne rapport-data.
+        profil_response = {k: v for k, v in profil_partner.items() if k not in ("raa_tekst", "raw")}
+        if "person" in profil_response:
+            profil_response["person"] = {
+                k: v for k, v in profil_response["person"].items()
+                if k != "foedselsdato"
+            }
+
         return {
             "success": True,
             "navn": profil_partner["person"].get("navn", ""),
             "profil_partner_tekst": profil_partner_tekst,
+            "profil_partner": profil_response,
         }
     except HTTPException:
         raise
@@ -1174,6 +1224,15 @@ class Parametre(BaseModel):
     partner_udbetaling_aar: int | None = None
     partner_kommuneskat_pct: float | None = None
     partner_kirkeskat_pct: float | None = None
+    # Partnerens EGNE personlige facts — samme spørgsmål (Q1/Q5/Q6/Q9/Q9b) som
+    # den primære bruger besvarer i sit eget interview, nu genbrugt 1:1 for
+    # partneren (samme buildInterviewForm(), udfyldt fra deres egen rapport)
+    # i stedet for det tidligere lette alder+indkomst-overslag.
+    partner_netto_indbetaling: float | None = None
+    partner_fri_formue: float | None = None
+    partner_fri_formue_kapital_skat_pct: float | None = None
+    partner_kapital_skat_type: str | None = None
+    partner_saldi_overrides: list | None = None
 
 
 @app.post("/api/parametre")
@@ -1188,6 +1247,7 @@ async def gem_parametre(req: Parametre):
     if req.kommuneskat_pct is not None:      p["kommuneskat_pct"] = req.kommuneskat_pct
     if req.enlig is not None:                p["enlig"] = req.enlig
     if req.kapital_skat_type is not None:    p["kapital_skat_type"] = req.kapital_skat_type
+    if req.partner_kapital_skat_type is not None: p["partner_kapital_skat_type"] = req.partner_kapital_skat_type
     if req.inflation_pct is not None:        p["inflation_pct"] = req.inflation_pct
     if req.kirkeskat_pct is not None:        p["kirkeskat_pct"] = req.kirkeskat_pct
     if req.produkt_start_aldre is not None:  p["produkt_start_aldre"] = req.produkt_start_aldre
@@ -1213,19 +1273,14 @@ async def gem_parametre(req: Parametre):
     if req.saldi_overrides:
         profil = sessions[req.session_id].get("profil")
         if profil:
-            for ov in req.saldi_overrides:
-                nr    = str(ov.get("aftalenr") or "")
-                ptype = (ov.get("produkttype") or "").lower()
-                saldo = float(ov.get("saldo") or 0)
-                for pp in profil.get("pensionsprodukter", []):
-                    if (str(pp.get("aftalenr") or "") == nr and
-                            (pp.get("produkttype") or "").lower() == ptype):
-                        pp["opsparing"] = saldo
-                for o in profil.get("ordninger", []):
-                    if (str(o.get("aftalenr") or "") == nr and
-                            (o.get("produkttype") or "").lower() == ptype):
-                        o["opsparing"] = saldo
+            _anvend_saldi_overrides(profil, req.saldi_overrides)
             sessions[req.session_id]["profil_tekst"] = format_profil_til_tekst(profil)
+
+    if req.partner_saldi_overrides:
+        profil_partner = sessions[req.session_id].get("profil_partner")
+        if profil_partner:
+            _anvend_saldi_overrides(profil_partner, req.partner_saldi_overrides)
+            sessions[req.session_id]["profil_partner_tekst"] = format_profil_til_tekst(profil_partner)
 
     return {"success": True, "parametre": p}
 

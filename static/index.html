@@ -425,38 +425,29 @@
 #chart-panel-header:hover { background: #cfe0f5; }
 #chart-panel-header .ctitle { font-size: 0.82rem; font-weight: 600; color: #1a3a5c; }
 #chart-panel-toggle { font-size: 0.78rem; color: #5578a0; }
-/* max-height+overflow her (og IKKE kun på .person-col) sikrer at hele
-   panelet — inkl. #husstand-total/.chart-actions/#optimering-resultat, som
-   ligger UDENFOR .person-col — aldrig kan vokse sig ubegrænset højt og
-   klemme chat-området under sig (#chart-panel er flex-shrink:0). Dette er
-   en almindelig blok-boks (ikke selv et grid/flex-item), så max-height
-   fungerer normalt her uden nogen kollaps-risiko. */
+/* max-height+overflow her sikrer at hele panelet — inkl. faneblade og
+   #person-tab-panel-samlet/.chart-actions/#optimering-resultat — aldrig kan
+   vokse sig ubegrænset højt og klemme chat-området under sig (#chart-panel
+   er flex-shrink:0). */
 #chart-panel-body { padding: 16px 24px 18px; max-height: 78vh; overflow-y: auto; }
 .chart-wrap { position: relative; height: 260px; margin-bottom: 12px; }
 
-/* Split-screen: primær bruger og partner side om side, hver med egen scroll
-   (se person-col) — falder tilbage til stablet visning på smalle skærme.
-   Grid (ikke flex) undgår flexbox's "auto-minimum-size"-kollaps, hvor en
-   flex-item med overflow:auto og flex-basis 0 klapper sammen til højde 0
-   selvom dens indhold (og en eksplicit height) tilsiger andet.
-   .person-col skal have en KONKRET height (ikke max-height) — samme
-   kollaps-risiko gælder for grid-items, og en eksplicit værdi er det der
-   faktisk forhindrer den, ikke selve grid-vs-flex-valget. */
-#chart-split { display: grid; grid-template-columns: 1fr; gap: 20px; align-items: start; }
-#chart-split.dual { grid-template-columns: 1fr 1fr; }
-.person-col { min-width: 0; height: 48vh; overflow-y: auto; }
-#chart-split.dual .person-col + .person-col { border-left: 1px solid #c8d8e8; padding-left: 20px; }
-.person-col-title { font-size: 0.8rem; font-weight: 600; color: #1a3a5c; margin-bottom: 8px; }
-@media (max-width: 820px) {
-  /* To stablede 48vh-kolonner ville alene fylde 96vh — reducér når de
-     stables, så der stadig er plads til #husstand-total/knapperne under. */
-  #chart-split.dual { grid-template-columns: 1fr; }
-  #chart-split.dual .person-col { height: 32vh; }
-  #chart-split.dual .person-col + .person-col { border-left: none; padding-left: 0; border-top: 1px solid #c8d8e8; padding-top: 14px; }
+/* Faneblade: Dig / Partner / Samlet — kun ét diagram/tidslinje-par i DOM'en
+   ad gangen (person-tab-panel-chart genbruges og gengives på skift), så der
+   ikke er to samtidige, kæmpende scroll-/layout-kontekster at holde styr på. */
+#person-tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid #c8d8e8; }
+.person-tab {
+  border: none; background: transparent; padding: 8px 16px; font-size: 0.85rem;
+  color: #5578a0; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.person-tab:hover { color: #1a3a5c; }
+.person-tab.active { color: #1a3a5c; font-weight: 600; border-bottom-color: #1a3a5c; }
+#person-tab-panel-samlet {
+  padding: 4px 0 8px;
 }
 #husstand-total {
-  margin-top: 14px; padding: 10px 14px; background: #dceaf8; border-radius: 8px;
-  font-size: 0.85rem; color: #1a3a5c;
+  padding: 12px 14px; background: #dceaf8; border-radius: 8px;
+  font-size: 0.9rem; color: #1a3a5c;
 }
 
 /* Timeline */
@@ -558,23 +549,20 @@
     <span id="chart-panel-toggle">&#x25BC; Skjul</span>
   </div>
   <div id="chart-panel-body">
-    <div id="chart-split">
-      <div class="person-col" id="person-col-primary">
-        <div class="person-col-title" id="person-col-title-primary">Dig</div>
-        <div class="chart-wrap">
-          <canvas id="pension-chart"></canvas>
-        </div>
-        <div class="tl-wrap" id="timeline-container"></div>
-      </div>
-      <div class="person-col" id="person-col-partner" style="display:none">
-        <div class="person-col-title" id="person-col-title-partner">Partner</div>
-        <div class="chart-wrap">
-          <canvas id="pension-chart-partner"></canvas>
-        </div>
-        <div class="tl-wrap" id="timeline-container-partner"></div>
-      </div>
+    <div id="person-tabs" style="display:none">
+      <button class="person-tab active" id="person-tab-primary" onclick="switchPersonTab('primary')">Dig</button>
+      <button class="person-tab" id="person-tab-partner" onclick="switchPersonTab('partner')">Partner</button>
+      <button class="person-tab" id="person-tab-samlet" onclick="switchPersonTab('samlet')">Samlet</button>
     </div>
-    <div id="husstand-total" style="display:none"></div>
+    <div id="person-tab-panel-chart">
+      <div class="chart-wrap">
+        <canvas id="pension-chart"></canvas>
+      </div>
+      <div class="tl-wrap" id="timeline-container"></div>
+    </div>
+    <div id="person-tab-panel-samlet" style="display:none">
+      <div id="husstand-total"></div>
+    </div>
     <div class="chart-actions">
       <button class="chart-btn primary" onclick="opdaterAnalyse()">&#x21BB; Opdater analyse (Tabel 1-3)</button>
       <button class="chart-btn secondary" onclick="koerOptimering()">&#x1F50D; Find bedste udbetalingsrækkefølge</button>
@@ -1352,10 +1340,11 @@ Upload derefter PDF'en her øverst til højre.`,
           : 0.0,
       }),
     }).catch(() => null);
-    await loadAndRenderPartnerChart();
+    const lykkedes = await loadAndRenderPartnerChart();
     await _refreshPrimaryChartOnly();  // husstandskoblingen påvirker ofte også PRIMÆRENS egne tal
     _opdaterHusstandTotal();
-    if (status) { status.style.color = '#1a7a4a'; status.textContent = '✓ Partnerens analyse er beregnet — se diagrammet nedenfor.'; }
+    if (lykkedes) await switchPersonTab('partner');  // vis resultatet med det samme
+    if (status) { status.style.color = '#1a7a4a'; status.textContent = '✓ Partnerens analyse er beregnet — se fanebladet "Partner".'; }
     // loadAndRenderPartnerChart() henter kun diagram-data — den detaljerede
     // tekst-analyse (Tabel 1-3-ækvivalenten, allerede bygget server-side som
     // "## PARTNERENS UDBETALINGSANALYSE") bliver først vist når LLM'en rent
@@ -1996,10 +1985,13 @@ const CHART_COLORS = [
 const FP_COLOR  = '#f97316';
 const ATP_COLOR = '#eab308';
 let _chartInstance = null;
-let _chartInstancePartner = null;
 let _chartData = null;
 let _chartDataPartner = null;
 let _chartPanelOpen = true;
+// Hvilket faneblad ("Dig"/"Partner"/"Samlet") der er aktivt — afgør hvilken
+// side #timeline-container aktuelt viser, og dermed hvilke feltnavne et
+// træk skal poste under (se _collectPayload/_collectPartnerPayload).
+let _activeTab = 'primary';
 let _tlDrag = null;  // active drag state
 const MIN_RATEPENSION_AAR = 10;  // lovkrav: ratepension skal mindst udbetales over 10 år
 
@@ -2049,11 +2041,14 @@ let _refreshTimer = null;
 let _refreshPending = false;
 let _refreshIncludePanel = false;
 
-function _collectPayload(includePanel = false) {
+// Læser de aktuelt viste tl-track-elementer (kun ét sæt i DOM'en ad gangen —
+// faneblade, ikke split-screen) til {produktStartAldre, produktUdbAar}.
+// Kaldes kun meningsfuldt når #timeline-container rent faktisk viser DEN
+// side man tror den gør, se _activeTab-tjekkene i _collectPayload/
+// _collectPartnerPayload nedenfor.
+function _collectTimelineTracks() {
   const produktStartAldre = {};
   const produktUdbAar = {};
-  // Scopet til target="primary" — split-screen-diagrammet kan have partnerens
-  // egne tl-track-elementer i DOM'en samtidig (se _collectPartnerPayload).
   document.querySelectorAll('#timeline-container .tl-track[data-key]').forEach(track => {
     const key = track.dataset.key;
     if (!key) return;
@@ -2067,6 +2062,16 @@ function _collectPayload(includePanel = false) {
       if (!isNaN(start) && !isNaN(stop)) produktUdbAar[key] = stop - start;
     }
   });
+  return { produktStartAldre, produktUdbAar };
+}
+
+function _collectPayload(includePanel = false) {
+  // #timeline-container viser kun PRIMÆRENS egne produkter når den fane er
+  // aktiv — ellers ville et partner-træk (eller en panel-ændring foretaget
+  // mens partner-fanen er åben) fejlagtigt blive læst som primærens egne
+  // start-aldre. Se _collectPartnerPayload for den modsatte retning.
+  const { produktStartAldre, produktUdbAar } = _activeTab === 'primary'
+    ? _collectTimelineTracks() : { produktStartAldre: {}, produktUdbAar: {} };
   const produktIBuffer = {};
   document.querySelectorAll('[id^="iq_buffer_"]').forEach(inp => {
     const key = inp.dataset.key;
@@ -2153,11 +2158,15 @@ async function _runEngineRefresh() {
   }
 }
 
-// Henter og gengiver KUN primærens eget diagram (ingen partner-side-effects,
-// intet statusfelt) — brugt både af _runEngineRefresh ovenfor og af
-// partner-siden, når husstandskoblingen kræver at primærens tal også
-// genopfriskes. En stigende generations-tæller forhindrer at et forældet
-// svar (fra et kald der startede før et nyere) overskriver et friskere.
+// Henter primærens eget diagram-data ind i cachen (_chartData) — brugt både
+// af _runEngineRefresh ovenfor og af partner-siden, når husstandskoblingen
+// kræver at primærens tal også genopfriskes. Gengiver KUN det synlige
+// diagram/tidslinje når "Dig"-fanen faktisk er den aktive; ellers ville et
+// kald udløst fra partner-fanen (eller et vilkårligt panel-felt mens man
+// kigger på partner-fanen) overskrive det diagram brugeren rent faktisk ser
+// på med primærens data. En stigende generations-tæller forhindrer at et
+// forældet svar (fra et kald der startede før et nyere) overskriver et
+// friskere.
 async function _refreshPrimaryChartOnly() {
   if (!sessionId) return false;
   const egenGen = ++_primaryFetchGen;
@@ -2166,8 +2175,10 @@ async function _refreshPrimaryChartOnly() {
   if (!res?.ok) return false;
   _chartData = await res.json();
   if (egenGen !== _primaryFetchGen) return false;
-  renderChart(_chartData);
-  renderTimeline(_chartData);
+  if (_activeTab === 'primary') {
+    renderChart(_chartData);
+    renderTimeline(_chartData, 'primary');
+  }
   return true;
 }
 
@@ -2192,8 +2203,9 @@ async function loadAndRenderChart() {
   const res = await fetch(`/api/session/${sessionId}/engine`).catch(() => null);
   if (!res || !res.ok) return;
   _chartData = await res.json();
+  _activeTab = 'primary';
   renderChart(_chartData);
-  renderTimeline(_chartData);
+  renderTimeline(_chartData, 'primary');
   document.getElementById('chart-panel').style.display = 'block';
   // Fold parametre-panel så chat-området ikke klemmes
   const pb = document.getElementById('parametre-panel-body');
@@ -2203,30 +2215,26 @@ async function loadAndRenderChart() {
     if (pt) pt.textContent = '▶ Vis';
     _parametrePanelOpen = false;
   }
-  loadAndRenderPartnerChart();  // no-op (skjuler kolonnen) hvis der ingen partner-analyse er
+  loadAndRenderPartnerChart();  // no-op (skjuler fanebladene) hvis der ingen partner-analyse er
 }
 
-// ── Split-screen: partnerens egen, uafhængige udbetalingsplan ──────────────
-// Spejler _collectPayload/_runEngineRefresh/scheduleRefresh/loadAndRenderChart
-// ovenfor, men navngiver felterne partner_* og rammer /engine-partner i
-// stedet — se _byg_params_partner i app.py for hvorfor de to ALDRIG må dele
-// produkt-nøgle-namespace.
+// ── Faneblade: partnerens egen, uafhængige udbetalingsplan ─────────────────
+// Spejler _collectPayload/_runEngineRefresh/scheduleRefresh ovenfor, men
+// navngiver felterne partner_* og rammer /engine-partner i stedet — se
+// _byg_params_partner i app.py for hvorfor de to ALDRIG må dele produkt-
+// nøgle-namespace. Kun ÉT diagram/tidslinje-par er i DOM'en ad gangen (se
+// switchPersonTab) — _chartData/_chartDataPartner fungerer som cache for
+// hver sides seneste data, uanset hvilket faneblad der aktuelt er synligt.
 let _partnerRefreshTimer = null;
+let _partnerRefreshPending = false;
 let _partnerHarAnalyse = false;
 
 function _collectPartnerPayload() {
-  const produktStartAldre = {};
-  const produktUdbAar = {};
-  document.querySelectorAll('#timeline-container-partner .tl-track[data-key]').forEach(track => {
-    const key = track.dataset.key;
-    if (!key) return;
-    const start = parseInt(track.dataset.start);
-    if (!isNaN(start)) produktStartAldre[key] = start;
-    if (track.dataset.udbType === 'rate') {
-      const stop = parseInt(track.dataset.stop);
-      if (!isNaN(start) && !isNaN(stop)) produktUdbAar[key] = stop - start;
-    }
-  });
+  // Kun meningsfuldt når partner-fanen rent faktisk er den aktive (se
+  // _collectPayload for den modsatte retning) — #timeline-container viser
+  // ellers en helt anden persons produkter.
+  const { produktStartAldre, produktUdbAar } = _activeTab === 'partner'
+    ? _collectTimelineTracks() : { produktStartAldre: {}, produktUdbAar: {} };
   const payload = { session_id: sessionId };
   if (Object.keys(produktStartAldre).length) payload.partner_produkt_start_aldre = produktStartAldre;
   if (Object.keys(produktUdbAar).length)     payload.partner_produkt_udb_aar     = produktUdbAar;
@@ -2237,6 +2245,7 @@ let _partnerFetchGen = 0;
 
 async function _runPartnerEngineRefresh() {
   if (!sessionId) return;
+  _partnerRefreshPending = false;
   const status = document.getElementById('chart-status');
   if (status) { status.style.color = '#5578a0'; status.textContent = '⟳ Genberegner partner…'; }
 
@@ -2250,7 +2259,7 @@ async function _runPartnerEngineRefresh() {
   if (lykkedes) {
     // Husstandskoblingen betyder at partnerens ændring ofte også flytter
     // PRIMÆRENS egne tal (se kommentar ved _runEngineRefresh) — uden dette
-    // ville "Dig"-kolonnen og husstands-summen vise forældede tal efter et
+    // ville "Dig"-fanen og husstands-summen vise forældede tal efter et
     // partner-træk.
     await _refreshPrimaryChartOnly();
     _opdaterHusstandTotal();
@@ -2267,31 +2276,31 @@ async function _runPartnerEngineRefresh() {
 function schedulePartnerRefresh(delayMs = 300) {
   if (!sessionId || !_chartDataPartner) return;
   clearTimeout(_partnerRefreshTimer);
+  _partnerRefreshPending = true;
   _partnerRefreshTimer = setTimeout(_runPartnerEngineRefresh, delayMs);
 }
 
-// Returnerer true/false for om partneren rent faktisk har en aktiv analyse
-// bagefter — bruges af _runPartnerEngineRefresh til at afgøre succes/fejl,
-// og af loadAndRenderChart/opdaterAnalyse som et rent "opdatér om muligt"-kald.
-// En stigende generations-tæller forhindrer at et forældet svar (fra et kald
-// der blev startet før et nyere) overskriver et friskere — ellers kan to
-// overlappende kald (fx den indledende load + en efterfølgende brugerhandling)
-// lande i vilkårlig rækkefølge og efterlade en ældre partner-tidslinje synlig.
+// Henter partnerens data ind i cachen (_chartDataPartner) og opdaterer
+// faneblads-synligheden — gengiver kun selve diagrammet/tidslinjen når
+// partner-fanen faktisk er den aktive, ellers overskriver det den fane
+// brugeren lige nu kigger på. Returnerer true/false for succes, brugt af
+// _runPartnerEngineRefresh. En stigende generations-tæller forhindrer at et
+// forældet svar (fra et kald der startede før et nyere) overskriver et
+// friskere — to overlappende kald kunne ellers lande i vilkårlig rækkefølge.
 async function loadAndRenderPartnerChart() {
   if (!sessionId) return false;
   const egenGen = ++_partnerFetchGen;
   const res = await fetch(`/api/session/${sessionId}/engine-partner`).catch(() => null);
   if (egenGen !== _partnerFetchGen) return false;  // et nyere kald er startet siden
-  const col = document.getElementById('person-col-partner');
-  const split = document.getElementById('chart-split');
+  const tabs = document.getElementById('person-tabs');
   if (!res || !res.ok) {
     // Ingen fuld partner-profil/civilstand/pensionsalder sat endnu — skjul
-    // kolonnen igen (fx hvis partneren netop er blevet fjernet) og gå
-    // tilbage til én-kolonne-layoutet.
+    // fanebladene igen (fx hvis partneren netop er blevet fjernet) og gå
+    // tilbage til det primære, enkelte diagram.
     _partnerHarAnalyse = false;
     _chartDataPartner = null;
-    if (col) col.style.display = 'none';
-    if (split) split.classList.remove('dual');
+    if (tabs) tabs.style.display = 'none';
+    if (_activeTab !== 'primary') await switchPersonTab('primary');
     _opdaterHusstandTotal();
     return false;
   }
@@ -2299,31 +2308,64 @@ async function loadAndRenderPartnerChart() {
   if (egenGen !== _partnerFetchGen) return false;
   _chartDataPartner = data;
   _partnerHarAnalyse = true;
-  if (col) col.style.display = '';
-  if (split) split.classList.add('dual');
-  renderChart(_chartDataPartner, { canvasId: 'pension-chart-partner', instanceKey: 'partner' });
-  renderTimeline(_chartDataPartner, { containerId: 'timeline-container-partner', target: 'partner' });
+  if (tabs) tabs.style.display = 'flex';
+  if (_activeTab === 'partner') {
+    renderChart(_chartDataPartner);
+    renderTimeline(_chartDataPartner, 'partner');
+  }
   _opdaterHusstandTotal();
   return true;
+}
+
+// Skifter det synlige faneblad. Flusher først en evt. VENTENDE (debounced,
+// endnu ikke afsendt) ændring på fanen vi forlader — ellers ville den fyre
+// senere mod #timeline-container's NYE indhold (den fane vi skifter TIL) og
+// poste den forkerte persons trukne værdier under den forkerte persons felter.
+async function switchPersonTab(side) {
+  if (side === _activeTab) return;
+  if (_activeTab === 'primary' && _refreshPending) {
+    clearTimeout(_refreshTimer);
+    await _runEngineRefresh();
+  } else if (_activeTab === 'partner' && _partnerRefreshPending) {
+    clearTimeout(_partnerRefreshTimer);
+    await _runPartnerEngineRefresh();
+  }
+
+  _activeTab = side;
+  document.querySelectorAll('.person-tab').forEach(btn => btn.classList.remove('active'));
+  document.getElementById(`person-tab-${side}`)?.classList.add('active');
+
+  const chartPanel  = document.getElementById('person-tab-panel-chart');
+  const samletPanel = document.getElementById('person-tab-panel-samlet');
+  if (side === 'samlet') {
+    if (chartPanel)  chartPanel.style.display  = 'none';
+    if (samletPanel) samletPanel.style.display = '';
+    _opdaterHusstandTotal();
+    return;
+  }
+  if (chartPanel)  chartPanel.style.display  = '';
+  if (samletPanel) samletPanel.style.display = 'none';
+  const data = side === 'partner' ? _chartDataPartner : _chartData;
+  if (data) {
+    renderChart(data);
+    renderTimeline(data, side);
+  }
 }
 
 function _opdaterHusstandTotal() {
   const el = document.getElementById('husstand-total');
   if (!el) return;
   if (!_partnerHarAnalyse || !_chartData || !_chartDataPartner) {
-    el.style.display = 'none';
+    el.innerHTML = '';
     return;
   }
   const egen    = _chartData.jaevn_netto_mdr || 0;
   const partner = _chartDataPartner.jaevn_netto_mdr || 0;
-  el.style.display = '';
   el.innerHTML = `<strong>Samlet husstand:</strong> ${(egen + partner).toLocaleString('da-DK')} kr/mdr ` +
     `<span style="opacity:0.75">(dig: ${egen.toLocaleString('da-DK')} + partner: ${partner.toLocaleString('da-DK')})</span>`;
 }
 
-function renderChart(data, opts = {}) {
-  const canvasId = opts.canvasId || 'pension-chart';
-  const instanceKey = opts.instanceKey || 'primary';
+function renderChart(data) {
   const tabel        = data.tabel;
   const produkter    = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
   const engangs      = data.engangsbeloeb || [];
@@ -2588,11 +2630,10 @@ function renderChart(data, opts = {}) {
     });
   }
 
-  const ctx = document.getElementById(canvasId).getContext('2d');
-  const bestaaendeInstans = instanceKey === 'partner' ? _chartInstancePartner : _chartInstance;
-  if (bestaaendeInstans) bestaaendeInstans.destroy();
+  const ctx = document.getElementById('pension-chart').getContext('2d');
+  if (_chartInstance) _chartInstance.destroy();
 
-  const nyInstans = new Chart(ctx, {
+  _chartInstance = new Chart(ctx, {
     type: 'bar',
     data: { labels, datasets },
     options: {
@@ -2641,16 +2682,17 @@ function renderChart(data, opts = {}) {
       },
     },
   });
-  if (instanceKey === 'partner') _chartInstancePartner = nyInstans;
-  else _chartInstance = nyInstans;
 }
 
 // ── Timeline ──────────────────────────────────────────────────────────────────────────
 
-function renderTimeline(data, opts = {}) {
-  const containerId = opts.containerId || 'timeline-container';
-  const target = opts.target || 'primary';
-  const container = document.getElementById(containerId);
+// target: 'primary' eller 'partner' — kun ÉT sæt tidslinje-elementer er i
+// DOM'en ad gangen (faneblade, ikke split-screen), så der er ikke behov for
+// id-unikke suffikser mere; target bruges udelukkende til at afgøre hvilke
+// felt-navne (produkt_* vs partner_produkt_*) et efterfølgende træk skal
+// poste, se tlApplyChanges.
+function renderTimeline(data, target = 'primary') {
+  const container = document.getElementById('timeline-container');
   if (!container) return;
 
   const produkter = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
@@ -2710,15 +2752,14 @@ function renderTimeline(data, opts = {}) {
         ? `Venstre kant: juster start · Højre kant: juster udbetalingsperiode (min. 10 år) · Midten: flyt · ${startAge}–${stopAge} år`
         : `Venstre kant: juster start · Midten: flyt · fra ${startAge} år, livsvarig`;
 
-    const elId = `${target}-${idx}`;
-    html += `<div class="tl-row" data-key="${escapeAttr(prod.key)}" data-idx="${elId}">
+    html += `<div class="tl-row" data-key="${escapeAttr(prod.key)}" data-idx="${idx}">
       <div class="tl-row-label" title="${label}">${label}</div>
-      <div class="tl-track" id="tl-track-${elId}"
+      <div class="tl-track" id="tl-track-${idx}"
            data-agemin="${ageMin}" data-agemax="${ageMax}" data-span="${span}"
            data-start="${startAge}" data-stop="${stopAge}"
            data-minage="${minDragAge}" data-target="${target}"
            data-is-engangs="${isEngangs}" data-udb-type="${prod.udb_type || ''}" data-key="${escapeAttr(prod.key)}">
-        <div class="tl-bar" id="tl-bar-${elId}" data-idx="${elId}"
+        <div class="tl-bar" id="tl-bar-${idx}" data-idx="${idx}"
              style="left:${leftPct}%;width:${widthPct}%;background:${color}"
              title="${barTitle}">
           <span class="tl-bar-label" style="padding:0 4px;pointer-events:none;overflow:hidden;font-size:0.6rem">${barLabel}</span>
@@ -2757,19 +2798,17 @@ function renderTimeline(data, opts = {}) {
   html += `</div>`;  // tl-track-area
   container.innerHTML = html;
 
-  // Event delegation — capture-phase listeners på container (overlever innerHTML-reset).
-  // idx er en "target-N"-streng (fx "partner-2"), ikke et rent tal — den bruges
-  // udelukkende til at genopbygge de unikke element-id'er, aldrig aritmetisk.
+  // Event delegation — capture-phase listeners på container (overlever innerHTML-reset)
   const _tlHandleDown = (e) => {
     const bar = e.target.closest('.tl-bar[data-idx]');
     if (!bar) return;
     e.stopPropagation();
-    tlBarDown(e, bar.dataset.idx);
+    tlBarDown(e, parseInt(bar.dataset.idx));
   };
   const _tlHandleTouch = (e) => {
     const bar = e.target.closest('.tl-bar[data-idx]');
     if (!bar) return;
-    tlBarTouch(e, bar.dataset.idx);
+    tlBarTouch(e, parseInt(bar.dataset.idx));
   };
   // Fjern evt. gamle listeners inden re-binding
   if (container._tlHandleDown) {

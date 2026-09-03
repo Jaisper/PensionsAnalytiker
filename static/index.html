@@ -680,9 +680,13 @@
     document.getElementById('parametre-panel-body').innerHTML = '';
     panel.style.display = 'none';
 
+    // chart-panel starter TOM/skjult (ligesom parametre-panel ovenfor) — der
+    // er intet at vise før enten en tidligere session har data (håndteret af
+    // loadAndRenderPartnerChart()-kaldet nedenfor) eller "Beregn partnerens
+    // analyse" er kørt (se submitPartnerInterviewForm, som selv viser den).
     document.getElementById('person-tabs').style.display = 'none';
     document.getElementById('chart-panel-header').style.display = 'none';
-    document.getElementById('chart-panel').style.display = 'block';
+    document.getElementById('chart-panel').style.display = 'none';
 
     // Samme 3 knapper som primærens egen analyse (Tabel 1-3 / optimering /
     // gem) — omdirigeret til partner-varianterne, der arbejder på partnerens
@@ -705,7 +709,9 @@
       if (tabs.style.display !== 'none') tabs.style.display = 'none';
     }).observe(tabs, { attributes: true, attributeFilter: ['style'] });
 
-    loadAndRenderPartnerChart().catch(() => null);
+    loadAndRenderPartnerChart().then(lykkedes => {
+      if (lykkedes) document.getElementById('chart-panel').style.display = 'block';
+    }).catch(() => null);
   }
 
   async function initSamletOnlyView() {

@@ -1350,6 +1350,25 @@ async def get_engine_data_partner(session_id: str):
     })
 
 
+@app.get("/api/session/{session_id}/analyse-tekst-partner")
+async def get_analyse_tekst_partner(session_id: str):
+    """Partnerens Tabel 1-3-ækvivalent som ren, allerede-formateret markdown —
+    UDEN at gå via en LLM-chat-tur. Partnerens standalone-fane har ingen egen
+    chat (den ville dele session['messages'] med primærens chat, med reelle
+    rækkefølge-/rolleproblemer hvis begge faner er åbne samtidig), så samme
+    format_engine_til_llm()-tekst der normalt injiceres i primærens chat-
+    kontekst returneres her direkte til klientens renderMarkdown()."""
+    if session_id not in sessions:
+        raise HTTPException(404, "Session ikke fundet")
+    session = sessions[session_id]
+    if session.get("profil") and session.get("beregningsparametre"):
+        _kør_engine(session_id)
+    result = session.get("engine_output_partner")
+    if not result:
+        return JSONResponse({"error": "Ingen partner-beregning endnu"}, status_code=404)
+    return JSONResponse({"tekst": format_engine_til_llm(result)})
+
+
 @app.post("/api/optimer")
 async def optimer_udbetalingsplan(req: dict):
     session_id = req.get("session_id")
@@ -1358,35 +1377,55 @@ async def optimer_udbetalingsplan(req: dict):
     session = sessions[session_id]
     params  = session.get("beregningsparametre", {})
     profil  = session.get("profil")
-    if not profil or not params.get("pensionsalder"):
-        return JSONResponse({"success": False, "besked": "Ingen profil/pensionsalder endnu — gennemfør interviewet først."}, status_code=400)
 
     import copy
-    profil_kopi = copy.deepcopy(profil)
-    kapital_skat = params.get("kapital_skat_type") or _kapital_skat_type_fra_historik(session)
+
+    # for_partner: samme optimering, men kørt for PARTNERENS egne produkter i
+    # stedet for primærens — sekventering.optimer() er allerede symmetrisk i
+    # hvem der optimeres vs. hvem der blot bidrager indkomst til koblingen
+    # (profil/parametre vs. profil_partner/parametre_partner), så det er kun
+    # et spørgsmål om hvilket par der sendes som hvad.
+    for_partner = bool(req.get("for_partner"))
+    if for_partner:
+        profil_partner_raa = session.get("profil_partner")
+        params_egen = _byg_params_partner(params) if profil_partner_raa else None
+        if not profil_partner_raa or not params_egen:
+            return JSONResponse({"success": False, "besked": "Partnerens profil/pensionsalder er ikke sat endnu."}, status_code=400)
+        profil_optimeres_kopi = copy.deepcopy(profil_partner_raa)
+        kapital_skat = params.get("partner_kapital_skat_type")
+        profil_kobling_kopi = copy.deepcopy(profil)
+        params_kobling = params
+    else:
+        if not profil or not params.get("pensionsalder"):
+            return JSONResponse({"success": False, "besked": "Ingen profil/pensionsalder endnu — gennemfør interviewet først."}, status_code=400)
+        profil_optimeres_kopi = copy.deepcopy(profil)
+        kapital_skat = params.get("kapital_skat_type") or _kapital_skat_type_fra_historik(session)
+        params_egen = params
+        # Samme husstands-detektion som _kør_engine — uden den ville optimeringen
+        # score kandidater mod et husstands-uafhængigt (forkert) indtægtsgrundlag
+        # for enhver bruger der har uploadet en fuld partner-profil. Partnerens
+        # egen, manuelt justerede tidslinje (split-screen-diagrammet) indgår i
+        # den koblede baseline via _byg_params_partner, ellers ville optimeringen
+        # score mod partnerens u-justerede default-plan.
+        profil_partner_raa = session.get("profil_partner")
+        params_kobling = _byg_params_partner(params) if profil_partner_raa else None
+        profil_kobling_kopi = copy.deepcopy(profil_partner_raa) if params_kobling is not None else None
+
     if kapital_skat:
-        for p in profil_kopi.get("pensionsprodukter", []):
+        for p in profil_optimeres_kopi.get("pensionsprodukter", []):
             if "kapital" in (p.get("produkttype") or "").lower():
                 p["skat_type"] = kapital_skat
 
-    # Samme husstands-detektion som _kør_engine — uden den ville optimeringen
-    # score kandidater mod et husstands-uafhængigt (forkert) indtægtsgrundlag
-    # for enhver bruger der har uploadet en fuld partner-profil. Partnerens
-    # egen, manuelt justerede tidslinje (split-screen-diagrammet) indgår i
-    # den koblede baseline via _byg_params_partner, ellers ville optimeringen
-    # score mod partnerens u-justerede default-plan.
-    profil_partner = session.get("profil_partner")
-    params_partner = _byg_params_partner(params) if profil_partner else None
     kwargs_partner = {
-        "profil_partner": copy.deepcopy(profil_partner),
-        "parametre_partner": params_partner,
-    } if params_partner is not None else {}
+        "profil_partner": profil_kobling_kopi,
+        "parametre_partner": params_kobling,
+    } if params_kobling is not None else {}
 
     haard_minimum = req.get("haard_minimum_mdr")
     obj = sekventering.Objektiv(
         haard_minimum_mdr=float(haard_minimum) if haard_minimum is not None else None,
     )
-    res = sekventering.optimer(profil_kopi, params, obj, **kwargs_partner)
+    res = sekventering.optimer(profil_optimeres_kopi, params_egen, obj, **kwargs_partner)
 
     if not sekventering.har_loesning(res):
         return JSONResponse({

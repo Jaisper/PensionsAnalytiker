@@ -671,9 +671,12 @@
       <span id="partner_upload_status">Ingen rapport uploadet</span>`;
 
     // INGEN parameterfelter (heller ikke alder/indkomst) vises før rapporten
-    // rent faktisk er indlæst — panelet forbliver skjult indtil da.
+    // rent faktisk er indlæst — panelet forbliver skjult indtil da. Selve
+    // panel-headeren (titel + vis/skjul-knap) holdes UÆNDRET/synlig — samme
+    // toggleParametrePanel() som primæren bruger — så brugeren kan folde
+    // formularen ud igen efter at have submittet (den kollapser automatisk,
+    // se submitPartnerInterviewForm), rette et felt og genberegne.
     const panel = document.getElementById('parametre-panel');
-    document.getElementById('parametre-panel-header').style.display = 'none';
     document.getElementById('parametre-panel-body').innerHTML = '';
     panel.style.display = 'none';
 

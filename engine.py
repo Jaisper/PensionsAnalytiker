@@ -667,8 +667,18 @@ def generer_udbetalingstabel(
             # forkert kalenderår når de to personers fødselsdage falder
             # forskelligt på året (se kommentar ved alder_nu_kalenderaar).
             kalenderaar = date.today().year + (alder - alder_nu_kalenderaar)
-            if skat_params.partner_indkomst_pr_kalenderaar is not None and kalenderaar in skat_params.partner_indkomst_pr_kalenderaar:
-                indtaegtsgrundlag_aar += skat_params.partner_indkomst_pr_kalenderaar[kalenderaar]
+            pik = skat_params.partner_indkomst_pr_kalenderaar
+            if pik is not None and kalenderaar in pik:
+                indtaegtsgrundlag_aar += pik[kalenderaar]
+            elif pik and kalenderaar > max(pik):
+                # Partnerens EGEN tabel er sluttet her (typisk fordi deres
+                # tidsbegrænsede ratepension er udløbet), men deres FP/ATP/
+                # livsvarige pension fortsætter reelt ud over det — brug det
+                # seneste kendte år som et forsigtigt "uændret niveau"-skøn i
+                # stedet for at falde helt til 0, hvilket ellers ville
+                # undervurdere husstandens indtægtsgrundlag netop i de sidste,
+                # typisk vigtigste år af den anden parts udbetalingsforløb.
+                indtaegtsgrundlag_aar += pik[max(pik)]
             else:
                 indtaegtsgrundlag_aar += skat_params.partner_indkomst_aar
 

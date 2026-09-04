@@ -3329,20 +3329,28 @@ function renderOptimeringsResultat(data, ingenAendring = false, forPartner = fal
   const usikkerNote = data.usikker_venteprocent
     ? `<div style="margin-top:6px;font-size:0.78rem;color:#916800">⚠ Denne plan udskyder folkepension — ventetillægget er et forenklet 6%/år-skøn, ikke en juridisk præcis beregning.</div>`
     : '';
+  // husstand_advarsel: optimeringen ser KUN på denne persons eget beløb —
+  // den kan ikke se at en højere plan for denne person hæver det kombinerede
+  // indtægtsgrundlag nok til at skære mere i partnerens pensionstillæg end
+  // denne person vinder. Backend tjekker dette for den VINDENDE kandidat og
+  // sender en advarsel her hvis husstandens SAMLEDE beløb rent faktisk falder.
+  const husstandNote = data.husstand_advarsel
+    ? `<div style="margin-top:6px;font-size:0.78rem;color:#c0392b">⚠ ${data.husstand_advarsel}</div>`
+    : '';
   el.style.display = '';
   el.innerHTML = ingenAendring
     ? `
     <div style="margin-top:10px;padding:10px 12px;background:#f0f5fa;border-radius:8px;font-size:0.85rem">
       <strong>Din nuværende plan er allerede den bedste</strong> — intet at anvende
       (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${stikproeve})
-      ${usikkerNote}
+      ${usikkerNote}${husstandNote}
     </div>`
     : `
     <div style="margin-top:10px;padding:10px 12px;background:#f0f5fa;border-radius:8px;font-size:0.85rem">
       <strong>Bedste udbetalingsrækkefølge fundet</strong> — fast månedsbeløb ${Math.round(b.jaevn_netto_mdr).toLocaleString('da-DK')} kr/mdr
       (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${stikproeve})
       <button class="chart-btn primary" style="margin-left:10px" onclick="anvendOptimering(${forPartner})">Anvend denne plan</button>
-      ${usikkerNote}
+      ${usikkerNote}${husstandNote}
     </div>`;
 }
 

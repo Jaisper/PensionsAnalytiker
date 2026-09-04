@@ -311,6 +311,7 @@ Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsræk
 - Hvis resultatet er "målet kan ikke nås": sig det direkte og eksplicit — foreslå ALDRIG den næstbedste plan som var den en løsning, det ville modsige selve formålet med den hårde grænse.
 - Hvis brugeren har fået foreslået udskudt folkepension (`folkepension_opsaettelse_aar > 0`): gør klart at ventetillægget (6 %/år) er et **forenklet skøn**, ikke den juridisk præcise ventetillægsberegning — den rigtige regel er mere kompleks.
 - Nævn at optimeringen kun ser på brugerens egne produkter — en eventuel partners egen pension indgår ikke i søgningen.
+- Hvis svaret indeholder `husstand_advarsel`: gengiv den TYDELIGT og fremhævet, ikke som en fodnote — den betyder at den foreslåede plan forbedrer brugerens EGET beløb, men gør husstandens SAMLEDE beløb ringere, fordi den ændrer partnerens pensionstillæg/tillægsprocent. Foreslå ALDRIG at bruge "Anvend denne plan" uden at nævne dette, hvis feltet er sat.
 
 ## NØGLESATSER 2026
 - Ratepension loft: 68.700 kr/år | Aldersopsparing: 9.100 kr/år (60.900 kr under 7 år til folkepensionsalder, PBL §16)
@@ -1474,6 +1475,48 @@ async def optimer_udbetalingsplan(req: dict):
         })
 
     b = res.bedste
+
+    # Optimeringens objektiv er UDELUKKENDE den optimerede persons eget
+    # jaevn_niveau_realt (score() i sekventering.py) — partnerens bidrag til
+    # koblingen holdes fast som en KONSTANT under hele søgningen (bevidst,
+    # ellers ville hver kandidat kræve en fuld husstandskørsel — se
+    # sekventering.py's docstring). Det betyder søgningen er blind for at en
+    # højere plan for denne person kan hæve det KOMBINEREDE indtægtsgrundlag
+    # nok til at skære i partnerens pensionstillæg/tillægsprocent mere end
+    # denne person vinder — en reel husstands-forringelse der ville blive
+    # scoret som en forbedring. For den VINDENDE kandidat (kun ÉN, ikke hver
+    # af de tusindvis undervejs) tjekkes derfor eksplicit om husstandens
+    # SAMLEDE beløb rent faktisk stiger, ikke kun denne persons eget.
+    husstand_advarsel = None
+    if params_kobling is not None and profil_kobling_kopi is not None:
+        try:
+            husstand_foer = husstand.beregn_husstand(
+                profil_optimeres_kopi, params_egen, profil_kobling_kopi, params_kobling,
+            )
+            params_egen_ny_plan = {
+                **params_egen,
+                "produkt_start_aldre": b.produkt_start_aldre,
+                "produkt_udb_aar": b.produkt_udb_aar,
+                "folkepension_opsaettelse_aar": b.folkepension_opsaettelse_aar,
+            }
+            husstand_efter = husstand.beregn_husstand(
+                profil_optimeres_kopi, params_egen_ny_plan, profil_kobling_kopi, params_kobling,
+            )
+            total_foer  = husstand_foer["a"].get("jaevn_netto_mdr", 0) + husstand_foer["b"].get("jaevn_netto_mdr", 0)
+            total_efter = husstand_efter["a"].get("jaevn_netto_mdr", 0) + husstand_efter["b"].get("jaevn_netto_mdr", 0)
+            if total_efter < total_foer - 1:  # -1: undgå at ramle på afrundingsstøj
+                husstand_advarsel = (
+                    f"Denne plan forbedrer dit eget beløb, men jeres SAMLEDE husstandsindkomst "
+                    f"falder med ca. {round(total_foer - total_efter):,} kr/mdr, fordi den ændrer "
+                    f"jeres partners pensionstillæg/tillægsprocent. Optimeringen ser kun på dit "
+                    f"eget beløb, ikke husstandens samlede."
+                ).replace(",", ".")
+        except Exception:
+            # Denne ekstra kontrol må aldrig vælte selve optimerings-svaret —
+            # udebliver den, mangler brugeren blot advarslen, ikke resultatet.
+            import traceback
+            logging.error("Husstands-tjek af vindende optimeringsplan fejlede: %s", traceback.format_exc())
+
     return JSONResponse({
         "success": True,
         "evalueret": res.evalueret,
@@ -1486,6 +1529,7 @@ async def optimer_udbetalingsplan(req: dict):
             "jaevn_netto_mdr": round(b.jaevn_netto_mdr),
         },
         "foelsomhed": {k: round(v) for k, v in res.foelsomhed.items()},
+        "husstand_advarsel": husstand_advarsel,
         # satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR er eksplicit uverificeret
         # (forenklet 6%/år-skøn, ikke en juridisk præcis ventetillægsberegning)
         # — når den bedste plan rent faktisk bygger på at udskyde folkepension,

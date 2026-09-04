@@ -2355,7 +2355,7 @@ let _partnerRefreshTimer = null;
 let _partnerRefreshPending = false;
 let _partnerHarAnalyse = false;
 
-function _collectPartnerPayload() {
+function _collectPartnerPayload(includePanel = false) {
   // Kun meningsfuldt når partner-fanen rent faktisk er den aktive (se
   // _collectPayload for den modsatte retning) — #timeline-container viser
   // ellers en helt anden persons produkter.
@@ -2364,6 +2364,36 @@ function _collectPartnerPayload() {
   const payload = { session_id: sessionId };
   if (Object.keys(produktStartAldre).length) payload.partner_produkt_start_aldre = produktStartAldre;
   if (Object.keys(produktUdbAar).length)     payload.partner_produkt_udb_aar     = produktUdbAar;
+  if (includePanel) {
+    // Samme felter/mønster som _collectPayload(true) for primæren — uden
+    // dette blev "↻ Opdater analyse" i partner-fanen ved med kun at sende
+    // tidslinje-træk, og enhver rettelse af afkast/inflation/kommune/
+    // kirkeskat/fri formue i det genåbnede panel blev stille ignoreret.
+    const iq1  = document.getElementById('iq1');
+    const iq2  = document.getElementById('iq2');
+    const iq2b = document.getElementById('iq2b');
+    const iq3  = document.getElementById('iq3');
+    const iq4  = document.getElementById('iq4');
+    const iq7  = document.getElementById('iq7');
+    const iq9  = document.getElementById('iq9');
+    const iq9b = document.getElementById('iq9b');
+    if (iq1?.value)  payload.partner_netto_indbetaling = Math.round((parseFloat(iq1.value) || 0) * 12);
+    if (iq2?.value)  payload.partner_afkast_pct    = parseFloat(iq2.value);
+    if (iq2b?.value) payload.partner_inflation_pct = parseFloat(iq2b.value);
+    if (iq3?.value)  payload.partner_pensionsalder  = parseInt(iq3.value);
+    if (iq4?.value)  payload.partner_udbetaling_aar = parseInt(iq4.value);
+    if (iq7)         payload.partner_kommuneskat_pct = kommuneskatPctFor(iq7.value);
+    const kirkeskatChecked = document.getElementById('iq_kirkeskat')?.checked ?? true;
+    const kirkeskatInput   = document.getElementById('iq_kirkeskat_pct');
+    if (document.getElementById('iq_kirkeskat')) {
+      payload.partner_kirkeskat_pct = kirkeskatChecked ? (parseFloat(kirkeskatInput?.value) || 0.7) : 0.0;
+    }
+    const frieMidler = parseFloat(iq9?.value);
+    if (frieMidler > 0) {
+      payload.partner_fri_formue = frieMidler;
+      payload.partner_fri_formue_kapital_skat_pct = parseFloat(iq9b?.value) || 28;
+    }
+  }
   return payload;
 }
 
@@ -3156,7 +3186,7 @@ async function opdaterPartnerAnalyseTekst() {
   await fetch('/api/parametre', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(_collectPartnerPayload()),
+    body: JSON.stringify(_collectPartnerPayload(true)),
   }).catch(() => null);
 
   await loadAndRenderPartnerChart();
@@ -3187,18 +3217,28 @@ function renderOptimeringsResultat(data, ingenAendring = false, forPartner = fal
   const b = data.bedste;
   const stikproeve = data.mulige_kombinationer > data.evalueret
     ? ` (stikprøve af ${data.mulige_kombinationer.toLocaleString('da-DK')} mulige)` : '';
+  // usikker_venteprocent: den bedste (eller den nuværende, hvis ingenAendring)
+  // plan hviler på et UVERIFICERET 6%/år-skøn for folkepensions-ventetillæg
+  // (satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR) — skal vises uanset om det
+  // er primærens eller partnerens optimering, ikke kun via en LLM-instruktion
+  // primæren måske aldrig beder om og partneren slet ikke har adgang til.
+  const usikkerNote = data.usikker_venteprocent
+    ? `<div style="margin-top:6px;font-size:0.78rem;color:#916800">⚠ Denne plan udskyder folkepension — ventetillægget er et forenklet 6%/år-skøn, ikke en juridisk præcis beregning.</div>`
+    : '';
   el.style.display = '';
   el.innerHTML = ingenAendring
     ? `
     <div style="margin-top:10px;padding:10px 12px;background:#f0f5fa;border-radius:8px;font-size:0.85rem">
       <strong>Din nuværende plan er allerede den bedste</strong> — intet at anvende
       (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${stikproeve})
+      ${usikkerNote}
     </div>`
     : `
     <div style="margin-top:10px;padding:10px 12px;background:#f0f5fa;border-radius:8px;font-size:0.85rem">
       <strong>Bedste udbetalingsrækkefølge fundet</strong> — fast månedsbeløb ${Math.round(b.jaevn_netto_mdr).toLocaleString('da-DK')} kr/mdr
       (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${stikproeve})
       <button class="chart-btn primary" style="margin-left:10px" onclick="anvendOptimering(${forPartner})">Anvend denne plan</button>
+      ${usikkerNote}
     </div>`;
 }
 

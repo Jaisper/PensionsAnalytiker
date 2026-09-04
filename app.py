@@ -313,11 +313,11 @@ Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsræk
 
 ## NØGLESATSER 2026
 - Ratepension loft: 68.700 kr/år | Aldersopsparing: 9.100 kr/år (60.900 kr under 7 år til folkepensionsalder, PBL §16)
-- AM-bidrag: 8% | Bundskat: 12,01%
-- Progressiv topskat (personlig indkomst, hvert trin har sit eget skatteloft jf. PSL §19):
+- AM-bidrag: 8% | Bundskat: 12,01% | Personfradrag: ca. 49.700 kr/år (2025-niveau genbrugt som skøn — IKKE bekræftet mod Skatteministeriets 2026-tal, nævn dette hvis det efterspørges)
+- Progressiv topskat (personlig indkomst, hvert trin har sit eget skatteloft jf. PSL §19, EKSKL. AM-bidrag og kirkeskat):
   mellemskat 7,5% over 641.200 kr (loft 44,57%) | topskat 7,5% over 777.900 kr (loft 52,07%) | top-topskat 5% over 2.592.700 kr (loft 57,07%)
-- Folkepension: 7.955 kr/mdr | ATP: ca. 1.825 kr/mdr (begge i dagens takst — satsreguleres nominelt med den valgte inflationsantagelse hvert år frem, så deres KØBEKRAFT holdes konstant, i stedet for at blive udhulet over et 20-30-årigt forløb) | PAL-skat: 15,3%
-- Pensionstillæg max (enlig): 104.748 kr/år — modregnes 30,9% af indtægtsgrundlag over 99.200 kr/år (gift: 53.604 kr/år, 32%/16% over 198.800 kr)
+- Folkepension: 7.544 kr/mdr | ATP: ca. 1.825 kr/mdr (begge i dagens takst — satsreguleres nominelt med den valgte inflationsantagelse hvert år frem, så deres KØBEKRAFT holdes konstant, i stedet for at blive udhulet over et 20-30-årigt forløb) | PAL-skat: 15,3%
+- Pensionstillæg max (enlig): 104.748 kr/år — modregnes 30,9% af indtægtsgrundlag over 99.200 kr/år (gift: 53.604 kr/år, 32%/16% over 198.800 kr). Pensionstillægget er ALMINDELIG skattepligtig personlig indkomst ligesom grundbeløbet — det tal du ser er allerede efter skat, ikke et bruttobeløb.
 - Ældrecheck: op til 26.900 kr/år (skattepligtig) | Mediecheck: uverificeret sats, nævn dette hvis den vises
 """
 
@@ -1393,8 +1393,15 @@ async def optimer_udbetalingsplan(req: dict):
             return JSONResponse({"success": False, "besked": "Partnerens profil/pensionsalder er ikke sat endnu."}, status_code=400)
         profil_optimeres_kopi = copy.deepcopy(profil_partner_raa)
         kapital_skat = params.get("partner_kapital_skat_type")
-        profil_kobling_kopi = copy.deepcopy(profil)
-        params_kobling = params
+        # Koblings-konteksten (primærens profil) er valgfri her, i modsætning
+        # til else-grenen — partnerens EGEN optimering skal kunne køre selvom
+        # primæren endnu ikke har gennemført sit eget interview. Uden dette
+        # tjek ville generer_udbetalingstabel(profil, params) længere nede
+        # ramme et KeyError på params["pensionsalder"] og give et uhåndteret
+        # 500-svar i stedet for blot at optimere partneren uden husstandskobling.
+        har_primaer = bool(profil and params.get("pensionsalder"))
+        profil_kobling_kopi = copy.deepcopy(profil) if har_primaer else None
+        params_kobling = params if har_primaer else None
     else:
         if not profil or not params.get("pensionsalder"):
             return JSONResponse({"success": False, "besked": "Ingen profil/pensionsalder endnu — gennemfør interviewet først."}, status_code=400)
@@ -1448,6 +1455,12 @@ async def optimer_udbetalingsplan(req: dict):
             "jaevn_netto_mdr": round(b.jaevn_netto_mdr),
         },
         "foelsomhed": {k: round(v) for k, v in res.foelsomhed.items()},
+        # satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR er eksplicit uverificeret
+        # (forenklet 6%/år-skøn, ikke en juridisk præcis ventetillægsberegning)
+        # — når den bedste plan rent faktisk bygger på at udskyde folkepension,
+        # skal ENHVER forbruger af dette svar (UI, LLM, en fremtidig API-klient)
+        # kunne se det uden at skulle kende sekventering.py's interne satser.
+        "usikker_venteprocent": bool(b.folkepension_opsaettelse_aar > 0),
     })
 
 

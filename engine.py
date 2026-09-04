@@ -14,17 +14,19 @@ from typing import Optional
 import satser_2026
 
 # ── 2025/2026-satser ─────────────────────────────────────────────────────────
-# Topskat, skatteloft og pensionstillæggets gamle flade satser er flyttet til
-# satser_2026.py (progressiv 2026-struktur + verificeret pensionstillæg/
-# tillægsprocent). De resterende konstanter her har intet 2026-modstykke i
-# den porterede regelpakke.
+# Topskat, skatteloft, pensionstillæg/tillægsprocent og folkepensionens
+# grundbeløb er flyttet til satser_2026.py (progressiv 2026-struktur +
+# verificerede satser) — brug satser_2026.FOLKEPENSION_GRUNDBELOEB_AAR, IKKE
+# en lokal konstant her, ellers driver denne fil og regelpakken fra hinanden
+# uden nogen fejlmeddelelse (det er præcis det der skete med den tidligere
+# FOLKEPENSION_MDR=7.955, en forældet 2025-sats). De resterende konstanter
+# her har intet 2026-modstykke i den porterede regelpakke.
 
 AM_BIDRAG                         = 0.08
 BUNDSKAT                          = 0.1201
 KOMMUNESKAT_DEFAULT               = 0.250
 KIRKESKAT_DEFAULT                 = 0.007
 
-FOLKEPENSION_MDR                  = 7_955      # kr/mdr grundbeløb 2025
 ATP_MDR_STANDARD                  = 1_825      # kr/mdr estimat
 
 RATEPENSION_LOFT                  = 63_100
@@ -131,10 +133,15 @@ def _progressiv_skat_total_aar(
         spor = []
     mellemskat = topskat = toptopskat = 0.0
     hoejeste_loft = 0.0
+    ramte_trin_sats = 0.0  # sum af .sats for hvert ramt trin — læses fra
+                           # satser_2026.PROGRESSION selv, ikke hardkodet her,
+                           # så et rettet trin-sats aldrig kan komme ud af trit
+                           # med skatteloft-sammenligningen nedenfor.
     for trin in satser_2026.PROGRESSION:
         beloeb = max(0.0, personlig_indkomst - trin.bundgraense) * trin.sats
         if beloeb > 0:
             hoejeste_loft = trin.skatteloft
+            ramte_trin_sats += trin.sats
             spor.append(trin.id)
         if trin.id == "skat.mellemskat":
             mellemskat = beloeb
@@ -145,12 +152,7 @@ def _progressiv_skat_total_aar(
 
     loft_nedslag = 0.0
     if hoejeste_loft > 0:
-        marginalsats = (
-            BUNDSKAT + kommunal_sats
-            + (0.075 if mellemskat > 0 else 0.0)
-            + (0.075 if topskat > 0 else 0.0)
-            + (0.05 if toptopskat > 0 else 0.0)
-        )
+        marginalsats = BUNDSKAT + kommunal_sats + ramte_trin_sats
         if marginalsats > hoejeste_loft:
             overskydende = marginalsats - hoejeste_loft
             trin_grundlag = max(0.0, personlig_indkomst - satser_2026.PROGRESSION[0].bundgraense)
@@ -175,13 +177,27 @@ def _progressiv_skat_andel(
     return total * (dette_pi / total_pi)
 
 
+def _personfradrag_andel(dette_pi: float, total_pi: float, flad_sats: float) -> float:
+    """Personfradraget nedsætter bundskat+kommuneskat+kirkeskat af hele den
+    personlige indkomst, ikke af den enkelte indkomststrøm — samme forholds-
+    mæssige fordeling som _progressiv_skat_andel, og samme cap (kan aldrig
+    give en større skattelettelse end selve indkomsten kan bære)."""
+    if total_pi <= 0:
+        return 0.0
+    fradrag_effekt = min(total_pi, satser_2026.PERSONFRADRAG_AAR.vaerdi) * flad_sats
+    return fradrag_effekt * (dette_pi / total_pi)
+
+
 def _netto_s_med_am(
     brutto: float, skat: SkatParametre, total_pi: float, dette_pi: float,
     strict: bool = False, spor: list[str] | None = None,
 ) -> float:
     basis = BUNDSKAT + skat.kommuneskat + skat.kirkeskat
     netto = brutto * (1 - AM_BIDRAG) * (1 - basis)
-    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat + skat.kirkeskat, strict, spor)
+    # Skatteloftet (PSL § 19, jf. satser_2026.py's egen kommentar) gælder den
+    # samlede marginalsats EKSKL. kirkeskat — kun kommuneskat sendes videre.
+    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat, strict, spor)
+    netto += _personfradrag_andel(dette_pi, total_pi, basis)
     return netto
 
 
@@ -191,7 +207,9 @@ def _netto_s_uden_am(
 ) -> float:
     basis = BUNDSKAT + skat.kommuneskat + skat.kirkeskat
     netto = brutto * (1 - basis)
-    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat + skat.kirkeskat, strict, spor)
+    # Se _netto_s_med_am — skatteloftet er eksklusive kirkeskat.
+    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat, strict, spor)
+    netto += _personfradrag_andel(dette_pi, total_pi, basis)
     return netto
 
 
@@ -369,6 +387,14 @@ def generer_udbetalingstabel(
     alder_raw = person.get("alder")
     alder_nu  = int(alder_raw) if alder_raw else ((date.today().year - foedselsaar) if foedselsaar else 0)
     n         = max(0, pensionsalder - alder_nu)
+    # Fødselsdags-UAFHÆNGIG alder — bruges KUN til at oversætte alder<->kalenderår
+    # på tværs af to personer (husstandskoblingen nedenfor). alder_nu ovenfor er
+    # fødselsdags-justeret (tæller ned 1 hvis fødselsdagen ikke er passeret i år),
+    # hvilket er korrekt og selv-konsistent for DENNE persons egen satsregulering/
+    # tidslinje, men ville give en kalenderårs-forskydning på præcis ét år i
+    # forhold til partnerens tilsvarende opslag (se husstand.py), hvis de to
+    # personers fødselsdage ikke er passeret på samme tidspunkt af året.
+    alder_nu_kalenderaar = (date.today().year - foedselsaar) if foedselsaar else alder_nu
 
     fp_alder    = folkepension_alder(foedselsaar) if foedselsaar else 67
 
@@ -571,7 +597,7 @@ def generer_udbetalingstabel(
         # grænse for den forventede regulering, ikke en juridisk præcis sats.
         aar_fra_nu       = max(0, alder - alder_nu) if alder_nu else (alder - pensionsalder)
         sats_escalering  = (1 + inflation_pct) ** aar_fra_nu
-        fp_grundbeloeb_mdr = FOLKEPENSION_MDR * sats_escalering
+        fp_grundbeloeb_mdr = (satser_2026.FOLKEPENSION_GRUNDBELOEB_AAR.vaerdi / 12) * sats_escalering
         atp_mdr_esc        = atp_mdr * sats_escalering
 
         # ATP starter altid ved den almindelige fp_alder — folkepensions-
@@ -594,10 +620,54 @@ def generer_udbetalingstabel(
             and (p["stopper_ved_alder"] is None or alder < p["stopper_ved_alder"])
         )
 
+        # Er partneren selv folkepensionist DETTE kalenderår? Afgør både hvilket
+        # af de tre aftrapningstrin der gælder (se _vaelg_pensionstillaeg_regel)
+        # og om partnerens indkomst tælles med i indtægtsgrundlaget nedenfor —
+        # kun i de år partneren selv er folkepensionist, for at undgå at gætte
+        # på den langt mere komplekse modregning af en erhvervsaktiv partners løn.
+        partner_er_fp = False
+        if skat_params.partner_foedselsaar is not None:
+            partner_alder_dette_aar = (
+                (date.today().year - skat_params.partner_foedselsaar) + (alder - alder_nu_kalenderaar)
+            )
+            partner_er_fp = partner_alder_dette_aar >= folkepension_alder(skat_params.partner_foedselsaar)
+
+        # Indtægtsgrundlag for BÅDE pensionstillæg og tillægsprocent inkluderer
+        # ATP (jf. satser_2026's indtaegtsgrundlag) — en tidligere udeladt post.
+        # ATP er upåvirket af en evt. folkepensions-opsætning (samme som
+        # `har_atp` andre steder i denne løkke) — bruger derfor har_atp, IKKE
+        # har_fp, som i opsættelses-år ville udelukke allerede udbetalt ATP.
+        indtaegtsgrundlag_aar = privat_s_brutto + (atp_mdr_esc * 12 if har_atp else 0.0)
+        if har_fp and partner_er_fp:
+            # alder_nu_kalenderaar (fødselsdags-uafhængig), IKKE alder_nu — skal
+            # matche den samme konvention husstand.py brugte til at bygge
+            # partner_indkomst_pr_kalenderaar's nøgler, ellers rammer opslaget
+            # forkert kalenderår når de to personers fødselsdage falder
+            # forskelligt på året (se kommentar ved alder_nu_kalenderaar).
+            kalenderaar = date.today().year + (alder - alder_nu_kalenderaar)
+            if skat_params.partner_indkomst_pr_kalenderaar is not None and kalenderaar in skat_params.partner_indkomst_pr_kalenderaar:
+                indtaegtsgrundlag_aar += skat_params.partner_indkomst_pr_kalenderaar[kalenderaar]
+            else:
+                indtaegtsgrundlag_aar += skat_params.partner_indkomst_aar
+
+        # Pensionstillægget er skattepligtig personlig indkomst på lige fod med
+        # grundbeløbet (samme § 29-ydelse, kun opdelt i to komponenter) — beregnes
+        # HER, FØR total_pi bygges, så det korrekt tæller med i beskatnings-
+        # grundlaget i stedet for (som tidligere) at blive lagt urørt/skattefrit
+        # oveni til sidst. tillaeg_mdr forbliver BRUTTO-beløbet — det er hvad
+        # modregnings-narrativet og hardship-tjekket længere nede sammenligner
+        # imod — den faktiske, beskattede kr/mdr hedder tillaeg_mdr_netto.
+        if har_fp:
+            tillaeg_aar = folkepension_pensionstillaeg_aar(indtaegtsgrundlag_aar, skat_params, partner_er_fp) * fp_venteprocent
+        else:
+            tillaeg_aar = 0.0
+        tillaeg_mdr = tillaeg_aar / 12
+
         pi_med_am  = privat_s_brutto * (1 - AM_BIDRAG)
         pi_uden_am = (
             (fp_grundbeloeb_mdr * 12 * fp_venteprocent if har_fp else 0.0)
             + (atp_mdr_esc * 12 if har_atp else 0.0)
+            + tillaeg_aar
         )
         total_pi   = pi_med_am + pi_uden_am
 
@@ -622,31 +692,6 @@ def generer_udbetalingstabel(
                 "skat_type":  p["skat_type"],
             }
 
-        # Er partneren selv folkepensionist DETTE kalenderår? Afgør både hvilket
-        # af de tre aftrapningstrin der gælder (se _vaelg_pensionstillaeg_regel)
-        # og om partnerens indkomst tælles med i indtægtsgrundlaget nedenfor —
-        # kun i de år partneren selv er folkepensionist, for at undgå at gætte
-        # på den langt mere komplekse modregning af en erhvervsaktiv partners løn.
-        partner_er_fp = False
-        if skat_params.partner_foedselsaar is not None:
-            partner_alder_dette_aar = (
-                (date.today().year - skat_params.partner_foedselsaar) + (alder - alder_nu)
-            )
-            partner_er_fp = partner_alder_dette_aar >= folkepension_alder(skat_params.partner_foedselsaar)
-
-        # Indtægtsgrundlag for BÅDE pensionstillæg og tillægsprocent inkluderer
-        # ATP (jf. satser_2026's indtaegtsgrundlag) — en tidligere udeladt post.
-        # ATP er upåvirket af en evt. folkepensions-opsætning (samme som
-        # `har_atp` andre steder i denne løkke) — bruger derfor har_atp, IKKE
-        # har_fp, som i opsættelses-år ville udelukke allerede udbetalt ATP.
-        indtaegtsgrundlag_aar = privat_s_brutto + (atp_mdr_esc * 12 if har_atp else 0.0)
-        if har_fp and partner_er_fp:
-            kalenderaar = date.today().year + (alder - alder_nu)
-            if skat_params.partner_indkomst_pr_kalenderaar is not None and kalenderaar in skat_params.partner_indkomst_pr_kalenderaar:
-                indtaegtsgrundlag_aar += skat_params.partner_indkomst_pr_kalenderaar[kalenderaar]
-            else:
-                indtaegtsgrundlag_aar += skat_params.partner_indkomst_aar
-
         if har_atp:
             atp_netto_aar = _netto_s_uden_am(float(atp_mdr_esc * 12), skat_params, total_pi, float(atp_mdr_esc * 12))
             atp_mdr_netto = atp_netto_aar / 12
@@ -659,9 +704,10 @@ def generer_udbetalingstabel(
             fp_mdr_netto  = fp_netto_aar / 12
             # Ventetillægget (Fase C, forenklet — se satser_2026.py) forhøjer
             # også det allerede aftrapnings-justerede pensionstillæg, ligesom
-            # i den porterede kilde (samspil.ts: "tillaeg * venteprocent").
-            tillaeg_aar   = folkepension_pensionstillaeg_aar(indtaegtsgrundlag_aar, skat_params, partner_er_fp) * fp_venteprocent
-            tillaeg_mdr   = tillaeg_aar / 12
+            # i den porterede kilde (samspil.ts: "tillaeg * venteprocent") —
+            # ventetillægget er allerede indregnet i tillaeg_aar ovenfor.
+            tillaeg_netto_aar = _netto_s_uden_am(tillaeg_aar, skat_params, total_pi, tillaeg_aar) if tillaeg_aar > 0 else 0.0
+            tillaeg_mdr_netto = tillaeg_netto_aar / 12
 
             tillaegsprocent = beregn_tillaegsprocent(indtaegtsgrundlag_aar, skat_params.enlig)
             ydelser = beregn_tillaegsstyrede_ydelser(tillaegsprocent, likvid_formue)
@@ -679,13 +725,14 @@ def generer_udbetalingstabel(
             # uverificeret sammen med selve satsen).
             mediecheck_mdr   = ydelser["mediecheck"] / 12
         else:
-            fp_mdr_netto = tillaeg_mdr = 0.0
+            fp_mdr_netto = 0.0
+            tillaeg_mdr_netto = 0.0
             tillaegsprocent = 0
             aeldrecheck_mdr = mediecheck_mdr = 0.0
 
         total_netto_mdr = (
             sum(d["mdr_netto"] for d in produkt_data.values())
-            + fp_mdr_netto + tillaeg_mdr + atp_mdr_netto
+            + fp_mdr_netto + tillaeg_mdr_netto + atp_mdr_netto
             + aeldrecheck_mdr + mediecheck_mdr
         )
 
@@ -718,6 +765,7 @@ def generer_udbetalingstabel(
             "atp_mdr_brutto":  float(atp_mdr_esc) if har_atp else 0.0,
             "atp_mdr_netto":   atp_mdr_netto,
             "tillaeg_mdr":     tillaeg_mdr,
+            "tillaeg_mdr_netto": tillaeg_mdr_netto,
             "indtaegtsgrundlag_aar": indtaegtsgrundlag_aar,
             "tillaegsprocent": tillaegsprocent,
             "aeldrecheck_mdr":   aeldrecheck_mdr,
@@ -1206,7 +1254,8 @@ def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder:
     total_pi        = pi_med_am + pi_uden_am
     basis_skat      = total_pi * (BUNDSKAT + kom_pct / 100 + kirke_pct)
 
-    progressiv_skat = _progressiv_skat_total_aar(total_pi, kom_pct / 100 + kirke_pct)
+    # Skatteloftet er eksklusive kirkeskat (samme rettelse som _netto_s_*).
+    progressiv_skat = _progressiv_skat_total_aar(total_pi, kom_pct / 100)
 
     netto_mdr = row["total_netto_mdr"]
 

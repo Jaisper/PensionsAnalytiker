@@ -53,6 +53,17 @@ PROGRESSION: list[Progressionstrin] = [
     Progressionstrin("skat.toptopskat", "Top-topskat", 0.05, 2_592_700, 0.5707),
 ]
 
+# ── Personfradrag ─────────────────────────────────────────────────────────────
+# Skattefrit bundfradrag der trækkes fra INDEN bundskat/kommuneskat/kirkeskat
+# beregnes — savnet helt i den porterede pension-core-kilde (som ikke selv
+# modellerer det), så 2025-niveauet genbruges som et forsigtigt skøn indtil
+# det 2026-tal Skatteministeriet fastsætter kan indsættes og verificeres.
+PERSONFRADRAG_AAR = Sats(
+    "skat.personfradrag", 49_700,
+    "2025-niveau (ej porteret fra pension-core) — skøn, ikke bekræftet mod Skatteministeriets 2026-tal",
+    verificeret=False,
+)
+
 # ── Folkepension grundbeløb ───────────────────────────────────────────────────
 FOLKEPENSION_GRUNDBELOEB_AAR = Sats("fp.grundbeloeb", 90_528, "Satser 2026 (7.544 kr./md.)")
 

@@ -37,10 +37,20 @@ def skat_params_for_person(
     genbrugelig for én side ad gangen (fx sekventeringsoptimeringen, der
     kun søger over den ene persons produkter og derfor kun behøver
     partnerens indkomst udregnet ÉN gang, ikke pr. kandidat)."""
-    alder_nu_partner = int(profil_partner.get("person", {}).get("alder") or 0)
+    foedselsaar_partner = _foedselsaar_fra_profil(profil_partner)
+    # VIGTIGT: skal bruge SAMME alder-konvention som engine.py's partner_er_fp-
+    # tjek (date.today().year − foedselsaar, IKKE fødselsdags-justeret
+    # person.alder) — ellers nøgles kalenderårene her til én person's
+    # fødselsdags-justerede alder, mens engine.py afgør hvornår partneren
+    # bliver folkepensionist ud fra den u-justerede årsdifference, og de to
+    # kan forskydes ét kalenderår for en person hvis fødselsdag endnu ikke er
+    # passeret i år.
+    alder_nu_partner = (
+        (date.today().year - foedselsaar_partner) if foedselsaar_partner
+        else int(profil_partner.get("person", {}).get("alder") or 0)
+    )
     solo_partner = generer_udbetalingstabel(profil_partner, parametre_partner)
     indkomst_partner_pr_aar = _indtaegtsgrundlag_pr_kalenderaar(solo_partner, alder_nu_partner)
-    foedselsaar_partner = _foedselsaar_fra_profil(profil_partner)
     return _skat_params_med_partner(parametre_selv, foedselsaar_partner, indkomst_partner_pr_aar)
 
 

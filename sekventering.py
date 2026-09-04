@@ -248,7 +248,14 @@ def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: 
         dimensioner.append([("start", key, a) for a in sorted(interval)])
         noegler.append(f"start:{key}")
         if pr["udb_type"] == "rate":
-            periode_interval = set(STANDARD_PERIODE_INTERVAL) | {pr["udb_aar"]}
+            # pr["udb_aar"] er PDF-udledt (engine._udled_udbetalingsaar tæller
+            # blot antal år i et aldersinterval) og bærer intet lovligheds-
+            # tjek med sig — uden klampningen her ville en registreret periode
+            # under MIN_RATEPENSION_UDB_AAR (fx "65-72 år" = 8) blive en
+            # fuldgyldig, foreslåelig kandidatværdi i selve søgningen, i strid
+            # med docstringens løfte om samme 10-års-gulv som UI'ets træk.
+            baseline_periode = max(pr["udb_aar"], MIN_RATEPENSION_UDB_AAR)
+            periode_interval = set(STANDARD_PERIODE_INTERVAL) | {baseline_periode}
             dimensioner.append([("periode", key, p) for p in sorted(periode_interval)])
             noegler.append(f"periode:{key}")
     opsaettelse_interval = sorted(set(STANDARD_OPSAETTELSE) | {nuvaerende_opsaettelse})
@@ -347,7 +354,11 @@ def _default_vektor(baseline_produkter: list[dict], nuvaerende_opsaettelse: int)
             continue
         delvektor.append(("start", pr["key"], pr["start_alder"]))
         if pr["udb_type"] == "rate":
-            delvektor.append(("periode", pr["key"], pr["udb_aar"]))
+            # Samme klampning som _byg_soegerum — ellers indeholder denne
+            # "nuværende plan"-vektor en periode-værdi der slet ikke findes i
+            # søgerummets dimension, og de to vektorer holder op med at være
+            # positions-/værdi-konsistente (se docstring ovenfor).
+            delvektor.append(("periode", pr["key"], max(pr["udb_aar"], MIN_RATEPENSION_UDB_AAR)))
     return tuple(delvektor) + (("opsaet", None, nuvaerende_opsaettelse),)
 
 
@@ -410,10 +421,16 @@ def score(
 
     # Et fuldstændigt indkomst-hul (fx før pensionsalder, eller hvis ALLE
     # produkter er udskudt forbi et givet år) skal disqualificere uanset
-    # hvor højt det udjævnede niveau ellers ser ud.
+    # hvor højt det udjævnede niveau ellers ser ud. total_netto_mdr dækker
+    # kun LØBENDE indkomst — et engangsbeløb der lander netop dette år
+    # (row["engangs_netto"]) er lige så reelt en indtægt det år, og uden
+    # dette tjek ville enhver lump-sum-baseret tidlig-pension-bro (inkl.
+    # brugerens egen, allerede fungerende plan) fejlagtigt blive kasseret.
     pensionsalder = resultat["pensionsalder"]
     for row in resultat["tabel"]:
-        if row["alder"] >= pensionsalder and row["total_netto_mdr"] <= 0:
+        if (row["alder"] >= pensionsalder
+                and row["total_netto_mdr"] <= 0
+                and row.get("engangs_netto", 0.0) <= 0):
             return float("-inf"), 0.0
 
     return jaevn_niveau, jaevn_niveau

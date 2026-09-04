@@ -335,7 +335,23 @@ def _engine_cache_key(session: dict) -> str:
         "kirkeskat_pct":      params.get("kirkeskat_pct"),
         "enlig":              params.get("enlig"),
         "kapital_skat_type":  params.get("kapital_skat_type"),
+        # _kør_engine falder tilbage til dette (chat-udledte) svar når feltet
+        # ovenfor ikke er sat — uden det her ville et frit formuleret chat-svar
+        # på spørgsmål 5 (fx "ja, den blev konverteret i 2013") ikke udløse
+        # nogen genberegning, fordi selve param-feltet aldrig ændrer sig.
+        "kapital_skat_historik": _kapital_skat_type_fra_historik(session),
         "inflation_pct":      params.get("inflation_pct"),
+        # Manglede tidligere — primærens netto_indbetaling/engangs_buffer_skat_pct
+        # ændrer det beregnede resultat lige så meget som partnerens tilsvarende
+        # felter (som ALLEREDE er dækket nedenfor via _PARTNER_OVERRIDE_KEYS),
+        # men blev ikke selv talt med, så en rettet indbetaling kunne stille
+        # blive vist med det gamle tal efter "Opdater analyse".
+        "netto_indbetaling":  params.get("netto_indbetaling"),
+        "engangs_buffer_skat_pct": params.get("engangs_buffer_skat_pct"),
+        # Se _anvend_saldi_overrides — saldi-rettelser muterer profilen IN
+        # PLACE og ændrer derfor ikke id(profil)/id(profil_partner) nedenfor
+        # alene; denne tæller er den faktiske invalideringskilde for dem.
+        "saldi_version":      session.get("_saldi_version", 0),
         "produkt_start_aldre": json.dumps(params.get("produkt_start_aldre", {}), sort_keys=True),
         "produkt_i_buffer":   json.dumps(params.get("produkt_i_buffer", {}), sort_keys=True),
         "loenvaekst_pct":     params.get("loenvaekst_pct"),
@@ -348,11 +364,11 @@ def _engine_cache_key(session: dict) -> str:
         "folkepension_opsaettelse_aar": params.get("folkepension_opsaettelse_aar"),
         "partner_pensionsalder": params.get("partner_pensionsalder"),
         "partner_kapital_skat_type": params.get("partner_kapital_skat_type"),
-        # partner_saldi_overrides er IKKE med her, af samme grund som primærens
-        # saldi_overrides heller ikke er: begge muterer profilen IN PLACE (og
-        # bliver aldrig selv gemt som et param-felt), så id(profil) i cache-
-        # nøglen nedenfor ikke ændres af overriden alene — uændret, præ-
-        # eksisterende adfærd, ikke noget nyt her.
+        # saldi_overrides/partner_saldi_overrides selv er IKKE med her — de
+        # bliver aldrig gemt som et param-felt, kun anvendt med det samme (se
+        # gem_parametre) — men deres EFFEKT er dækket af "saldi_version"
+        # ovenfor, som netop findes fordi de muterer profilen IN PLACE og
+        # derfor ikke selv ændrer id(profil)/id(profil_partner) nedenfor.
         # De partner_*-overrides — samme liste _byg_params_partner() bruger,
         # så et felt der tæller for beregningen aldrig kan glemmes her (en
         # glemt cache-nøgle er en STILLE fejl: uændret hash -> gammel,
@@ -429,8 +445,13 @@ _PARTNER_OVERRIDE_KEYS = (
 # aldrig primærens. De har hver deres partner_*-override i
 # _PARTNER_OVERRIDE_KEYS ovenfor; kun uden den (intet sat) gælder engine.py's
 # egne 0-fallbacks. loenvaekst_pct har intet UI-spørgsmål og derfor ingen
-# partner-override overhovedet.
-_PRIMÆR_KUN_KEYS = ("netto_indbetaling", "fri_formue", "fri_formue_kapital_skat_pct", "loenvaekst_pct")
+# partner-override overhovedet. kapital_skat_type hører også kun til
+# primæren — den har sin egen partner_kapital_skat_type (anvendt direkte i
+# _kør_engine/optimer, uden om denne generiske liste, ligesom kapital_skat_type
+# selv er) — uden den her ville partnerens params-kopi ellers arve primærens
+# svar på Q5 som en "fornuftig default", hvilket er forkert for et rent
+# personligt faktum (om PARTNERENS kapitalpension blev konverteret i 2013).
+_PRIMÆR_KUN_KEYS = ("netto_indbetaling", "fri_formue", "fri_formue_kapital_skat_pct", "loenvaekst_pct", "kapital_skat_type")
 
 
 def _anvend_saldi_overrides(profil: dict, overrides: list) -> None:
@@ -598,7 +619,12 @@ def _get_dynamic_context(session_id: str) -> str:
             f"- Udbetalingsperiode: {params.get('udbetaling_aar', 30)} år",
             f"- Kommuneskat: {params.get('kommuneskat_pct', 'ikke oplyst')}%",
             f"- Kirkeskat: {params.get('kirkeskat_pct', 0.7)}%",
-            f"- Status: {'Enlig' if params.get('enlig', True) else 'Par/samlevende'}",
+            # _civilstand_fra_params (ikke den rå, forældede 'enlig'-flag alene)
+            # — ellers viste denne linje "Enlig" for enhver bruger der har sat
+            # civilstand via partner-fanen uden nogensinde at have rørt det
+            # gamle enlig-felt, selvom den faktiske beregning (format_engine_
+            # til_llm, som læser skat_params.enlig) korrekt viser "Par".
+            f"- Status: {'Enlig' if _civilstand_fra_params(params) != 'gift_samlevende' else 'Par/samlevende'}",
         ]
         if params.get("inflation_pct"):
             lines.append(f"- Inflation (realværdi): {params['inflation_pct']}%")
@@ -653,6 +679,16 @@ def _get_dynamic_context(session_id: str) -> str:
             f"Tæller IKKE med i topskat-grundlag for pension.)\n\n"
         ).replace(",", ".")
 
+    # Partnerens egen produktliste (uploadet via den selvstændige Partner-fane)
+    # — uden denne blok kendte modellen KUN partnerens beregnede Tabel 1-3
+    # (fra engine_tekst ovenfor), aldrig deres faktiske ordninger/selskaber,
+    # så et spørgsmål som "hvilke ordninger har min partner?" ikke kunne
+    # besvares selvom profilen rent faktisk ligger i sessionen.
+    partner_profil_blok = ""
+    partner_profil_tekst = session.get("profil_partner_tekst")
+    if partner_profil_tekst:
+        partner_profil_blok = f"## PARTNERENS PENSIONSPROFIL\n{partner_profil_tekst}\n\n"
+
     return (
         f"## TIDLIGSTE PENSIONSALDER\n{tidligste} år\n\n"
         + forsikring_blok
@@ -660,7 +696,8 @@ def _get_dynamic_context(session_id: str) -> str:
         + f"## SPM6_FORDELING\n{spm6_fordeling}\n\n"
         + f"## BEREGNEDE PARAMETRE\n{parametre_tekst}\n\n"
         + f"## BEREGNET PENSIONSANALYSE\n{engine_tekst}\n\n"
-        + f"## PENSIONSPROFIL\n{profil_tekst}\n"
+        + f"## PENSIONSPROFIL\n{profil_tekst}\n\n"
+        + partner_profil_blok
     )
 
 
@@ -1275,12 +1312,17 @@ async def gem_parametre(req: Parametre):
         if profil:
             _anvend_saldi_overrides(profil, req.saldi_overrides)
             sessions[req.session_id]["profil_tekst"] = format_profil_til_tekst(profil)
+            # Overriden muterer profilen IN PLACE, så id(profil) i cache-nøglen
+            # ikke ændres af det alene — uden denne tæller ville en rettet
+            # saldo blive stille ignoreret ved næste "Opdater analyse".
+            sessions[req.session_id]["_saldi_version"] = sessions[req.session_id].get("_saldi_version", 0) + 1
 
     if req.partner_saldi_overrides:
         profil_partner = sessions[req.session_id].get("profil_partner")
         if profil_partner:
             _anvend_saldi_overrides(profil_partner, req.partner_saldi_overrides)
             sessions[req.session_id]["profil_partner_tekst"] = format_profil_til_tekst(profil_partner)
+            sessions[req.session_id]["_saldi_version"] = sessions[req.session_id].get("_saldi_version", 0) + 1
 
     return {"success": True, "parametre": p}
 

@@ -49,7 +49,19 @@ def skat_params_for_person(
         (date.today().year - foedselsaar_partner) if foedselsaar_partner
         else int(profil_partner.get("person", {}).get("alder") or 0)
     )
-    solo_partner = generer_udbetalingstabel(profil_partner, parametre_partner)
+    # SOLO skal betyde solo: hvis parametre_partner stadig bærer Fase B's
+    # flade partner_alder/partner_indkomst_aar (fx fordi "parametre_partner"
+    # her reelt ER den anden persons egne, rå beregningsparametre — se
+    # beregn_husstand, hvor A's OG B's parametre-dicts skiftevis spiller
+    # begge roller), ville generer_udbetalingstabel (skat_params=None) selv
+    # folde et GÆT om "partneren" ind i denne kørsels indtægtsgrundlag, og
+    # den rigtige partners reelle indkomst ville blive lagt oveni et gæt om
+    # den samme partner i stedet for at erstatte det.
+    parametre_partner_solo = {
+        k: v for k, v in parametre_partner.items()
+        if k not in ("partner_alder", "partner_indkomst_aar")
+    }
+    solo_partner = generer_udbetalingstabel(profil_partner, parametre_partner_solo)
     indkomst_partner_pr_aar = _indtaegtsgrundlag_pr_kalenderaar(solo_partner, alder_nu_partner)
     return _skat_params_med_partner(parametre_selv, foedselsaar_partner, indkomst_partner_pr_aar)
 

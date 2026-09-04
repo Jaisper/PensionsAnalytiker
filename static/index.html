@@ -724,7 +724,7 @@
 
     const wrap = document.createElement('div');
     wrap.id = 'samlet-standalone-view';
-    wrap.style.cssText = 'max-width:640px;margin:24px auto;padding:0 20px;';
+    wrap.style.cssText = 'max-width:960px;margin:24px auto;padding:0 20px;';
     document.body.insertBefore(wrap, document.getElementById('parametre-panel'));
     wrap.innerHTML = '<p style="color:#5578a0">Henter jeres analyser…</p>';
 
@@ -759,11 +759,115 @@
           <div style="font-size:0.78rem;color:#5578a0;margin-top:2px">jævnt niveau, pensionsalder ${partnerRes.pensionsalder ?? '—'}</div>
         </div>
       </div>
-      <div style="background:#dceaf8;border-radius:10px;padding:16px 18px">
+      <div style="background:#dceaf8;border-radius:10px;padding:16px 18px;margin-bottom:18px">
         <div style="font-size:0.85rem;color:#1a3a5c">Samlet husstand</div>
         <div style="font-size:1.6rem;font-weight:700;color:#1a3a5c">${fmt(egen + partner)} kr/mdr</div>
       </div>
-      <p style="font-size:0.76rem;color:#888;margin-top:14px">Begge beløb er allerede beregnet med jeres koblede pensionstillæg/tillægsprocent — det er ikke to uafhængige overslag lagt sammen.</p>`;
+      <div style="background:white;border:1px solid #dde6ee;border-radius:10px;padding:16px 18px 10px">
+        <div style="font-size:0.85rem;font-weight:600;color:#1a3a5c;margin-bottom:8px">Samlet udbetalingsdiagram — alle ordninger, begge personer</div>
+        <div class="chart-wrap"><canvas id="samlet-chart"></canvas></div>
+      </div>
+      <p style="font-size:0.76rem;color:#888;margin-top:14px">Begge beløb er allerede beregnet med jeres koblede pensionstillæg/tillægsprocent — det er ikke to uafhængige overslag lagt sammen. Diagrammet er justeret til kalenderår (ikke alder), da I ikke nødvendigvis har samme alder.</p>`;
+
+    renderSamletChart(egenRes, partnerRes);
+  }
+
+  let _chartInstanceSamlet = null;
+
+  // Kalenderårs-justeret (IKKE alder — de to personer har typisk forskellig
+  // alder) stablet søjlediagram med hvert produkt fra BEGGE personer. Samme
+  // alder->kalenderår-konvention som engine.py/husstand.py bruger internt
+  // (basisaar + (alder - alder_nu)) — alder_nu udledes her af parametre.n
+  // (= pensionsalder - alder_nu, allerede en del af engine-svaret), så denne
+  // funktion ikke behøver kende personernes fødselsdato.
+  function renderSamletChart(primaryData, partnerData) {
+    const basisaar = new Date().getFullYear();
+    const alderNu = d => (d.parametre?.n != null) ? (d.pensionsalder - d.parametre.n) : d.tabel_start;
+    const medKalenderaar = d => {
+      const alder_nu = alderNu(d);
+      return d.tabel.map(row => ({ kalenderaar: basisaar + (row.alder - alder_nu), row }));
+    };
+    const primaryRows = medKalenderaar(primaryData);
+    const partnerRows = medKalenderaar(partnerData);
+    const alleAar = Array.from(new Set([
+      ...primaryRows.map(r => r.kalenderaar),
+      ...partnerRows.map(r => r.kalenderaar),
+    ])).sort((a, b) => a - b);
+    const findRow = (rows, aar) => rows.find(r => r.kalenderaar === aar)?.row;
+
+    const datasets = [];
+    function tilfoejPerson(data, rows, personLabel, farveOffset, tillaegFarve) {
+      const produkter = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
+      produkter.forEach((prod, idx) => {
+        const color = CHART_COLORS[(farveOffset + idx) % CHART_COLORS.length];
+        datasets.push({
+          label: `${personLabel}: ${prod.selskab} – ${prod.produkttype}`,
+          data: alleAar.map(aar => {
+            const pd = findRow(rows, aar)?.produkter?.[prod.key];
+            return pd ? Math.round(pd.mdr_netto || 0) : 0;
+          }),
+          backgroundColor: color + 'cc',
+          borderColor: color,
+          borderWidth: 1,
+          stack: 'a',
+        });
+      });
+      // Folkepension/ATP/tillæg/ældrecheck/mediecheck slås sammen til ÉN
+      // linje pr. person her — diagrammet skal vise "alle ordninger" tydeligt
+      // adskilt, men en fuld nedbrydning af begges offentlige ydelser ville
+      // gøre et allerede tæt stablet diagram med to personer uoverskueligt.
+      datasets.push({
+        label: `${personLabel}: Folkepension/ATP/tillæg`,
+        data: alleAar.map(aar => {
+          const row = findRow(rows, aar);
+          if (!row) return 0;
+          return Math.round(
+            (row.fp_mdr_netto || 0) + (row.atp_mdr_netto || 0) + (row.tillaeg_mdr_netto || 0) +
+            (row.aeldrecheck_mdr || 0) + (row.mediecheck_mdr || 0)
+          );
+        }),
+        backgroundColor: tillaegFarve + 'cc',
+        borderColor: tillaegFarve,
+        borderWidth: 1,
+        stack: 'a',
+      });
+    }
+    tilfoejPerson(primaryData, primaryRows, 'Dig', 0, '#fb923c');
+    tilfoejPerson(partnerData, partnerRows, 'Partner', 5, '#0ea5e9');
+
+    const ctx = document.getElementById('samlet-chart')?.getContext('2d');
+    if (!ctx) return;
+    if (_chartInstanceSamlet) _chartInstanceSamlet.destroy();
+    _chartInstanceSamlet = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: alleAar, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: { stacked: true, title: { display: true, text: 'Kalenderår', font: { size: 11 } }, ticks: { font: { size: 10 } } },
+          y: {
+            stacked: true,
+            title: { display: true, text: 'Netto kr/mdr', font: { size: 11 } },
+            ticks: { font: { size: 10 }, callback: v => v.toLocaleString('da-DK') },
+            beginAtZero: true,
+          },
+        },
+        plugins: {
+          legend: { position: 'top', labels: { font: { size: 10 }, boxWidth: 12, padding: 8 } },
+          tooltip: {
+            callbacks: {
+              label: c => { const v = c.parsed.y; return v ? ` ${c.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr/mdr` : null; },
+              footer: items => {
+                const total = items.reduce((s, i) => s + (i.parsed.y || 0), 0);
+                return total > 0 ? `Husstand i alt: ${Math.round(total).toLocaleString('da-DK')} kr/mdr` : '';
+              },
+            },
+          },
+        },
+      },
+    });
   }
 
   // ── Upload ────────────────────────────────────────────────────────────────

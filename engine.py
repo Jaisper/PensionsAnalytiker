@@ -26,6 +26,7 @@ AM_BIDRAG                         = 0.08
 BUNDSKAT                          = 0.1201
 KOMMUNESKAT_DEFAULT               = 0.250
 KIRKESKAT_DEFAULT                 = 0.007
+A_SKAT_NETTO_FAKTOR                = 0.60      # netto-andel efter 40% afgift (kapitalpension/aldersopsparing, "A"-skat)
 
 ATP_MDR_STANDARD                  = 1_825      # kr/mdr estimat
 
@@ -68,6 +69,47 @@ class SkatParametre:
             partner_indkomst_aar=partner_indkomst_aar,
             partner_indkomst_pr_kalenderaar=partner_indkomst_pr_kalenderaar,
         )
+
+
+def civilstand_fra_parametre(parametre: dict) -> str:
+    """Én kanonisk civilstand-opløsning, brugt af engine.py/app.py/husstand.py
+    — tidligere løst tre forskellige steder med tre forskellige fallback-
+    konventioner (bl.a. tom streng behandlet som 'ikke sat' ét sted og som
+    'enlig' et andet), hvilket kunne vælge tre forskellige pensionstillægs-
+    aftrapningstrin for det samme input afhængig af hvilken funktion der
+    spurgte først."""
+    civilstand = parametre.get("civilstand")
+    if not civilstand:
+        # Bagudkompatibelt fald tilbage til det ældre flade "enlig"-flag,
+        # hvis en kaldende part stadig sender det i stedet for civilstand.
+        civilstand = "enlig" if parametre.get("enlig", True) else "gift_samlevende"
+    return civilstand
+
+
+def skat_params_fra_parametre(
+    parametre: dict,
+    partner_foedselsaar: Optional[int] = None,
+    partner_indkomst_pr_kalenderaar: Optional[dict[int, float]] = None,
+) -> "SkatParametre":
+    """Bygger SkatParametre fra en rå beregningsparametre-dict — den fælles
+    kerne der tidligere var duplikeret næsten ordret i engine.py, app.py og
+    husstand.py. partner_foedselsaar/partner_indkomst_pr_kalenderaar sættes
+    eksplicit af kaldere der kender partnerens REELLE fødselsår/indkomst
+    (husstand.py, Fase D); uden dem falder partner_foedselsaar tilbage til
+    Fase B's flade partner_alder-felt, og partner_indkomst_aar til dens
+    tilsvarende overslag."""
+    civilstand = civilstand_fra_parametre(parametre)
+    if partner_foedselsaar is None:
+        partner_alder = parametre.get("partner_alder")
+        partner_foedselsaar = (date.today().year - int(partner_alder)) if partner_alder else None
+    return SkatParametre.fra_pct(
+        kommuneskat_pct=float(parametre.get("kommuneskat_pct", 25.0)),
+        kirkeskat_pct=float(parametre.get("kirkeskat_pct", 0.7)),
+        enlig=(civilstand != "gift_samlevende"),
+        partner_foedselsaar=partner_foedselsaar,
+        partner_indkomst_aar=float(parametre.get("partner_indkomst_aar", 0) or 0),
+        partner_indkomst_pr_kalenderaar=partner_indkomst_pr_kalenderaar,
+    )
 
 
 # ── Folkepensionsalder ───────────────────────────────────────────────────────
@@ -168,12 +210,18 @@ def _progressiv_skat_andel(
     kommunal_sats: float,
     strict: bool = False,
     spor: list[str] | None = None,
+    progressiv_skat_total: float | None = None,
 ) -> float:
     """Fordeler husstandens/personens samlede progressive skat forholdsmæssigt
-    ud på det enkelte produkts andel af den personlige indkomst."""
+    ud på det enkelte produkts andel af den personlige indkomst.
+    progressiv_skat_total: lad kalderen genbruge ét allerede beregnet total-
+    tal for året (samme total_pi/kommunal_sats genbruges typisk 4-5 gange pr.
+    år — ét pr. produkt plus FP/ATP/tillæg/ældrecheck — så uden dette regnes
+    hele den progressive skattetrappe unødvendigt om hver gang)."""
     if total_pi <= 0:
         return 0.0
-    total = _progressiv_skat_total_aar(total_pi, kommunal_sats, strict, spor)
+    total = progressiv_skat_total if progressiv_skat_total is not None else \
+        _progressiv_skat_total_aar(total_pi, kommunal_sats, strict, spor)
     return total * (dette_pi / total_pi)
 
 
@@ -188,46 +236,27 @@ def _personfradrag_andel(dette_pi: float, total_pi: float, flad_sats: float) -> 
     return fradrag_effekt * (dette_pi / total_pi)
 
 
-def _netto_s_med_am(
+def _netto_s(
     brutto: float, skat: SkatParametre, total_pi: float, dette_pi: float,
-    strict: bool = False, spor: list[str] | None = None,
+    har_am_bidrag: bool, strict: bool = False, spor: list[str] | None = None,
+    progressiv_skat_total: float | None = None,
 ) -> float:
+    """Netto af en S-beskattet indkomststrøm. har_am_bidrag skelner private
+    løbende udbetalinger (S-produkter, AM-bidrag trækkes først) fra
+    overførsler uden AM-bidrag (folkepension/ATP/pensionstillæg/ældrecheck)
+    — tidligere to næsten identiske funktioner (_netto_s_med_am/_uden_am),
+    som delte al anden logik og derfor let kunne rettes ét sted og glemmes
+    i det andet. progressiv_skat_total: se _progressiv_skat_andel — lader
+    kalderen genbruge ét allerede beregnet total-tal for et helt regnskabsår
+    i stedet for at regne skattetrappen om for hver indkomststrøm."""
     basis = BUNDSKAT + skat.kommuneskat + skat.kirkeskat
-    netto = brutto * (1 - AM_BIDRAG) * (1 - basis)
+    brutto_efter_am = brutto * (1 - AM_BIDRAG) if har_am_bidrag else brutto
+    netto = brutto_efter_am * (1 - basis)
     # Skatteloftet (PSL § 19, jf. satser_2026.py's egen kommentar) gælder den
     # samlede marginalsats EKSKL. kirkeskat — kun kommuneskat sendes videre.
-    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat, strict, spor)
+    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat, strict, spor, progressiv_skat_total)
     netto += _personfradrag_andel(dette_pi, total_pi, basis)
     return netto
-
-
-def _netto_s_uden_am(
-    brutto: float, skat: SkatParametre, total_pi: float, dette_pi: float,
-    strict: bool = False, spor: list[str] | None = None,
-) -> float:
-    basis = BUNDSKAT + skat.kommuneskat + skat.kirkeskat
-    netto = brutto * (1 - basis)
-    # Se _netto_s_med_am — skatteloftet er eksklusive kirkeskat.
-    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat, strict, spor)
-    netto += _personfradrag_andel(dette_pi, total_pi, basis)
-    return netto
-
-
-def beregn_netto_skat(
-    brutto_aar: float,
-    skat_type: str,
-    skat: SkatParametre,
-    total_s_pi_aar: float = 0.0,
-    har_am_bidrag: bool = True,
-) -> float:
-    if brutto_aar <= 0:   return 0.0
-    if skat_type == "F":  return brutto_aar
-    if skat_type == "A":  return brutto_aar * 0.60
-    dette_pi = brutto_aar * (1 - AM_BIDRAG) if har_am_bidrag else brutto_aar
-    total_pi = total_s_pi_aar if total_s_pi_aar else dette_pi
-    if har_am_bidrag:
-        return _netto_s_med_am(brutto_aar, skat, total_pi, dette_pi)
-    return _netto_s_uden_am(brutto_aar, skat, total_pi, dette_pi)
 
 
 # ── Pensionstillæg (modregning) og personlig tillægsprocent ─────────────────
@@ -326,6 +355,14 @@ def _udled_udbetalingsaar(aldersperioder: dict) -> int:
     return total
 
 
+def _engangs_netto(pr: dict) -> float:
+    """Netto af et engangsbeløb (aldersopsparing/kapitalpension) efter A-skat
+    (40% afgift) — F-skat udbetales ubeskåret. Delt af alle steder der skal
+    vise/summere et engangsbeløbs faktiske udbetaling, så en fremtidig
+    rettelse af selve afgiftssatsen kun skal foretages ét sted."""
+    return pr["fv"] * A_SKAT_NETTO_FAKTOR if pr["skat_type"] == "A" else pr["fv"]
+
+
 # ── Hoved-beregning ──────────────────────────────────────────────────────────
 
 def generer_udbetalingstabel(
@@ -341,19 +378,7 @@ def generer_udbetalingstabel(
       produkt_start_aldre (dict, default {})   — key → start-alder for loebende produkter
     """
     if skat_params is None:
-        civilstand = parametre.get("civilstand")
-        if civilstand is None:
-            # Bagudkompatibelt fald tilbage til det ældre flade "enlig"-flag,
-            # hvis en kaldende part stadig sender det i stedet for civilstand.
-            civilstand = "enlig" if parametre.get("enlig", True) else "gift_samlevende"
-        partner_alder = parametre.get("partner_alder")
-        skat_params = SkatParametre.fra_pct(
-            kommuneskat_pct=float(parametre.get("kommuneskat_pct", 25.0)),
-            kirkeskat_pct=float(parametre.get("kirkeskat_pct", 0.7)),
-            enlig=(civilstand != "gift_samlevende"),
-            partner_foedselsaar=(date.today().year - int(partner_alder)) if partner_alder else None,
-            partner_indkomst_aar=float(parametre.get("partner_indkomst_aar", 0) or 0),
-        )
+        skat_params = skat_params_fra_parametre(parametre)
 
     pensionsalder  = int(parametre["pensionsalder"])
     udbetaling_aar = int(parametre.get("udbetaling_aar", 30))
@@ -570,9 +595,6 @@ def generer_udbetalingstabel(
     pre_engangs  = [p for p in engangs_i_buffer if p["start_alder"] <= pensionsalder]
     post_engangs = [p for p in engangs_i_buffer if p["start_alder"] >  pensionsalder]
 
-    def _engangs_netto(pr):
-        return pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
-
     engangs_netto_total = sum(_engangs_netto(pr) for pr in engangsbeloeb)  # bruges stadig i tabel
     pre_engangs_netto   = sum(_engangs_netto(pr) for pr in pre_engangs)
 
@@ -670,6 +692,16 @@ def generer_udbetalingstabel(
             + tillaeg_aar
         )
         total_pi   = pi_med_am + pi_uden_am
+        # Beregnes ÉN gang her og genbruges af alle S-beskattede indkomst-
+        # strømme nedenfor (produkter, ATP, FP, tillæg — typisk 4-6 kald med
+        # nøjagtig samme total_pi/kommuneskat-par) i stedet for at gennemløbe
+        # hele den progressive skattetrappe (satser_2026.PROGRESSION) forfra
+        # for hver enkelt indkomststrøm. Ældrechecken bruger sin egen,
+        # forskellige total (total_pi + aeldrecheck_aar) og er udeladt her —
+        # den forekommer kun én gang pr. år, så der er intet at genbruge.
+        progressiv_skat_total_denne_aar = (
+            _progressiv_skat_total_aar(total_pi, skat_params.kommuneskat) if total_pi > 0 else 0.0
+        )
 
         produkt_data: dict[str, dict] = {}
         for p in loebende:
@@ -681,11 +713,12 @@ def generer_udbetalingstabel(
             b_aar = p["mdr_brutto"] * 12
             if p["skat_type"] == "S":
                 dette_pi  = b_aar * (1 - AM_BIDRAG)
-                netto_aar = _netto_s_med_am(b_aar, skat_params, total_pi, dette_pi)
+                netto_aar = _netto_s(b_aar, skat_params, total_pi, dette_pi, har_am_bidrag=True,
+                                      progressiv_skat_total=progressiv_skat_total_denne_aar)
             elif p["skat_type"] == "F":
                 netto_aar = b_aar
             else:
-                netto_aar = b_aar * 0.60
+                netto_aar = b_aar * A_SKAT_NETTO_FAKTOR
             produkt_data[p["key"]] = {
                 "mdr_brutto": p["mdr_brutto"],
                 "mdr_netto":  netto_aar / 12,
@@ -693,20 +726,23 @@ def generer_udbetalingstabel(
             }
 
         if har_atp:
-            atp_netto_aar = _netto_s_uden_am(float(atp_mdr_esc * 12), skat_params, total_pi, float(atp_mdr_esc * 12))
+            atp_netto_aar = _netto_s(float(atp_mdr_esc * 12), skat_params, total_pi, float(atp_mdr_esc * 12), har_am_bidrag=False,
+                                      progressiv_skat_total=progressiv_skat_total_denne_aar)
             atp_mdr_netto = atp_netto_aar / 12
         else:
             atp_mdr_netto = 0.0
 
         if har_fp:
             fp_brutto_aar = fp_grundbeloeb_mdr * 12 * fp_venteprocent
-            fp_netto_aar  = _netto_s_uden_am(fp_brutto_aar, skat_params, total_pi, fp_brutto_aar)
+            fp_netto_aar  = _netto_s(fp_brutto_aar, skat_params, total_pi, fp_brutto_aar, har_am_bidrag=False,
+                                      progressiv_skat_total=progressiv_skat_total_denne_aar)
             fp_mdr_netto  = fp_netto_aar / 12
             # Ventetillægget (Fase C, forenklet — se satser_2026.py) forhøjer
             # også det allerede aftrapnings-justerede pensionstillæg, ligesom
             # i den porterede kilde (samspil.ts: "tillaeg * venteprocent") —
             # ventetillægget er allerede indregnet i tillaeg_aar ovenfor.
-            tillaeg_netto_aar = _netto_s_uden_am(tillaeg_aar, skat_params, total_pi, tillaeg_aar) if tillaeg_aar > 0 else 0.0
+            tillaeg_netto_aar = _netto_s(tillaeg_aar, skat_params, total_pi, tillaeg_aar, har_am_bidrag=False,
+                                          progressiv_skat_total=progressiv_skat_total_denne_aar) if tillaeg_aar > 0 else 0.0
             tillaeg_mdr_netto = tillaeg_netto_aar / 12
 
             tillaegsprocent = beregn_tillaegsprocent(indtaegtsgrundlag_aar, skat_params.enlig)
@@ -717,7 +753,7 @@ def generer_udbetalingstabel(
             # den beskattes imod).
             aeldrecheck_aar = ydelser["aeldrecheck"]
             aeldrecheck_netto_aar = (
-                _netto_s_uden_am(aeldrecheck_aar, skat_params, total_pi + aeldrecheck_aar, aeldrecheck_aar)
+                _netto_s(aeldrecheck_aar, skat_params, total_pi + aeldrecheck_aar, aeldrecheck_aar, har_am_bidrag=False)
                 if aeldrecheck_aar > 0 else 0.0
             )
             aeldrecheck_mdr  = aeldrecheck_netto_aar / 12
@@ -751,7 +787,7 @@ def generer_udbetalingstabel(
 
         # Engangsbeloeb udbetales i det år produktet starter
         engangs_dette_aar = sum(
-            pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
+            _engangs_netto(pr)
             for pr in engangsbeloeb
             if alder == pr["start_alder"]
         )
@@ -1380,7 +1416,7 @@ def format_engine_til_llm(result: dict) -> str:
             f" | {n_mdr:,.0f} kr/mdr | {varighed} |".replace(",", ".")
         )
     for pr in engang:
-        netto_eng = pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
+        netto_eng = _engangs_netto(pr)
         L.append(
             f"| {pr['selskab']} – {pr['produkttype']} | {pr['skat_type']}"
             f" | {pr['start_alder']} år"
@@ -1515,10 +1551,7 @@ def format_engine_til_llm(result: dict) -> str:
 
     if has_engangs:
         r = p["r"]
-        total_engangs_netto = sum(
-            pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
-            for pr in engang
-        )
+        total_engangs_netto = sum(_engangs_netto(pr) for pr in engang)
         # Annuitet over 12 mdr
         r_mdr = r / 12
         mdr_12 = total_engangs_netto * r_mdr / (1 - (1 + r_mdr) ** -12) if r_mdr > 0 else total_engangs_netto / 12
@@ -1540,16 +1573,13 @@ def format_engine_til_llm(result: dict) -> str:
     # Tabel 3 — Jævn fordeling
     jaevn_mdr = result.get("jaevn_netto_mdr", 0)
 
-    def _engangs_netto_pr(pr):
-        return pr["fv"] * 0.60 if pr["skat_type"] == "A" else pr["fv"]
-
     engang_i_buffer    = [pr for pr in engang if pr.get("i_buffer", True)]
     engang_ekskluderet = [pr for pr in engang if not pr.get("i_buffer", True)]
-    engangs_total      = sum(_engangs_netto_pr(pr) for pr in engang_i_buffer)
+    engangs_total      = sum(_engangs_netto(pr) for pr in engang_i_buffer)
     ekskluderet_note = (
         "Fravalgt som buffer (udbetales direkte det år beløbet frigives, indgår ikke i tabellen "
         "herunder): " + ", ".join(
-            f"{pr['selskab']} – {pr['produkttype']} ({kr(_engangs_netto_pr(pr))} kr)"
+            f"{pr['selskab']} – {pr['produkttype']} ({kr(_engangs_netto(pr))} kr)"
             for pr in engang_ekskluderet
         ) + "."
         if engang_ekskluderet else ""

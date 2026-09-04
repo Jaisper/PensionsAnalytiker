@@ -14,7 +14,7 @@ kræve en antagelse om delt likviditet der ikke er en del af dette arbejde.
 from __future__ import annotations
 from datetime import date
 
-from engine import generer_udbetalingstabel, SkatParametre, _foedselsaar_fra_profil
+from engine import generer_udbetalingstabel, SkatParametre, _foedselsaar_fra_profil, skat_params_fra_parametre
 
 
 def _indtaegtsgrundlag_pr_kalenderaar(resultat: dict, alder_nu: int) -> dict[int, float]:
@@ -87,14 +87,19 @@ def beregn_husstand(
 def _skat_params_med_partner(
     parametre: dict, partner_foedselsaar: int | None, partner_indkomst_pr_kalenderaar: dict[int, float],
 ) -> SkatParametre:
-    """Bygger samme SkatParametre-afledning som engine.generer_udbetalingstabel
-    selv ville, men med partnerens REELLE fødselsår og indkomst-per-år
-    tilføjet i stedet for Fase B's flade, manuelt indtastede overslag."""
-    civilstand = parametre.get("civilstand") or "gift_samlevende"
-    return SkatParametre.fra_pct(
-        kommuneskat_pct=float(parametre.get("kommuneskat_pct", 25.0)),
-        kirkeskat_pct=float(parametre.get("kirkeskat_pct", 0.7)),
-        enlig=(civilstand != "gift_samlevende"),
+    """Bygger samme SkatParametre-afledning som engine.skat_params_fra_parametre
+    (den kanoniske, delte opløsning — ikke længere en tredje, uafhængig kopi),
+    men med partnerens REELLE fødselsår og indkomst-per-år tilføjet i stedet
+    for Fase B's flade, manuelt indtastede overslag. Default til
+    "gift_samlevende" hvis civilstand mangler er bevidst HER (i modsætning
+    til den kanoniske funktions enlig-default) — denne kaldes udelukkende fra
+    selve husstandskoblingen, hvor civilstand pr. definition ikke er enlig."""
+    parametre_med_civilstand = {
+        **parametre,
+        "civilstand": parametre.get("civilstand") or "gift_samlevende",
+    }
+    return skat_params_fra_parametre(
+        parametre_med_civilstand,
         partner_foedselsaar=partner_foedselsaar,
         partner_indkomst_pr_kalenderaar=partner_indkomst_pr_kalenderaar,
     )

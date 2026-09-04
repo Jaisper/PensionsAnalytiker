@@ -33,7 +33,8 @@ from pdf_parser import parse_pensionsinfo_pdf, format_profil_til_tekst
 from pension_rules import PENSION_REGLER
 from engine import (generer_udbetalingstabel, format_engine_til_llm, SkatParametre,
                      fordel_pmt_default, format_fordeling_til_llm, generer_scenarier,
-                     analyser_forsikring, beregn_fri_formue_tabel)
+                     analyser_forsikring, beregn_fri_formue_tabel, skat_params_fra_parametre,
+                     civilstand_fra_parametre)
 import sekventering
 import husstand
 
@@ -426,10 +427,7 @@ def _kapital_skat_type_fra_historik(session: dict) -> str | None:
 
 
 def _civilstand_fra_params(params: dict) -> str:
-    civilstand = params.get("civilstand")
-    if civilstand is None:
-        civilstand = "enlig" if params.get("enlig", True) else "gift_samlevende"
-    return civilstand
+    return civilstand_fra_parametre(params)
 
 
 _PARTNER_OVERRIDE_KEYS = (
@@ -528,9 +526,6 @@ def _kør_engine(session_id: str) -> str:
                 if "kapital" in (p.get("produkttype") or "").lower():
                     p["skat_type"] = kapital_skat
 
-        civilstand = _civilstand_fra_params(params)
-        partner_alder = params.get("partner_alder")
-
         def _tilfoej_fri_formue_analyse(result_person: dict, params_person: dict, alder_nu_person: int) -> None:
             fri_formue_person = params_person.get("fri_formue")
             if fri_formue_person and fri_formue_person > 0:
@@ -570,13 +565,7 @@ def _kør_engine(session_id: str) -> str:
             # forældet plan efter fx civilstand er slået fra igen, og
             # split-screen-kolonnen/husstands-summen forbliver forkert synlig.
             session["engine_output_partner"] = None
-            skat = SkatParametre.fra_pct(
-                kommuneskat_pct=float(params.get("kommuneskat_pct", 25.0)),
-                kirkeskat_pct=float(params.get("kirkeskat_pct", 0.7)),
-                enlig=(civilstand != "gift_samlevende"),
-                partner_foedselsaar=(date.today().year - int(partner_alder)) if partner_alder else None,
-                partner_indkomst_aar=float(params.get("partner_indkomst_aar", 0) or 0),
-            )
+            skat = skat_params_fra_parametre(params)
             result = generer_udbetalingstabel(profil_kopi, params, skat)
             result["scenarier"] = generer_scenarier(copy.deepcopy(profil_kopi), params, skat)
         alder_nu = int((session.get("profil") or {}).get("person", {}).get("alder") or 0)

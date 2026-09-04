@@ -4,3 +4,5 @@ __pycache__/
 *.pyo
 .DS_Store
 .pdf_cache/
+server.log
+.claude/

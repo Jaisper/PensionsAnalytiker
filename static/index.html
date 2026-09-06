@@ -3458,6 +3458,14 @@ function renderOptimeringsResultat(data, ingenAendring = false, forPartner = fal
   const husstandNote = data.husstand_advarsel
     ? `<div style="margin-top:6px;font-size:0.78rem;color:#c0392b">⚠ ${data.husstand_advarsel}</div>`
     : '';
+  // forklaring: en KONKRET, datadrevet forklaring bygget server-side (ikke af
+  // LLM'en — den er beregnet ud fra faktiske skatteflag i din tabel, se
+  // _forklar_optimering i app.py), så både primærens OG partnerens fane (som
+  // ingen chat har) får en reel begrundelse for "hvorfor lige denne plan" —
+  // ikke kun tallet. Vises kun når der rent faktisk er en ændring at forklare.
+  const forklaringBlok = (!ingenAendring && data.forklaring)
+    ? `<div class="message assistant" style="margin-top:10px"><div class="bubble" style="font-size:0.83rem">${renderMarkdown(data.forklaring)}</div></div>`
+    : '';
   el.style.display = '';
   el.innerHTML = ingenAendring
     ? `
@@ -3472,7 +3480,7 @@ function renderOptimeringsResultat(data, ingenAendring = false, forPartner = fal
       (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${stikproeve})
       <button class="chart-btn primary" style="margin-left:10px" onclick="anvendOptimering(${forPartner})">Anvend denne plan</button>
       ${usikkerNote}${husstandNote}
-    </div>`;
+    </div>` + forklaringBlok;
 }
 
 async function koerOptimering(forPartner = false) {
@@ -3557,6 +3565,17 @@ async function koerOptimering(forPartner = false) {
     return;
   }
 
+  // Backend har allerede bygget en FAKTUEL, datadrevet forklaring (samme
+  // tekst som allerede står i resultatboksen, se _forklar_optimering i
+  // app.py — udledt af de RIGTIGE beregnede skatteflag, ikke gættet). Den
+  // sendes med som et fakta-anker, så LLM'ens narration ikke risikerer at
+  // opfinde en årsag der lyder plausibel men ikke er den faktiske — LLM'en
+  // skal omformulere/uddybe den (tilpasset forklaringsniveau), ikke erstatte
+  // den med sin egen gæt.
+  const faktaAnker = data.forklaring
+    ? `\n\nHER ER DEN FAKTISKE, BEREGNEDE ÅRSAG (byg din forklaring på DENNE, opfind aldrig en anden begrundelse):\n${data.forklaring}`
+    : '';
+
   await sendSystemTrigger(
     `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen. Målet er det højeste FASTE, ` +
     `inflationskorrigerede månedsbeløb der reelt kan udbetales hvert år — ikke den største samlede sum og ikke et gennemsnit ` +
@@ -3567,9 +3586,15 @@ async function koerOptimering(forPartner = false) {
     `(engangsbeløb der er FRAVALGT bufferen er IKKE en del af søgningen — det er allerede et truffet valg), ` +
     `heraf ${data.antal_gennemfoerlige} gennemførlige (optimeringen kan aldrig gøre det værste enkeltår eller antallet af lavindkomst-år ringere end det allerede er i din nuværende plan). ` +
     `Bedste fundne plan — start-aldre: ${startLinjer || 'uændret'}. ` +
-    `${opsaetLinje} Fast månedsbeløb denne plan giver: ${b.jaevn_netto_mdr.toLocaleString('da-DK')} kr/mdr. ` +
-    `Præsenter denne anbefaling kort i punktform og forklar kort hvorfor rækkefølgen giver mening (fx skattemæssig timing eller undgåelse af modregning). ` +
-    `Nævn at brugeren kan klikke "Anvend denne plan"-knappen for at opdatere tidslinjen/diagrammet med denne rækkefølge, og at optimeringen kun ser på brugerens egne produkter.`
+    `${opsaetLinje} Fast månedsbeløb denne plan giver: ${b.jaevn_netto_mdr.toLocaleString('da-DK')} kr/mdr.` +
+    faktaAnker +
+    `\n\nDette er OFTE det sværeste resultat at gennemskue i hele analysen — brug derfor en GRUNDIG, pædagogisk ` +
+    `forklaring, ikke en kort opsummering: gå igennem HVER ændring for sig, forklar mekanismen bag (hvorfor lige ` +
+    `dét år/den periode gør en forskel — fx hvilken skattegrænse eller modregning der undgås), og afslut med en ` +
+    `kort konklusion om hvad brugeren reelt vinder ved at anvende planen. Tilpas dybden til FORKLARINGSNIVEAU som ` +
+    `altid, men "grundig" gælder på alle niveauer — også niveau 1 skal forstå ÅRSAGEN, ikke kun tallet. ` +
+    `Nævn til sidst at brugeren kan klikke "Anvend denne plan"-knappen for at opdatere tidslinjen/diagrammet, og at ` +
+    `optimeringen kun ser på brugerens egne produkter.`
   );
 }
 

@@ -1465,6 +1465,99 @@ async def get_analyse_tekst_partner(session_id: str):
     return JSONResponse({"tekst": format_engine_til_llm(result)})
 
 
+def _foelsomhed_label(noegle: str) -> str:
+    """Oversætter sekventering.py's interne følsomheds-nøgler (fx "start:Danica
+    Pension_Ratepension") til læsbar dansk, til brug i optimerings-forklaringen."""
+    if noegle == "opsaet:folkepension":
+        return "hvornår du udskyder folkepension"
+    if noegle.startswith("start:"):
+        return f"starttidspunktet for {noegle.removeprefix('start:').replace('_', ' – ')}"
+    if noegle.startswith("periode:"):
+        return f"udbetalingsperioden for {noegle.removeprefix('periode:').replace('_', ' – ')}"
+    return noegle
+
+
+def _forklar_optimering(baseline: dict, vinder: dict, bedste, foelsomhed: dict) -> str:
+    """Bygger en KONKRET, datadrevet forklaring af hvorfor den fundne plan er
+    bedre end den nuværende — IKKE en generisk skabelontekst, men baseret på
+    faktiske forskelle i beregnede skatteflag (over_topskat/tillaegsprocent)
+    mellem de to planers år-for-år tabeller. Bruges direkte i resultatboksen
+    (både primær og partner, ingen LLM involveret — deterministisk og
+    hurtigt) og kan desuden fodres til LLM'en som et faktuelt anker, så dens
+    egen (lix-tilpassede) omformulering ikke risikerer at opfinde en årsag.
+    """
+    baseline_by_alder = {r["alder"]: r for r in baseline.get("tabel", [])}
+    vinder_by_alder   = {r["alder"]: r for r in vinder.get("tabel", [])}
+    baseline_produkter = {p["key"]: p for p in baseline.get("produkter", [])}
+
+    aendringer: list[str] = []
+    for key, ny_start in (bedste.produkt_start_aldre or {}).items():
+        gammel = baseline_produkter.get(key)
+        if not gammel:
+            continue
+        gammel_start = gammel.get("start_alder")
+        if gammel_start is None or gammel_start == ny_start:
+            continue
+        navn = f"{gammel.get('selskab', '')} – {gammel.get('produkttype', '')}"
+        retning = "udskudt" if ny_start > gammel_start else "fremrykket"
+
+        # Sammenlign skatteflagene VED DEN GAMLE START-ALDER i begge planer —
+        # det er netop det år hvor planerne begynder at afvige.
+        gl_row = baseline_by_alder.get(gammel_start)
+        ny_row = vinder_by_alder.get(gammel_start)
+        aarsager = []
+        if gl_row and ny_row:
+            if gl_row.get("over_topskat") and not ny_row.get("over_topskat"):
+                aarsager.append(f"du undgår mellem-/topskat ved {gammel_start} år")
+            gl_tp = gl_row.get("tillaegsprocent", 100)
+            ny_tp = ny_row.get("tillaegsprocent", 100)
+            if gl_tp < 100 and ny_tp > gl_tp:
+                aarsager.append(f"du bevarer mere af din tillægsprocent (ældrecheck/mediecheck) ved {gammel_start} år")
+        if not aarsager:
+            aarsager.append("det udjævner din indkomst mere jævnt hen over årene, uden at forringe noget enkelt år")
+        aendringer.append(f"- **{navn}**: {retning} fra {gammel_start} til {ny_start} år — {', og '.join(aarsager)}.")
+
+    for key, ny_periode in (bedste.produkt_udb_aar or {}).items():
+        gammel = baseline_produkter.get(key)
+        if not gammel:
+            continue
+        gammel_periode = gammel.get("udb_aar")
+        if gammel_periode is None or gammel_periode == ny_periode:
+            continue
+        navn = f"{gammel.get('selskab', '')} – {gammel.get('produkttype', '')}"
+        retning = "forlænget" if ny_periode > gammel_periode else "afkortet"
+        aendringer.append(
+            f"- **{navn}**s udbetalingsperiode {retning} fra {gammel_periode} til {ny_periode} år — det ændrer "
+            f"hvor stort det årlige beløb bliver, og dermed hvilke skattegrænser du rammer undervejs."
+        )
+
+    if getattr(bedste, "folkepension_opsaettelse_aar", 0):
+        aendringer.append(
+            f"- **Folkepension** udskydes {bedste.folkepension_opsaettelse_aar} år — det forhøjer både grundbeløb "
+            f"og pensionstillæg med et ventetillæg (forenklet skøn: 6%/år, IKKE en juridisk præcis beregning)."
+        )
+
+    if not aendringer:
+        return "Din nuværende plan er allerede den bedste fundet inden for det afsøgte rum — der er ingen ændringer at anvende."
+
+    sens_linje = ""
+    if foelsomhed:
+        top_noegle = max(foelsomhed, key=foelsomhed.get)
+        sens_linje = (
+            f"\n\nDen enkeltændring der betyder mest for resultatet er **{_foelsomhed_label(top_noegle)}** "
+            f"(alene værd ca. {round(foelsomhed[top_noegle]):,} kr/mdr)."
+        ).replace(",", ".")
+
+    return (
+        "**Sådan er planen fundet:** Din nuværende plan blev sammenlignet år for år mod tusindvis af andre "
+        "kombinationer af start-alder, udbetalingsperiode og evt. udskudt folkepension for dine produkter — "
+        "og denne kombination gav det højeste FASTE månedsbeløb, uden at gøre noget enkelt år ringere end det "
+        "allerede er i din nuværende plan (en indbygget, hård grænse — optimeringen kan aldrig \"redde\" ét år "
+        "ved at forringe et andet).\n\n"
+        "**Hvad ændres, og hvorfor:**\n" + "\n".join(aendringer) + sens_linje
+    )
+
+
 @app.post("/api/optimer")
 async def optimer_udbetalingsplan(req: dict):
     session_id = req.get("session_id")
@@ -1552,20 +1645,24 @@ async def optimer_udbetalingsplan(req: dict):
     # af de tusindvis undervejs) tjekkes derfor eksplicit om husstandens
     # SAMLEDE beløb rent faktisk stiger, ikke kun denne persons eget.
     husstand_advarsel = None
+    baseline_resultat = None
+    vinder_resultat = None
+    params_egen_ny_plan = {
+        **params_egen,
+        "produkt_start_aldre": b.produkt_start_aldre,
+        "produkt_udb_aar": b.produkt_udb_aar,
+        "folkepension_opsaettelse_aar": b.folkepension_opsaettelse_aar,
+    }
     if params_kobling is not None and profil_kobling_kopi is not None:
         try:
             husstand_foer = husstand.beregn_husstand(
                 profil_optimeres_kopi, params_egen, profil_kobling_kopi, params_kobling,
             )
-            params_egen_ny_plan = {
-                **params_egen,
-                "produkt_start_aldre": b.produkt_start_aldre,
-                "produkt_udb_aar": b.produkt_udb_aar,
-                "folkepension_opsaettelse_aar": b.folkepension_opsaettelse_aar,
-            }
             husstand_efter = husstand.beregn_husstand(
                 profil_optimeres_kopi, params_egen_ny_plan, profil_kobling_kopi, params_kobling,
             )
+            baseline_resultat = husstand_foer["a"]
+            vinder_resultat   = husstand_efter["a"]
             total_foer  = husstand_foer["a"].get("jaevn_netto_mdr", 0) + husstand_foer["b"].get("jaevn_netto_mdr", 0)
             total_efter = husstand_efter["a"].get("jaevn_netto_mdr", 0) + husstand_efter["b"].get("jaevn_netto_mdr", 0)
             if total_efter < total_foer - 1:  # -1: undgå at ramle på afrundingsstøj
@@ -1580,6 +1677,22 @@ async def optimer_udbetalingsplan(req: dict):
             # udebliver den, mangler brugeren blot advarslen, ikke resultatet.
             import traceback
             logging.error("Husstands-tjek af vindende optimeringsplan fejlede: %s", traceback.format_exc())
+    else:
+        try:
+            baseline_resultat = generer_udbetalingstabel(copy.deepcopy(profil_optimeres_kopi), params_egen)
+            vinder_resultat   = generer_udbetalingstabel(copy.deepcopy(profil_optimeres_kopi), params_egen_ny_plan)
+        except Exception:
+            import traceback
+            logging.error("Baseline/vinder-genberegning til optimerings-forklaring fejlede: %s", traceback.format_exc())
+
+    # Konkret, datadrevet forklaring af HVORFOR — ikke kun tallet — genbrugt
+    # direkte i resultatboksen for BÅDE primær og partner (ingen LLM-tur
+    # nødvendig, partneren har jo ingen chat) og som fakta-anker til LLM'ens
+    # egen (lix-tilpassede) narration i chatten for primæren.
+    forklaring = (
+        _forklar_optimering(baseline_resultat, vinder_resultat, b, res.foelsomhed)
+        if baseline_resultat is not None and vinder_resultat is not None else None
+    )
 
     return JSONResponse({
         "success": True,
@@ -1594,6 +1707,7 @@ async def optimer_udbetalingsplan(req: dict):
         },
         "foelsomhed": {k: round(v) for k, v in res.foelsomhed.items()},
         "husstand_advarsel": husstand_advarsel,
+        "forklaring": forklaring,
         # satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR er eksplicit uverificeret
         # (forenklet 6%/år-skøn, ikke en juridisk præcis ventetillægsberegning)
         # — når den bedste plan rent faktisk bygger på at udskyde folkepension,

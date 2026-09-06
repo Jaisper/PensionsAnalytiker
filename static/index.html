@@ -1019,6 +1019,11 @@ Upload derefter PDF'en her øverst til højre.`,
 
   function updateQuickButtons(profil) {
     const container = document.getElementById('quick-questions');
+    // #lix-control bor som barn af #quick-questions (for at kunne sidde til
+    // højre på samme række via margin-left:auto) — gem knuden FØR vi rydder
+    // og sæt den tilbage til sidst, ellers forsvinder "Forklaringsniveau"
+    // permanent efter første upload.
+    const lixControl = document.getElementById('lix-control');
     // Erstat alle knapper efter upload
     container.innerHTML = '';
 
@@ -1064,6 +1069,7 @@ Upload derefter PDF'en her øverst til højre.`,
       btn.onclick = () => askQuick(prompt);
       container.appendChild(btn);
     });
+    if (lixControl) container.appendChild(lixControl);
   }
 
   // ── Interview flow ────────────────────────────────────────────────────────
@@ -1169,7 +1175,11 @@ Upload derefter PDF'en her øverst til højre.`,
     let rows = `
       <tr>
         <td class="ql"><strong>1.</strong> Netto månedlig indbetaling til pension
-          <div class="qdesc">Det beløb du/din arbejdsgiver indbetaler netto til selve opsparingen per måned${iq1Hint}</div>
+          <div class="qdesc">${lixTekst(
+            'Det beløb der går ind på din pensionsopsparing hver måned, efter skat — typisk vist på din lønseddel eller pensionsselskabets side som "indbetaling"',
+            'Det beløb du/din arbejdsgiver indbetaler netto til selve opsparingen per måned',
+            'Netto månedlig indbetaling til opsparingen (ekskl. forsikringspræmier/ATP)'
+          )}${iq1Hint}</div>
         </td>
         <td class="qi">
           <input type="number" id="iq1" value="12500" min="0" step="100" oninput="autoFillQ6Pmt()" aria-label="Månedlig netto-indbetaling i kroner">
@@ -1178,7 +1188,11 @@ Upload derefter PDF'en her øverst til højre.`,
       </tr>
       <tr>
         <td class="ql"><strong>2.</strong> Forventet afkast efter PAL-skat
-          <div class="qdesc">Standard 4% — skriv andet hvis du vil bruge en anden sats</div>
+          <div class="qdesc">${lixTekst(
+            'Hvor meget din opsparing forventes at vokse om året, efter den skat pensionsselskabet automatisk trækker (du skal ikke selv gøre noget). 4% er et fornuftigt gæt, medmindre du ved bedre',
+            'Standard 4% — skriv andet hvis du vil bruge en anden sats',
+            'Standard 4% p.a. netto PAL — juster efter egen porteføljeforventning'
+          )}</div>
         </td>
         <td class="qi">
           <input type="number" id="iq2" value="8" min="0" max="15" step="0.1" aria-label="Forventet årligt afkast i procent" oninput="scheduleRefresh(500, true)">
@@ -1187,7 +1201,11 @@ Upload derefter PDF'en her øverst til højre.`,
       </tr>
       <tr>
         <td class="ql"><strong>2b.</strong> Inflation (til realværdi)
-          <div class="qdesc">Viser real-købekraft (2025-kroner) i udbetalingstabellen</div>
+          <div class="qdesc">${lixTekst(
+            'Priserne stiger jo også frem til du går på pension — bruges til at vise hvad dine fremtidige udbetalinger reelt kan købe for, ikke bare det rå kronebeløb',
+            'Viser real-købekraft (2025-kroner) i udbetalingstabellen',
+            'Deflator for realværdi-visning (2025-kroner) i tabellen'
+          )}</div>
         </td>
         <td class="qi">
           <input type="number" id="iq2b" value="2" min="0" max="10" step="0.1" aria-label="Inflation i procent" oninput="scheduleRefresh(500, true)">
@@ -1377,7 +1395,11 @@ Upload derefter PDF'en her øverst til højre.`,
       rows += `
       <tr>
         <td class="ql"><strong>8.</strong> Årlig bruttoindtægt (løn før skat)
-          <div class="qdesc">Din pensionsopsparing er af en størrelse hvor topskat kan være relevant — bruges til at beregne om du betaler topskat nu og ved pension, samt optimere indbetalinger</div>
+          <div class="qdesc">${lixTekst(
+            'Topskat er en ekstra skat af den del af indkomsten der ligger over en vis grænse. Din opsparing er stor nok til at det kan blive relevant — vi bruger tallet til at tjekke om du rammer grænsen nu eller som pensionist',
+            'Din pensionsopsparing er af en størrelse hvor topskat kan være relevant — bruges til at beregne om du betaler topskat nu og ved pension, samt optimere indbetalinger',
+            'Opsparingens størrelse gør topskatteoptimering relevant — bruges til at vurdere marginalskat nu vs. ved udbetaling'
+          )}</div>
         </td>
         <td class="qi">
           <input type="number" id="iq8" value="1000000" min="0" step="10000">
@@ -1390,7 +1412,11 @@ Upload derefter PDF'en her øverst til højre.`,
     rows += `
       <tr>
         <td class="ql"><strong>9.</strong> Fri formue (aktier/obligationer/opsparing)
-          <div class="qdesc">Beløb investeret uden for pensionsordninger — beregnes separat med kapitalbeskatning</div>
+          <div class="qdesc">${lixTekst(
+            'Aktier, obligationer eller opsparing du har UD OVER din pension — beskattes efter andre regler end selve pensionen, så det regnes for sig',
+            'Beløb investeret uden for pensionsordninger — beregnes separat med kapitalbeskatning',
+            'Frie midler (aktier/obligationer/opsparing) uden for pensionsordninger — regnes separat med kapitalindkomstbeskatning'
+          )}</div>
         </td>
         <td class="qi">
           <input type="number" id="iq9" placeholder="0" min="0" step="50000">
@@ -1399,7 +1425,11 @@ Upload derefter PDF'en her øverst til højre.`,
       </tr>
       <tr id="iq9b_row" style="display:none">
         <td class="ql"><strong>9b.</strong> Kapitalbeskatning
-          <div class="qdesc">Effektiv skat på afkastet af fri formue</div>
+          <div class="qdesc">${lixTekst(
+            'Hvor meget skat du betaler af det din opsparing UDENFOR pension tjener (renter, udbytte, kursgevinst) — vælg den kategori der passer bedst',
+            'Effektiv skat på afkastet af fri formue',
+            'Effektiv marginalsats på kapital-/aktieindkomst for den frie formue'
+          )}</div>
         </td>
         <td class="qi">
           <select id="iq9b">
@@ -2094,6 +2124,20 @@ Upload derefter PDF'en her øverst til højre.`,
     const select = document.getElementById('pension-lix-select');
     if (select) select.value = String(niveau);
     aendrePensionLix();
+  }
+
+  // Interview-formularens spørgsmålstekster (buildInterviewForm) er statisk
+  // HTML, ikke LLM-genereret — de tilpasser sig derfor IKKE bare af sig selv
+  // til pension_lix sådan som chatsvarene gør via system-promptet. lixTekst()
+  // lader hvert spørgsmål der reelt indeholder fagudtryk vælge sin egen
+  // formulering pr. niveau, læst fra dropdown'en på det tidspunkt formularen
+  // bygges (dvs. lige efter upload — vælg niveau FØR upload for at ramme det).
+  function pensionLixNiveau() {
+    return parseInt(document.getElementById('pension-lix-select')?.value) || 2;
+  }
+  function lixTekst(niveau1, niveau2, niveau3) {
+    const n = pensionLixNiveau();
+    return n === 1 ? niveau1 : n === 3 ? niveau3 : niveau2;
   }
 
   function addMessage(role, text) {

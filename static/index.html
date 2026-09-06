@@ -403,10 +403,32 @@
       font-size: 0.9rem;
       margin: auto;
       padding: 32px;
-      max-width: 480px;
+      max-width: 720px;
     }
     #welcome .icon { font-size: 2.5rem; margin-bottom: 12px; }
     #welcome h2 { color: #3a5a78; margin-bottom: 8px; font-size: 1.1rem; }
+    #lix-picker { margin-top: 26px; text-align: left; }
+    .lix-picker-title { color: #3a5a78; font-weight: 600; font-size: 0.92rem; text-align: center; margin-bottom: 3px; }
+    .lix-picker-sub { color: #8aa0b8; font-size: 0.78rem; text-align: center; margin-bottom: 14px; }
+    .lix-picker-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .lix-card {
+      text-align: left;
+      background: white;
+      border: 1.5px solid #dde6ee;
+      border-radius: 10px;
+      padding: 12px 14px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .lix-card:hover { border-color: #7ea3c8; }
+    .lix-card.lix-card-selected { border-color: #1a3a5c; background: #eef4fb; }
+    .lix-card-title { color: #1a3a5c; font-weight: 600; font-size: 0.85rem; margin-bottom: 4px; }
+    .lix-card-desc { color: #5578a0; font-size: 0.78rem; line-height: 1.4; }
     .privacy-note {
       font-size: 0.75rem;
       color: #a0b0c0;
@@ -552,10 +574,9 @@
     <label for="pension-lix-select" style="font-size:0.78rem;color:#5578a0">Forklaringsniveau</label>
     <select id="pension-lix-select" onchange="aendrePensionLix()"
             style="font-size:0.78rem;padding:4px 8px;border-radius:6px;border:1px solid #c8d8e8;color:#1a3a5c;background:white">
-      <option value="1">1 — Helt blank</option>
-      <option value="2" selected>2 — Kender grundprodukter</option>
-      <option value="3">3 — Finansbranchen</option>
-      <option value="4">4 — Aktuar</option>
+      <option value="1">1 — Ny til pension</option>
+      <option value="2" selected>2 — Kender det grundlæggende</option>
+      <option value="3">3 — Godt kendskab</option>
     </select>
   </div>
 </div>
@@ -609,6 +630,24 @@
     <div class="icon">&#x1F4CA;</div>
     <h2>Velkommen til PensionsAnalytiker</h2>
     <p>Upload din PensionsInfo-rapport (PDF) øverst til højre for at komme i gang, eller stil et generelt pensionsspørgsmål.</p>
+    <div id="lix-picker">
+      <div class="lix-picker-title">Hvor meget kender du til pension i forvejen?</div>
+      <div class="lix-picker-sub">Styrer hvor meget assistenten forklarer undervejs — kan altid ændres igen bagefter under "Forklaringsniveau" ovenfor.</div>
+      <div class="lix-picker-grid">
+        <button type="button" class="lix-card" data-lix="1" onclick="vaelgPensionLixKort(1)">
+          <div class="lix-card-title">1 · Ny til pension</div>
+          <div class="lix-card-desc">Jeg er ikke inde i det endnu. Brug hverdagseksempler og undgå fagord, medmindre de forklares med det samme.</div>
+        </button>
+        <button type="button" class="lix-card lix-card-selected" data-lix="2" onclick="vaelgPensionLixKort(2)">
+          <div class="lix-card-title">2 · Kender det grundlæggende</div>
+          <div class="lix-card-desc">Jeg ved trods alt hvad en ratepension, aldersopsparing og folkepension er — men forklar gerne resten (modregning, tillægsprocent, skatteloft...).</div>
+        </button>
+        <button type="button" class="lix-card" data-lix="3" onclick="vaelgPensionLixKort(3)">
+          <div class="lix-card-title">3 · Godt kendskab</div>
+          <div class="lix-card-desc">Jeg har godt styr på det i forvejen og taler gerne fagsprog. Spring grundforklaringerne over — kom til sagen.</div>
+        </button>
+      </div>
+    </div>
   </div>
 </div>
 </main>
@@ -2035,14 +2074,26 @@ Upload derefter PDF'en her øverst til højre.`,
   // den bruges først i næste assistent-svar. Ét fælles niveau for hele
   // sessionen: dækker automatisk også forklaringen af partnerens analyse
   // (den vises i samme chat), så brugeren ikke skal sætte det to gange.
+  // To indgange til samme værdi — den lille dropdown (altid synlig, også
+  // efter upload) og de uddybende valgkort på den blanke velkomstskærm
+  // (kun synlige FØR upload) — holdes i sync begge veje her.
   async function aendrePensionLix() {
     if (!sessionId) return;
     const val = parseInt(document.getElementById('pension-lix-select').value);
+    document.querySelectorAll('.lix-card').forEach(el => {
+      el.classList.toggle('lix-card-selected', parseInt(el.dataset.lix) === val);
+    });
     await fetch('/api/parametre', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, pension_lix: val }),
     }).catch(() => null);
+  }
+
+  function vaelgPensionLixKort(niveau) {
+    const select = document.getElementById('pension-lix-select');
+    if (select) select.value = String(niveau);
+    aendrePensionLix();
   }
 
   function addMessage(role, text) {

@@ -602,7 +602,7 @@ PENSION_LIX_DEFAULT = 2
 # antages kendt. Sat af brugeren selv, ikke gættet ud fra deres formulering.
 _PENSION_LIX_NIVEAUER: dict[int, str] = {
     1: (
-        "HELT BLANK — brugeren aner intet om pension og skal ikke føle sig dum over det.\n"
+        "NY TIL PENSION — brugeren er ikke inde i det endnu og skal ikke føle sig dum over det.\n"
         "- Ingen fagudtryk uden at oversætte dem STRAKS til hverdagssprog i samme sætning "
         "(fx \"ratepension — en pensionsopsparing der udbetales over en periode, du selv har valgt\").\n"
         "- Undgå ord som 'modregning', 'tillægsprocent', 'skatteloft', 'personlig indkomst' helt, "
@@ -620,28 +620,20 @@ _PENSION_LIX_NIVEAUER: dict[int, str] = {
         "- Almindelig, venlig forklarende tone — dette er standardniveauet, brug det hvis intet andet er sat."
     ),
     3: (
-        "FINANSBRANCHEN — arbejder i branchen og taler som om de kender det hele (uanset om de reelt gør).\n"
+        "GODT KENDSKAB — har godt styr på det i forvejen og vil ikke spildes tiden med grundforklaringer.\n"
         "- Brug fagtermer frit og uden hånd-holdning: PAL-skat, PSL §19, AM-bidrag, personlig indkomst, "
         "modregningsgrundlag, tillægsprocent — ingen grundforklaringer.\n"
         "- Kortere, mere direkte svar. Kom til sagen. Nævn forbehold/nuancer i én bisætning, ikke et afsnit.\n"
         "- Det er fint at lyde som en kollega der sparrer, ikke en der underviser."
     ),
-    4: (
-        "AKTUAR — uddannet aktuar, vil have præcision, ikke pædagogik.\n"
-        "- Ingen forsimplinger. Brug præcis terminologi og gerne den underliggende matematik/formel når relevant "
-        "(marginalskat pr. trin, nutidsværdi-annuitet, diskonteringsrente).\n"
-        "- Det er fint at nævne modellens egne antagelser/begrænsninger teknisk (fx at et bestemt skøn er "
-        "uverificeret, eller hvilken forenkling der er lavet og hvorfor) — de vil typisk selv kunne vurdere det.\n"
-        "- Terse, præcist, som et peer-review af beregningen — ikke en forklaring til en lægmand."
-    ),
 }
 
 
 def _pension_lix_instruktion(niveau: int | None) -> str:
-    niveau_int = int(niveau) if niveau in (1, 2, 3, 4) else PENSION_LIX_DEFAULT
+    niveau_int = int(niveau) if niveau in (1, 2, 3) else PENSION_LIX_DEFAULT
     instruktion = _PENSION_LIX_NIVEAUER[niveau_int]
     return (
-        f"Niveau {niveau_int}/4. {instruktion}\n\n"
+        f"Niveau {niveau_int}/3. {instruktion}\n\n"
         "Dette gælder ALT du skriver — løbende chat, Tabel 1-3, og SÆRLIGT når du forklarer en foreslået "
         "optimal udbetalingsrækkefølge fra sekventeringsoptimeringen: den er ofte det sværeste at gennemskue "
         "(hvorfor lige DENNE rækkefølge af start-aldre/perioder giver et højere fast beløb), så brug ekstra "
@@ -1088,8 +1080,15 @@ async def upload_rapport(session_id: str, file: UploadFile = File(...)):
         trin0 = build_trin0(profil)
         sporgsmaal1 = build_sporgsmaal1(profil)
 
+        # pension_lix er en kommunikations-præference, ikke et beregnings-
+        # parameter — skal overleve et (gen-)upload ligesom resten af siden
+        # gør det, i modsætning til pensionsalder/afkast/osv., som med rette
+        # nulstilles ved en ny rapport.
+        _pension_lix_foer_upload = sessions[session_id].get("beregningsparametre", {}).get("pension_lix")
         sessions[session_id]["messages"] = []
-        sessions[session_id]["beregningsparametre"] = {}
+        sessions[session_id]["beregningsparametre"] = (
+            {"pension_lix": _pension_lix_foer_upload} if _pension_lix_foer_upload is not None else {}
+        )
 
         return {
             "success": True,

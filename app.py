@@ -133,7 +133,7 @@ fra PensionsInfo og giver konkrete, personlige anbefalinger.
 - Brug ALDRIG fed (**bold**) på tal eller beløb — hverken i tabeller eller løbende tekst
 - Tilføj ALTID en kort ansvarsfraskrivelse ved specifikke anbefalinger:
   *Bemærk: Dette er information, ikke reguleret rådgivning. Konsultér en certificeret pensionsrådgiver for konkrete beslutninger.*
-- Brug ikke teknisk jargon uden forklaring
+- Tilpas ALTID sprogbrug, tempo og forklaringsdybde til brugerens valgte FORKLARINGSNIVEAU (Pensionslix) — se kontekstblokken for det gældende niveau og præcis hvordan det skal omsætte til din formulering, herunder Tabel 1-3 og især forklaring af en foreslået optimal udbetalingsrækkefølge
 
 ## INTERVIEW-FLOW (følg ALTID denne rækkefølge ved ny rapport)
 
@@ -593,6 +593,63 @@ def _kør_engine(session_id: str) -> str:
 
 # ── Dynamisk kontekstblok (ændres pr. session/svar) ──────────────────────────
 
+PENSION_LIX_DEFAULT = 2
+
+# "Pensionslix" — hvor meget kan brugeren om pension i forvejen, ikke hvor
+# meget de forstår af verdenen i øvrigt. Renset for tal-niveau (det styres
+# af selve beregningen, ikke af dette) og for høflighed (altid respektfuld,
+# uanset niveau) — kun sprogbrug, tempo og hvor meget der skal forklares vs.
+# antages kendt. Sat af brugeren selv, ikke gættet ud fra deres formulering.
+_PENSION_LIX_NIVEAUER: dict[int, str] = {
+    1: (
+        "HELT BLANK — brugeren aner intet om pension og skal ikke føle sig dum over det.\n"
+        "- Ingen fagudtryk uden at oversætte dem STRAKS til hverdagssprog i samme sætning "
+        "(fx \"ratepension — en pensionsopsparing der udbetales over en periode, du selv har valgt\").\n"
+        "- Undgå ord som 'modregning', 'tillægsprocent', 'skatteloft', 'personlig indkomst' helt, "
+        "medmindre du samtidig forklarer dem med en hverdagsanalogi (\"jo mere du selv tjener ved siden af, "
+        "jo mindre topper staten op med\").\n"
+        "- Korte sætninger. Én pointe ad gangen. Ingen lange tabel-opremsninger uden at sige hvad de betyder for DEM.\n"
+        "- Ved Tabel 1-3: spring rå tal-tabeller over eller gør dem meget korte — sig i stedet det VIGTIGSTE tal "
+        "(\"du får ca. X kr udbetalt om måneden\") og hvorfor, før detaljerne."
+    ),
+    2: (
+        "KENDER GRUNDPRODUKTERNE — ved trods alt hvad en ratepension, aldersopsparing og folkepension er.\n"
+        "- Brug gerne produktnavnene uden at genforklare dem hver gang.\n"
+        "- Forklar stadig alt der ikke er et grundprodukt (modregning, tillægsprocent, skatteloft, PAL-skat, "
+        "personlig indkomst vs. kapitalindkomst) med én kort sætning FØRSTE gang det nævnes i samtalen.\n"
+        "- Almindelig, venlig forklarende tone — dette er standardniveauet, brug det hvis intet andet er sat."
+    ),
+    3: (
+        "FINANSBRANCHEN — arbejder i branchen og taler som om de kender det hele (uanset om de reelt gør).\n"
+        "- Brug fagtermer frit og uden hånd-holdning: PAL-skat, PSL §19, AM-bidrag, personlig indkomst, "
+        "modregningsgrundlag, tillægsprocent — ingen grundforklaringer.\n"
+        "- Kortere, mere direkte svar. Kom til sagen. Nævn forbehold/nuancer i én bisætning, ikke et afsnit.\n"
+        "- Det er fint at lyde som en kollega der sparrer, ikke en der underviser."
+    ),
+    4: (
+        "AKTUAR — uddannet aktuar, vil have præcision, ikke pædagogik.\n"
+        "- Ingen forsimplinger. Brug præcis terminologi og gerne den underliggende matematik/formel når relevant "
+        "(marginalskat pr. trin, nutidsværdi-annuitet, diskonteringsrente).\n"
+        "- Det er fint at nævne modellens egne antagelser/begrænsninger teknisk (fx at et bestemt skøn er "
+        "uverificeret, eller hvilken forenkling der er lavet og hvorfor) — de vil typisk selv kunne vurdere det.\n"
+        "- Terse, præcist, som et peer-review af beregningen — ikke en forklaring til en lægmand."
+    ),
+}
+
+
+def _pension_lix_instruktion(niveau: int | None) -> str:
+    niveau_int = int(niveau) if niveau in (1, 2, 3, 4) else PENSION_LIX_DEFAULT
+    instruktion = _PENSION_LIX_NIVEAUER[niveau_int]
+    return (
+        f"Niveau {niveau_int}/4. {instruktion}\n\n"
+        "Dette gælder ALT du skriver — løbende chat, Tabel 1-3, og SÆRLIGT når du forklarer en foreslået "
+        "optimal udbetalingsrækkefølge fra sekventeringsoptimeringen: den er ofte det sværeste at gennemskue "
+        "(hvorfor lige DENNE rækkefølge af start-aldre/perioder giver et højere fast beløb), så brug ekstra "
+        "omhu på niveau 1-2 til at forklare det ÅRSAGSMÆSSIGT (fx \"ved at vente med at hæve pengene her, "
+        "undgår du at miste noget af folkepensionen samtidig\") i stedet for blot at gengive tallene."
+    )
+
+
 def _get_dynamic_context(session_id: str) -> str:
     session = sessions.get(session_id, {})
     profil_tekst = session.get("profil_tekst", "Ingen rapport uploadet endnu.")
@@ -679,8 +736,11 @@ def _get_dynamic_context(session_id: str) -> str:
     if partner_profil_tekst:
         partner_profil_blok = f"## PARTNERENS PENSIONSPROFIL\n{partner_profil_tekst}\n\n"
 
+    lix_blok = f"## FORKLARINGSNIVEAU (Pensionslix)\n{_pension_lix_instruktion(params.get('pension_lix'))}\n\n"
+
     return (
-        f"## TIDLIGSTE PENSIONSALDER\n{tidligste} år\n\n"
+        lix_blok
+        + f"## TIDLIGSTE PENSIONSALDER\n{tidligste} år\n\n"
         + forsikring_blok
         + fri_formue_blok
         + f"## SPM6_FORDELING\n{spm6_fordeling}\n\n"
@@ -1210,6 +1270,10 @@ async def chat(req: ChatMessage):
 
 class Parametre(BaseModel):
     session_id: str
+    # Pensionslix — 1-4, styrer KUN hvordan LLM'en formulerer sig (se
+    # _pension_lix_instruktion), rører aldrig selve beregningen og skal
+    # derfor ikke indgå i _engine_cache_key.
+    pension_lix: int | None = None
     netto_indbetaling: float | None = None
     afkast_pct: float | None = None
     pensionsalder: int | None = None
@@ -1267,6 +1331,7 @@ async def gem_parametre(req: Parametre):
     if req.session_id not in sessions:
         raise HTTPException(404, "Session ikke fundet")
     p = sessions[req.session_id]["beregningsparametre"]
+    if req.pension_lix is not None:          p["pension_lix"] = req.pension_lix
     if req.netto_indbetaling is not None:    p["netto_indbetaling"] = req.netto_indbetaling
     if req.afkast_pct is not None:           p["afkast_pct"] = req.afkast_pct
     if req.pensionsalder is not None:        p["pensionsalder"] = req.pensionsalder

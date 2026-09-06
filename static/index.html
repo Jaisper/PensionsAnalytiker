@@ -548,6 +548,16 @@
   <button class="quick-btn" onclick="askQuick('Giv mig en kort oversigt over det danske pensionssystem — folkepension, ATP og private ordninger.')">Det danske pensionssystem</button>
   <button class="quick-btn" onclick="askQuick('Hvad er forskellen på ratepension, livsvarig pension, aldersopsparing og kapitalpension?')">Danske pensionsprodukter</button>
   <button class="quick-btn" onclick="showStaticAnswer('pensionsinfo')">Hent PensionsInfo-rapport</button>
+  <div id="lix-control" style="margin-left:auto;display:flex;align-items:center;gap:6px" title="Styrer hvor meget forklaring/fagsprog assistenten bruger — kan ændres når som helst, også midt i samtalen. Gælder også når partnerens analyse forklares, så du behøver ikke sætte det igen der.">
+    <label for="pension-lix-select" style="font-size:0.78rem;color:#5578a0">Forklaringsniveau</label>
+    <select id="pension-lix-select" onchange="aendrePensionLix()"
+            style="font-size:0.78rem;padding:4px 8px;border-radius:6px;border:1px solid #c8d8e8;color:#1a3a5c;background:white">
+      <option value="1">1 — Helt blank</option>
+      <option value="2" selected>2 — Kender grundprodukter</option>
+      <option value="3">3 — Finansbranchen</option>
+      <option value="4">4 — Aktuar</option>
+    </select>
+  </div>
 </div>
 
 <div id="parametre-panel" style="display:none">
@@ -2017,6 +2027,22 @@ Upload derefter PDF'en her øverst til højre.`,
   function askQuick(text) {
     document.getElementById('message-input').value = text;
     sendMessage();
+  }
+
+  // Pensionslix — styrer KUN hvordan assistenten formulerer sig (se
+  // _pension_lix_instruktion i app.py), aldrig selve beregningen. Gemmes
+  // stille i baggrunden — ingen genberegning, ingen bekræftelses-besked,
+  // den bruges først i næste assistent-svar. Ét fælles niveau for hele
+  // sessionen: dækker automatisk også forklaringen af partnerens analyse
+  // (den vises i samme chat), så brugeren ikke skal sætte det to gange.
+  async function aendrePensionLix() {
+    if (!sessionId) return;
+    const val = parseInt(document.getElementById('pension-lix-select').value);
+    await fetch('/api/parametre', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, pension_lix: val }),
+    }).catch(() => null);
   }
 
   function addMessage(role, text) {

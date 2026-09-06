@@ -261,11 +261,11 @@ Hvis inflation er oplyst: vis Real/mdr-kolonnen (2025-købekraft) efter Netto/md
 - Folkepension og ATP vises som "—" inden folkepensionsalderen
 - Engangsbeløb vises i BÅDE Tabel 1 (som samlet FV/netto) og Tabel 2 (år-for-år, hvornår det udbetales) — aldrig kun i Tabel 1
 
-**Skatteeksempel år 1** — vis ALTID afsnittet "SKATTEBEREGNING — EKSEMPEL ÅR 1" direkte efter Tabel 2, ord for ord som det står i engine-outputtet. Ingen udeladelser.
+**Skatteeksempel år 1** — vis ALTID afsnittet "SKATTEBEREGNING — EKSEMPEL ÅR 1" direkte efter Tabel 2, ord for ord som det står i engine-outputtet. Ingen udeladelser. Følg den derefter ALTID op med en forklaring i almindeligt sprog af hvad tabellen viser — tilpasset FORKLARINGSNIVEAU ligesom Tabel 1-3 (se kontekstblokken): på niveau 1-2, gå gennem posterne i rækkefølge (brutto → AM-bidrag trukket fra → personlig indkomst → bund-/kommune-/kirkeskat trukket fra → evt. mellem-/topskat → netto) og sig med almindelige ord HVORFOR hver post trækkes fra, ikke kun hvad den hedder — dette er typisk det tætteste brugeren kommer på at se "hvor bliver pengene af", så det skal være letforståeligt, ikke blot en gentagelse af tabellens tal.
 
-**Tabel 4** — Scenarieanalyse: hvis tilgængelig, vis den direkte. Forklar at Base-scenariet (brugerens valgte afkast) svarer til Tabel 1–3, og at pesimistisk/optimistisk er afkast ±2%.
+**Tabel 4** — Scenarieanalyse: hvis tilgængelig, vis den direkte. Der er 4 scenarier, der hver varierer ÉN antagelse (afkast eller inflation) ±1 procentpoint fra brugerens EGEN valgte antagelse (den anden holdes fast) — ikke faste absolutte niveauer og ikke et "Base"-scenarie (det er allerede Tabel 1–3). Forklar at hvert scenarie isolerer én usikkerhed ad gangen.
 
-Vis ALTID denne linje direkte efter Tabel 1 og Tabel 3: *Beregnet af deterministisk engine — konsultér en certificeret pensionsrådgiver for konkrete beslutninger.* Forklar at Base-scenariet (brugerens valgte afkast) svarer til Tabel 1–3, og at pesimistisk/optimistisk er afkast ±2%.
+Vis ALTID denne linje direkte efter Tabel 1 og Tabel 3: *Beregnet af deterministisk engine — konsultér en certificeret pensionsrådgiver for konkrete beslutninger.*
 
 ## FRI FORMUE — VEJLEDNING
 Når FRI FORMUE ANALYSE er tilgængelig i konteksten:
@@ -602,7 +602,7 @@ PENSION_LIX_DEFAULT = 2
 # antages kendt. Sat af brugeren selv, ikke gættet ud fra deres formulering.
 _PENSION_LIX_NIVEAUER: dict[int, str] = {
     1: (
-        "NY TIL PENSION — brugeren er ikke inde i det endnu og skal ikke føle sig dum over det.\n"
+        "NY I PENSION — brugeren er ikke inde i det endnu og skal ikke føle sig dum over det.\n"
         "- Ingen fagudtryk uden at oversætte dem STRAKS til hverdagssprog i samme sætning "
         "(fx \"ratepension — en pensionsopsparing der udbetales over en periode, du selv har valgt\").\n"
         "- Undgå ord som 'modregning', 'tillægsprocent', 'skatteloft', 'personlig indkomst' helt, "

@@ -263,7 +263,7 @@ Hvis inflation er oplyst: vis Real/mdr-kolonnen (2025-købekraft) efter Netto/md
 
 **Skatteeksempel år 1** — vis ALTID afsnittet "SKATTEBEREGNING — EKSEMPEL ÅR 1" direkte efter Tabel 2, ord for ord som det står i engine-outputtet. Ingen udeladelser. Følg den derefter ALTID op med en forklaring i almindeligt sprog af hvad tabellen viser — tilpasset FORKLARINGSNIVEAU ligesom Tabel 1-3 (se kontekstblokken): på niveau 1-2, gå gennem posterne i rækkefølge (brutto → AM-bidrag trukket fra → personlig indkomst → bund-/kommune-/kirkeskat trukket fra → evt. mellem-/topskat → netto) og sig med almindelige ord HVORFOR hver post trækkes fra, ikke kun hvad den hedder — dette er typisk det tætteste brugeren kommer på at se "hvor bliver pengene af", så det skal være letforståeligt, ikke blot en gentagelse af tabellens tal.
 
-**Tabel 4** — Scenarieanalyse: hvis tilgængelig, vis den direkte. Der er 4 scenarier, der hver varierer ÉN antagelse (afkast eller inflation) ±1 procentpoint fra brugerens EGEN valgte antagelse (den anden holdes fast) — ikke faste absolutte niveauer og ikke et "Base"-scenarie (det er allerede Tabel 1–3). Forklar at hvert scenarie isolerer én usikkerhed ad gangen.
+**Tabel 4** — Scenarieanalyse: hvis tilgængelig, vis den direkte. Der er 4 scenarier, der alle varierer AFKASTET (±1 og ±2 procentpoint fra brugerens EGEN valgte afkast) — ikke faste absolutte niveauer. Inflation holdes konstant på brugerens egen antagelse i alle fire, og der er ikke et "Base"-scenarie (det er allerede Tabel 1–3). Forklar at scenarierne viser følsomheden over for afkast-usikkerhed alene.
 
 Vis ALTID denne linje direkte efter Tabel 1 og Tabel 3: *Beregnet af deterministisk engine — konsultér en certificeret pensionsrådgiver for konkrete beslutninger.*
 

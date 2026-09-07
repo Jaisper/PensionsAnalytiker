@@ -991,26 +991,26 @@ def jaevn_niveau_realt(resultat: dict) -> float:
 
 def generer_scenarier(profil: dict, parametre: dict, skat_params: Optional[SkatParametre]) -> list[dict]:
     """
-    Kør engine 4× — afkast og inflation hver ±1 procentpoint fra BRUGERENS
-    EGEN antagelse (ikke faste absolutte niveauer som tidligere), én
-    forudsætning ad gangen, den anden holdt fast. Returnerer liste af
-    scenarie-dicts til Tabel 4. "Base" (uændrede antagelser) er bevidst IKKE
-    et femte scenarie her — det er allerede Tabel 1-3 ovenfor.
+    Kør engine 4× — afkast ±1 og ±2 procentpoint fra BRUGERENS EGEN antagelse
+    (ikke faste absolutte niveauer). Inflation holdes konstant på brugerens
+    egen antagelse i alle 4 scenarier. Returnerer liste af scenarie-dicts til
+    Tabel 4. "Base" (uændret afkast) er bevidst IKKE et femte scenarie her —
+    det er allerede Tabel 1-3 ovenfor.
     """
     import copy
     r_base    = float(parametre.get("afkast_pct", 4.0))
     infl_base = float(parametre.get("inflation_pct", 0.0))
 
     scenarier_input = [
-        ("Afkast -1%point", "afkast", max(0.0, r_base - 1.0), infl_base),
-        ("Afkast +1%point", "afkast", r_base + 1.0, infl_base),
-        ("Inflation -1%point", "inflation", r_base, max(0.0, infl_base - 1.0)),
-        ("Inflation +1%point", "inflation", r_base, infl_base + 1.0),
+        ("Afkast -2%point", max(0.0, r_base - 2.0)),
+        ("Afkast -1%point", max(0.0, r_base - 1.0)),
+        ("Afkast +1%point", r_base + 1.0),
+        ("Afkast +2%point", r_base + 2.0),
     ]
 
     results = []
-    for label, varieret, r_val, infl_val in scenarier_input:
-        p_copy = {**parametre, "afkast_pct": r_val, "inflation_pct": infl_val}
+    for label, r_val in scenarier_input:
+        p_copy = {**parametre, "afkast_pct": r_val, "inflation_pct": infl_base}
         try:
             res = generer_udbetalingstabel(copy.deepcopy(profil), p_copy, skat_params)
             fp_a   = res["fp_alder"]
@@ -1019,9 +1019,7 @@ def generer_scenarier(profil: dict, parametre: dict, skat_params: Optional[SkatP
             fp_row = next((row for row in tbl if row["alder"] >= fp_a), None)
             results.append({
                 "label":      label,
-                "varieret":   varieret,
                 "r":          r_val,
-                "inflation":  infl_val,
                 "start_mdr":  round(first["total_netto_mdr"]) if first else 0,
                 "fp_mdr":     round(fp_row["total_netto_mdr"]) if fp_row else 0,
                 "jaevn_mdr":      res.get("jaevn_netto_mdr", 0),
@@ -1697,26 +1695,26 @@ def format_engine_til_llm(result: dict) -> str:
         real_hdr = " | Jævn netto/mdr (i dagens købekraft)" if vis_realt_4 else ""
         L += [
             "",
-            "### TABEL 4 — SCENARIEANALYSE (afkast og inflation hver ±1%point fra din egen antagelse)",
-            f"| Scenarie | Afkast | Inflation | Netto/mdr ved pensionsstart | Netto/mdr ved folkepension | Jævn netto/mdr (ved pensionsstart){real_hdr} |",
-            "|---|---:|---:|---:|---:|---:" + ("|---:" if vis_realt_4 else "") + "|",
+            "### TABEL 4 — SCENARIEANALYSE (afkast ±1 og ±2%point fra din egen antagelse, inflation konstant)",
+            f"| Scenarie | Afkast | Netto/mdr ved pensionsstart | Netto/mdr ved folkepension | Jævn netto/mdr (ved pensionsstart){real_hdr} |",
+            "|---|---:|---:|---:|---:" + ("|---:" if vis_realt_4 else "") + "|",
         ]
         for s in scenarier:
             real_col = f" | {s['jaevn_mdr_real']:,.0f} kr/mdr".replace(",", ".") if vis_realt_4 else ""
             L.append(
-                f"| {s['label']} | {s['r']:.1f}% | {s.get('inflation', 0):.1f}%"
+                f"| {s['label']} | {s['r']:.1f}%"
                 f" | {s['start_mdr']:,.0f} kr/mdr"
                 f" | {s['fp_mdr']:,.0f} kr/mdr"
                 f" | {s['jaevn_mdr']:,.0f} kr/mdr".replace(",", ".")
                 + real_col + " |"
             )
         L.append(
-            "*(Hvert scenarie ændrer KUN den ene forudsætning (afkast ELLER inflation) — den anden holdes på din "
-            "egen antagelse. Ingen af de fire svarer til Tabel 1-3 — det uændrede udgangspunkt står allerede der. "
+            "*(Hvert scenarie ændrer KUN afkastet — inflation holdes på din egen antagelse i alle fire. "
+            "Ingen af de fire svarer til Tabel 1-3 — det uændrede udgangspunkt står allerede der. "
             "\"Ved pensionsstart\" er nominelt — kronebeløb stiger med inflationen fra dette udgangspunkt, ligesom Tabel 3.)*"
             if vis_realt_4 else
-            "*(Hvert scenarie ændrer KUN den ene forudsætning (afkast ELLER inflation) — den anden holdes på din "
-            "egen antagelse. Ingen af de fire svarer til Tabel 1-3 — det uændrede udgangspunkt står allerede der.)*"
+            "*(Hvert scenarie ændrer KUN afkastet — inflation holdes på din egen antagelse i alle fire. "
+            "Ingen af de fire svarer til Tabel 1-3 — det uændrede udgangspunkt står allerede der.)*"
         )
 
     return "\n".join(L)

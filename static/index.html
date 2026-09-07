@@ -2750,11 +2750,30 @@ function _opdaterHusstandTotal() {
     `<span style="opacity:0.75">(dig: ${egen.toLocaleString('da-DK')} + partner: ${partner.toLocaleString('da-DK')})</span>`;
 }
 
+// Beregner den mindste venstre-gutter (i px) der er nødvendig for at vise
+// mindst 30 tegn af det LÆNGSTE produkt-label uden at blive skåret af —
+// delt mellem diagrammet (Y-akse-bredde, se renderChart) og tidslinjens
+// row-label-kolonne (se renderTimeline), så de to ALTID matcher hinanden
+// (se renderTimeline's egen kommentar om hvorfor det er nødvendigt for
+// lodret alignment). Måler den FAKTISKE tekst med canvas.measureText i
+// stedet for et gættet tegn/pixel-forhold, så det er præcist uanset font.
+function _minGutterPx(data) {
+  const produkter = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
+  const engangs   = data.engangsbeloeb || [];
+  const labels = [...produkter, ...engangs].map(p => `${p.selskab} – ${p.produkttype}`.slice(0, 30));
+  if (!labels.length) return 0;
+  const mctx = document.createElement('canvas').getContext('2d');
+  mctx.font = "11.84px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";  // matcher .tl-row-label (0.74rem)
+  const maxTextPx = Math.max(...labels.map(l => mctx.measureText(l).width));
+  return Math.ceil(maxTextPx) + 12;  // lidt luft til kant/ellipsis
+}
+
 function renderChart(data) {
   const tabel        = data.tabel;
   const produkter    = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
   const engangs      = data.engangsbeloeb || [];
   const fpAlder      = data.fp_alder;
+  const minGutterPx  = _minGutterPx(data);
   const labels       = tabel.map(r => r.alder);
   const jaevnTabel   = data.jaevn_tabel || [];
   const inflationPct = data.parametre?.inflation_pct || 0;
@@ -3039,6 +3058,11 @@ function renderChart(data) {
             callback: v => v.toLocaleString('da-DK'),
           },
           beginAtZero: true,
+          // Tvinger Y-aksens bredde op til mindst minGutterPx, selv når
+          // tal-labels (fx "20.000") er smallere end det — ellers ville
+          // diagrammets gutter være smallere end tidslinjens (se
+          // renderTimeline), og de to ville ikke længere flugte lodret.
+          afterFit: axis => { if (axis.width < minGutterPx) axis.width = minGutterPx; },
         },
       },
       plugins: {
@@ -3112,10 +3136,16 @@ function renderTimeline(data, target = 'primary') {
   // sig sidelæns i forhold til diagrammet, selv når selve aldersdomænet (ovenfor)
   // er korrekt. Diagrammet og tidslinjen er lige brede søskende-elementer i
   // samme forælder (se #person-tab-panel-chart), så chartArea.left er direkte
-  // sammenlignelig med denne container. Falder tilbage til den tidligere
-  // faste værdi (168px) hvis diagrammet af en eller anden grund ikke er
-  // klar endnu.
-  const gutterPx = Math.round(_chartInstance?.chartArea?.left ?? 168);
+  // sammenlignelig med denne container. Faldet tilbage til _minGutterPx
+  // (samme beregning som diagrammets Y-akse tvinges til via afterFit, se
+  // renderChart) hvis diagrammet af en eller anden grund ikke er klar endnu
+  // — og bruges under alle omstændigheder som GULV, så et produktnavn på
+  // mindst 30 tegn altid kan vises uden at blive skåret af, selv hvis
+  // diagrammets tal-akse tilfældigvis er smallere end det (fx små beløb).
+  const gutterPx = Math.max(
+    Math.round(_chartInstance?.chartArea?.left ?? 0),
+    _minGutterPx(data),
+  ) || 168;
   const rowLabelPx = Math.max(40, gutterPx - 8);  // 8px = .tl-row's gap
 
   let html = `<div class="tl-label">Juster udbetalingstidspunkter</div>
@@ -3131,7 +3161,10 @@ function renderTimeline(data, target = 'primary') {
     const startAge = prod.start_alder;
     // Engangsbeløb: smal markør (1 år bredde) der kun kan flyttes (ingen stræk)
     const stopAge  = isEngangs ? startAge + 1 : (prod.stopper_ved_alder ?? ageMax);
-    const label    = `${prod.selskab} – ${prod.produkttype}`.slice(0, 28);
+    // Ingen hård afkortning her — kolonnen er nu altid mindst bred nok til
+    // 30 tegn (se _minGutterPx), og CSS' egen ellipsis (.tl-row-label)
+    // klarer resten for de sjældne navne der er endnu længere.
+    const label    = `${prod.selskab} – ${prod.produkttype}`;
 
     const leftPct  = pct(startAge);
     const widthPct = Math.max(1, pct(stopAge) - leftPct);

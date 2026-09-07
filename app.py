@@ -9,6 +9,7 @@ import uuid
 import hashlib
 import time
 import tempfile
+import asyncio
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
@@ -48,6 +49,15 @@ sessions: dict[str, dict] = {}
 
 MAX_HISTORY_MESSAGES = 40
 MAX_UPLOAD_BYTES = 25_000_000
+
+# Sidste sikkerhedsnet mod en hængende PDF-parsing (se pdf_parser.py's egne,
+# strammere LLM-forsøgs-timeouts) — uden et loft her kunne et usædvanligt
+# langsomt kald i værste fald løbe længere end platformens EGEN request-
+# timeout, som så afbryder forbindelsen først og returnerer en HTML-fejlside
+# i stedet for JSON (browseren ser "<!DOCTYPE... is not valid JSON"). Sat
+# rummeligt over pdf_parser.py's eget værste-falds-loft (~85s), så DEN
+# fejlbesked altid når frem først.
+PDF_PARSE_TIMEOUT_SEK = 100
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 
@@ -1063,7 +1073,7 @@ async def upload_rapport(session_id: str, file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
-        profil = await parse_pensionsinfo_pdf(tmp_path)
+        profil = await asyncio.wait_for(parse_pensionsinfo_pdf(tmp_path), timeout=PDF_PARSE_TIMEOUT_SEK)
         profil_tekst = format_profil_til_tekst(profil)
 
         sessions[session_id]["profil"] = profil
@@ -1101,6 +1111,13 @@ async def upload_rapport(session_id: str, file: UploadFile = File(...)):
         }
     except HTTPException:
         raise
+    except asyncio.TimeoutError:
+        logging.error("Upload timeout for session %s (over %ss)", session_id, PDF_PARSE_TIMEOUT_SEK)
+        raise HTTPException(
+            504,
+            detail="Rapporten tog for lang tid at behandle. Prøv evt. igen — større rapporter med "
+                   "mange aftaler kan i sjældne tilfælde tage længere end normalt.",
+        )
     except Exception as e:
         import traceback
         logging.error("Upload fejl for session %s: %s", session_id, traceback.format_exc())
@@ -1129,7 +1146,7 @@ async def upload_partner_rapport(session_id: str, file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
-        profil_partner = await parse_pensionsinfo_pdf(tmp_path)
+        profil_partner = await asyncio.wait_for(parse_pensionsinfo_pdf(tmp_path), timeout=PDF_PARSE_TIMEOUT_SEK)
         profil_partner_tekst = format_profil_til_tekst(profil_partner)
 
         sessions[session_id]["profil_partner"] = profil_partner
@@ -1153,6 +1170,13 @@ async def upload_partner_rapport(session_id: str, file: UploadFile = File(...)):
         }
     except HTTPException:
         raise
+    except asyncio.TimeoutError:
+        logging.error("Partner-upload timeout for session %s (over %ss)", session_id, PDF_PARSE_TIMEOUT_SEK)
+        raise HTTPException(
+            504,
+            detail="Partnerens rapport tog for lang tid at behandle. Prøv evt. igen — større rapporter med "
+                   "mange aftaler kan i sjældne tilfælde tage længere end normalt.",
+        )
     except Exception as e:
         import traceback
         logging.error("Partner-upload fejl for session %s: %s", session_id, traceback.format_exc())

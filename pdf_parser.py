@@ -7,6 +7,7 @@ import re
 import os
 import json
 import asyncio
+import logging
 import warnings
 import pdfplumber
 from pathlib import Path
@@ -14,6 +15,12 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 warnings.filterwarnings("ignore")
+# pdfminer (pdfplumber's underlying tekst-motor) logger — ikke Python
+# warnings, så warnings.filterwarnings ovenfor rammer den ikke. Nogle
+# PensionsInfo-rapporter har utraditionelle/ufuldstændige font-descriptorer
+# eller farveværdier, som ellers drukner den rigtige log i hundredvis af
+# harmløse "Could get FontBBox..."-linjer per upload.
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
 # ── Simpelt, fokuseret ekstrakt-prompt ───────────────────────────────────────
 
@@ -201,13 +208,27 @@ def _filter_relevant_pages(pages: list[str]) -> str:
     return "\n\n".join(kept)
 
 
+# Et enkelt ekstraktions-kald har i praksis taget alt fra ~10 til ~70+
+# sekunder afhængigt af rapportens størrelse/antal aftaler — uden et loft
+# kunne ét hængende/usædvanligt langsomt forsøg, ganget med 3 gentagne
+# forsøg, nemt lægge uploadet langt ud over hvad platformens egen
+# request-timeout tillader. Når DEN rammer først, afbrydes forbindelsen før
+# vores eget try/except i app.py overhovedet ser fejlen, og browseren ender
+# med at prøve at JSON-parse en HTML-fejlside ("<!DOCTYPE..."). Loftet her
+# (og det reducerede antal forsøg) begrænser værste-falds-tiden markant,
+# så vi selv når at svare med en brugbar fejlbesked først.
+LLM_PER_FORSOEG_TIMEOUT_SEK = 40
+LLM_MAKS_FORSOEG = 2
+
+
 async def _extract_with_llm(text: str) -> dict:
-    """Kalder Claude med op til 3 forsøg ved fejl."""
+    """Kalder Claude med op til LLM_MAKS_FORSOEG forsøg ved fejl, hvert med
+    sin egen timeout (se LLM_PER_FORSOEG_TIMEOUT_SEK ovenfor)."""
     import anthropic as _anthropic
     client = _anthropic.AsyncAnthropic()
     last_exc: Exception = RuntimeError("Ingen forsøg gennemført")
 
-    for attempt in range(3):
+    for attempt in range(LLM_MAKS_FORSOEG):
         try:
             msg = await client.messages.create(
                 model="claude-sonnet-4-6",
@@ -216,6 +237,7 @@ async def _extract_with_llm(text: str) -> dict:
                     "role": "user",
                     "content": f"{EXTRACTION_PROMPT}\n\nREPORT TEXT:\n{text}",
                 }],
+                timeout=LLM_PER_FORSOEG_TIMEOUT_SEK,
             )
             raw = msg.content[0].text.strip()
             raw = re.sub(r"^```(?:json)?\n?", "", raw)
@@ -227,7 +249,7 @@ async def _extract_with_llm(text: str) -> dict:
             return json.loads(raw)
         except Exception as e:
             last_exc = e
-            if attempt < 2:
+            if attempt < LLM_MAKS_FORSOEG - 1:
                 await asyncio.sleep(2 ** attempt)
 
     raise last_exc
@@ -396,6 +418,17 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
             return int(v)
         return None
 
+    def safe_int_in_range(v, lo, hi):
+        # LLM'en SKAL levere et rent tal per ekstraktions-prompten, men
+        # garanterer det ikke — et uventet format (fx en streng med enhed,
+        # "62 år", eller en decimal) skal degradere til None for netop dette
+        # felt, ikke vælte hele parsingen af en ellers fin rapport.
+        try:
+            iv = int(v)
+        except (TypeError, ValueError):
+            return None
+        return iv if lo <= iv <= hi else None
+
     import re as _re
     from datetime import date as _date
 
@@ -451,10 +484,8 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
         prv = str(a.get("provider") or "")
         raw_type = a.get("type") or ""
         ptype = best_ptype(nr, prv, raw_type)
-        epa = a.get("earliest_payout_age")
-        epa_int = int(epa) if epa and 55 <= int(epa) <= 75 else None
-        apa = a.get("agreed_payout_age")
-        apa_int = int(apa) if apa and 55 <= int(apa) <= 85 else None
+        epa_int = safe_int_in_range(a.get("earliest_payout_age"), 55, 75)
+        apa_int = safe_int_in_range(a.get("agreed_payout_age"), 55, 85)
         ordninger.append({
             "aftalenr":                nr,
             "selskab":                 prv,

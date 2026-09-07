@@ -1545,7 +1545,18 @@ Upload derefter PDF'en her øverst til højre.`,
     formData.append('file', file);
     try {
       const res = await fetch(`/api/upload-partner/${sessionId}`, { method: 'POST', body: formData });
-      const data = await res.json();
+      // Ved timeout/proxy-fejl kan svaret være en HTML-fejlside i stedet for
+      // JSON (fx et 504 fra en reverse proxy) — res.json() ville da fejle
+      // med en kryptisk "Unexpected token '<'"-besked. Samme værn som det
+      // primære upload-flow (se file-input's change-handler) bruger allerede.
+      let data;
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const txt = await res.text();
+        throw new Error(`Server fejl (${res.status}): ${txt.slice(0, 200)}`);
+      }
       if (!res.ok || !data.success) throw new Error(data.detail || 'Ukendt fejl');
 
       _partnerUploaded = true;

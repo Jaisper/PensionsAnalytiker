@@ -95,32 +95,37 @@ BUFFERDÆKNING — fordi DYBDE og VARIGHED alene viste sig utilstrækkelige
 
 Søgerummet kan blive langt større end det er praktisk at gennemgå
 udtømmende (fx 5 produkter × 15 aldre × 5 opsætningsår > 1 million
-kombinationer). Er det tilfældet, bruges en DETERMINISTISK (fast seed)
-tilfældig stikprøve i stedet for blot at tage de første N kombinationer i
-den kartesiske rækkefølge — en ren "de første N" ville systematisk fastfryse
-de forreste dimensioner nær deres laveste værdier og aldrig undersøge resten
-af deres interval (og dermed rapportere en kunstigt lav følsomhed for netop
-dem). Default-planens egen kombination indgår altid eksplicit, uanset
-stikprøve, så den garanteret er en af de evaluerede kandidater.
+kombinationer). Er det tilfældet, bruges IKKE en tilfældig stikprøve — det
+gav i praksis en følelse af vilkårlighed, og dækningsgraden af fx 3000
+tilfældige kombinationer ud af et rum på hundredtusinder er ofte under 1%,
+så en bruger der manuelt flytter blot ÉN produkt-bjælke i tidslinjen kunne
+sagtens finde en konkret, bedre kombination som stikprøven aldrig ramte.
 
-En ren tilfældig stikprøve er ALENE ikke nok: ved store søgerum (typisk
-allerede ved 3-4 løbende produkter) er dækningsgraden af 3000 tilfældige
-kombinationer ud af et rum på hundredtusinder ofte under 1%, og en bruger
-der manuelt flytter blot ÉN produkt-bjælke i tidslinjen kan sagtens finde en
-konkret, bedre kombination som stikprøven aldrig ramte — hvorved
-optimeringen fejlagtigt konkluderer "din nuværende plan er allerede den
-bedste". Derfor suppleres stikprøven altid med en GRÅDIG
-KOORDINAT-SØGNING (`_koordinat_udvid`) forankret i brugerens egen
-nuværende plan: for hver beslutningsdimension (hvert produkts start-alder,
-folkepensions-opsætningen) afprøves ALLE dens mulige værdier, mens de
-øvrige holdes fast ved den hidtil bedste vektor, og der rykkes til den
-bedste fundne værdi før næste dimension gennemgås. Det garanterer at enhver
-forbedring der findes ved at flytte ét produkt ad gangen — præcis den måde
-en bruger selv trækker tidslinjen på — bliver evalueret, uafhængigt af
-søgerummets størrelse og uafhængigt af om den tilfældige stikprøve ramte
-den. Et par gentagne runder fanger desuden de fleste sekventielle
+I stedet bruges en MULTI-START GRÅDIG KOORDINAT-SØGNING (`_koordinat_udvid`)
+fra flere spredte, DETERMINISTISKE udgangspunkter (`_byg_startvektorer`):
+brugerens egen nuværende plan, samt "alt sat til tidligst muligt", "alt sat
+til senest muligt", og jævnt fordelte kvantiler derimellem for hver
+dimension. Fra hvert udgangspunkt afprøves for hver beslutningsdimension
+(hvert produkts start-alder, betalingsperiode, folkepensions-opsætningen)
+ALLE dens mulige værdier, mens de øvrige holdes fast ved den hidtil bedste
+vektor, og der rykkes til den bedste fundne værdi før næste dimension
+gennemgås. Et par gentagne runder fanger desuden de fleste sekventielle
 to-produkt-justeringer (flyt produkt A til dets bedste punkt, derefter B ud
 fra As nye værdi, osv.).
+
+Fordelen frem for en tilfældig stikprøve: hvert evalueret punkt er et
+DIRECTED skridt mod et bedre resultat (enten selve udgangspunktet, eller det
+bedste naboskridt derfra) — aldrig et blindt gæt — og fordi hvert
+udgangspunkt er en konkret, navngivet strategi (ikke en tilfældig vektor),
+kan ethvert evalueret punkt forklares. To kørsler på samme profil giver
+desuden altid nøjagtig samme resultat (ingen seed at holde styr på). Flere
+udgangspunkter — ikke kun brugerens egen plan — er nødvendigt fordi grådig
+koordinatsøgning kan sidde fast i et LOKALT optimum, hvis den globale
+forbedring kræver at to dimensioner ændres SAMTIDIG (ingen af dem alene
+forbedrer noget fra ét bestemt udgangspunkt); et andet udgangspunkt lander
+ofte i en anden "dal" og finder derfra frem til det globale optimum i
+stedet. Default-planens egen kombination er altid ét af udgangspunkterne,
+så den garanteret indgår blandt de evaluerede kandidater.
 
 "Ingen løsning" er et gyldigt svar: kald altid har_loesning() før resultatet
 præsenteres, og vis aldrig den næstbedste-men-utilstrækkelige plan som var
@@ -139,7 +144,6 @@ som kildepakken selv bruger, jf. satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR)
 — IKKE en juridisk præcis beregning.
 """
 from __future__ import annotations
-import random
 from dataclasses import dataclass, field
 from itertools import product
 from typing import Any, Optional
@@ -150,8 +154,11 @@ import husstand
 MAKS_EVALUERINGER_DEFAULT = 3000
 STANDARD_OPSAETTELSE = [0, 1, 2, 3, 5]
 STANDARD_EKSTRA_AAR  = 10  # søg start-aldre op til pensionsalder + dette
-STIKPROEVE_SEED = 20260831  # fast seed — samme profil giver samme resultat hver gang
 KOORDINAT_RUNDER = 3  # antal grådige gennemløb af alle dimensioner, se _koordinat_udvid
+
+# Kvantiler (0=tidligst, 1=senest) der hver bliver et deterministisk
+# udgangspunkt for multi-start koordinatsøgningen, se _byg_startvektorer.
+STARTVEKTOR_KVANTILER = [0.0, 0.25, 0.5, 0.75, 1.0]
 
 MIN_RATEPENSION_UDB_AAR = 10  # lovkrav: ratepension skal mindst udbetales over 10 år
 STANDARD_PERIODE_INTERVAL = range(MIN_RATEPENSION_UDB_AAR, 31)  # 10-30 år
@@ -199,7 +206,7 @@ class Kandidat:
 @dataclass
 class OptimeringsResultat:
     evalueret: int
-    mulige_kombinationer: int  # størrelsen af det fulde søgerum, uanset stikprøve
+    mulige_kombinationer: int  # størrelsen af det fulde søgerum, uanset hvor mange der reelt evalueres
     antal_gennemfoerlige: int
     bedste: Optional[Kandidat]
     top: list[Kandidat] = field(default_factory=list)
@@ -264,29 +271,26 @@ def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: 
     return noegler, dimensioner
 
 
-def _kandidat_vektorer(dimensioner: list[list[tuple]], maks_evalueringer: int, default_vektor: tuple):
-    """Genererer kandidat-vektorer til evaluering. Udtømmende hvis det fulde
-    søgerum er lille nok; ellers en DETERMINISTISK tilfældig stikprøve (fast
-    seed) i stedet for blot de første N i kartesisk rækkefølge — en ren
-    prefix-afskæring fastfryser systematisk de forreste dimensioner nær
-    deres laveste værdier (se modulets docstring). default_vektor indgår
-    altid eksplicit, uanset stikprøve."""
-    mulige = 1
-    for d in dimensioner:
-        mulige *= len(d)
-
-    if mulige <= maks_evalueringer:
-        return list(product(*dimensioner)), mulige
-
-    rng = random.Random(STIKPROEVE_SEED)
-    valgt: set[tuple] = {default_vektor}
-    forsoeg = 0
-    maks_forsoeg = maks_evalueringer * 30
-    while len(valgt) < maks_evalueringer and forsoeg < maks_forsoeg:
-        vektor = tuple(rng.choice(d) for d in dimensioner)
-        valgt.add(vektor)
-        forsoeg += 1
-    return list(valgt), mulige
+def _byg_startvektorer(dimensioner: list[list[tuple]], default_vektor: tuple) -> list[tuple]:
+    """Bygger et sæt spredte, DETERMINISTISKE udgangspunkter til multi-start
+    koordinatsøgningen (se _koordinat_udvid og modulets docstring) — dækker
+    søgerummet fra flere forskellige vinkler (tidligst muligt, senest
+    muligt, og jævnt fordelte kvantiler derimellem, jf. STARTVEKTOR_KVANTILER)
+    i stedet for kun brugerens egen plan. Ingen tilfældighed indgår: to
+    kørsler på samme profil giver derfor altid præcis samme resultat, og
+    hvert udgangspunkt kan navngives og forklares konkret (fx "alt sat til
+    den tidligst mulige alder") i stedet for at være et uforklarligt
+    tilfældigt gæt. default_vektor (brugerens NUVÆRENDE plan) indgår altid
+    som det første udgangspunkt."""
+    startvektorer = [default_vektor]
+    for kvantil in STARTVEKTOR_KVANTILER:
+        vektor = tuple(
+            dim[min(len(dim) - 1, round(kvantil * (len(dim) - 1)))]
+            for dim in dimensioner
+        )
+        if vektor not in startvektorer:
+            startvektorer.append(vektor)
+    return startvektorer
 
 
 def _koordinat_udvid(
@@ -296,13 +300,18 @@ def _koordinat_udvid(
     score_for: dict[tuple, float],
     runder: int = KOORDINAT_RUNDER,
 ) -> None:
-    """Grådig koordinat-optimering forankret i start_vektor (brugerens egen
-    nuværende plan): for hver runde afprøves hver dimension over ALLE dens
-    værdier, mens de øvrige holdes fast ved den hidtil bedste vektor, og der
-    rykkes til den bedste fundne værdi før næste dimension. Kalder
-    evaluer_fn(vektor) for hver afprøvet kombination (som selv dedupper og
-    fylder score_for) — se modulets docstring for hvorfor dette supplement
-    til den tilfældige stikprøve er nødvendigt."""
+    """Grådig koordinat-optimering forankret i start_vektor (ét af de spredte
+    udgangspunkter fra _byg_startvektorer): for hver runde afprøves hver
+    dimension over ALLE dens værdier, mens de øvrige holdes fast ved den
+    hidtil bedste vektor, og der rykkes til den bedste fundne værdi før
+    næste dimension. Kalder evaluer_fn(vektor) for hver afprøvet kombination
+    (som selv dedupper og fylder score_for) — se modulets docstring for
+    hvorfor multi-start koordinatsøgning er valgt frem for en tilfældig
+    stikprøve. Kører altid alle sine runder til bunds (afbrydes kun hvis en
+    hel runde ikke fandt nogen forbedring) — evaluerings-budgettet i
+    optimer() styrer i stedet HVOR MANGE udgangspunkter der overhovedet får
+    lov at starte en kørsel, ikke om en allerede igangværende kørsel må
+    fuldføres."""
     evaluer_fn(start_vektor)
     bedste_vektor = start_vektor
     bedste_score = score_for[start_vektor]
@@ -345,7 +354,7 @@ def _parametre_for_vektor(base_parametre: dict, vektor: tuple[tuple, ...]) -> tu
 
 def _default_vektor(baseline_produkter: list[dict], nuvaerende_opsaettelse: int) -> tuple:
     """Bygger den vektor der svarer til brugerens NUVÆRENDE plan — bruges til
-    at garantere den altid indgår som kandidat, se _kandidat_vektorer. Skal
+    at garantere den altid indgår som kandidat, se _byg_startvektorer. Skal
     holde nøjagtig samme produkt-filtrering og -rækkefølge som
     _byg_soegerum, da de to vektorers indgange er positions-matchede."""
     delvektor: list[tuple] = []
@@ -480,7 +489,10 @@ def optimer(
         alle_produkter, baseline["fp_alder"], baseline["pensionsalder"], nuvaerende_opsaettelse
     )
     default_vektor = _default_vektor(alle_produkter, nuvaerende_opsaettelse)
-    vektorer, mulige_kombinationer = _kandidat_vektorer(dimensioner, maks_evalueringer, default_vektor)
+
+    mulige_kombinationer = 1
+    for d in dimensioner:
+        mulige_kombinationer *= len(d)
 
     evaluerede: list[tuple[tuple, float, float]] = []  # (vektor, score, jaevn_netto_mdr)
     sete: set[tuple] = set()
@@ -496,14 +508,20 @@ def optimer(
         evaluerede.append((vektor, s, jaevn))
         score_for[vektor] = s
 
-    for vektor in vektorer:
-        _evaluer(vektor)
-
-    # Grådig koordinat-søgning forankret i brugerens nuværende plan — fanger
-    # enkelt-produkt-forbedringer (og typiske sekventielle to-produkt-
-    # justeringer) som en stikprøve over et stort søgerum kan misse, se
-    # modulets docstring.
-    _koordinat_udvid(dimensioner, default_vektor, _evaluer, score_for)
+    if mulige_kombinationer <= maks_evalueringer:
+        # Søgerummet er lille nok til at gennemgå udtømmende — ingen grund
+        # til hverken multi-start eller koordinatsøgning, alt bliver evalueret.
+        for vektor in product(*dimensioner):
+            _evaluer(vektor)
+    else:
+        # For store søgerum: multi-start grådig koordinatsøgning fra flere
+        # spredte, DETERMINISTISKE udgangspunkter (se _byg_startvektorer) —
+        # IKKE en tilfældig stikprøve. Se modulets docstring for hvorfor
+        # dette finder reelle forbedringer mere pålideligt.
+        for start in _byg_startvektorer(dimensioner, default_vektor):
+            if len(score_for) >= maks_evalueringer:
+                break
+            _koordinat_udvid(dimensioner, start, _evaluer, score_for)
 
     evaluerede.sort(key=lambda x: x[1], reverse=True)
     gennemfoerlige = [e for e in evaluerede if e[1] != float("-inf")]

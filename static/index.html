@@ -3440,8 +3440,8 @@ function renderOptimeringsResultat(data, ingenAendring = false, forPartner = fal
   if (!el) return;
   if (!data || !data.success) { el.innerHTML = ''; el.style.display = 'none'; return; }
   const b = data.bedste;
-  const stikproeve = data.mulige_kombinationer > data.evalueret
-    ? ` (stikprøve af ${data.mulige_kombinationer.toLocaleString('da-DK')} mulige)` : '';
+  const soegeNote = data.mulige_kombinationer > data.evalueret
+    ? ` (målrettet søgning i et rum på ${data.mulige_kombinationer.toLocaleString('da-DK')} mulige)` : '';
   // usikker_venteprocent: den bedste (eller den nuværende, hvis ingenAendring)
   // plan hviler på et UVERIFICERET 6%/år-skøn for folkepensions-ventetillæg
   // (satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR) — skal vises uanset om det
@@ -3471,13 +3471,13 @@ function renderOptimeringsResultat(data, ingenAendring = false, forPartner = fal
     ? `
     <div style="margin-top:10px;padding:10px 12px;background:#f0f5fa;border-radius:8px;font-size:0.85rem">
       <strong>Din nuværende plan er allerede den bedste</strong> — intet at anvende
-      (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${stikproeve})
+      (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${soegeNote})
       ${usikkerNote}${husstandNote}
     </div>`
     : `
     <div style="margin-top:10px;padding:10px 12px;background:#f0f5fa;border-radius:8px;font-size:0.85rem">
       <strong>Bedste udbetalingsrækkefølge fundet</strong> — fast månedsbeløb ${Math.round(b.jaevn_netto_mdr).toLocaleString('da-DK')} kr/mdr
-      (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${stikproeve})
+      (${data.antal_gennemfoerlige.toLocaleString('da-DK')} af ${data.evalueret.toLocaleString('da-DK')} planer gennemførlige${soegeNote})
       <button class="chart-btn primary" style="margin-left:10px" onclick="anvendOptimering(${forPartner})">Anvend denne plan</button>
       ${usikkerNote}${husstandNote}
     </div>` + forklaringBlok;
@@ -3548,13 +3548,13 @@ async function koerOptimering(forPartner = false) {
     ? `Folkepension foreslås udskudt ${b.folkepension_opsaettelse_aar} år (forenklet ventetillæg-skøn på 6%/år — IKKE en juridisk præcis beregning).`
     : 'Folkepension foreslås ikke udskudt.';
 
-  const stikproeveNote = data.mulige_kombinationer > data.evalueret
-    ? ` (det fulde søgerum har ${data.mulige_kombinationer.toLocaleString('da-DK')} kombinationer — der er brugt en tilfældig stikprøve, ikke en udtømmende gennemgang)`
+  const soegeMetodeNote = data.mulige_kombinationer > data.evalueret
+    ? ` (det fulde søgerum har ${data.mulige_kombinationer.toLocaleString('da-DK')} kombinationer — der er brugt en målrettet søgning fra flere spredte udgangspunkter, ikke en udtømmende gennemgang)`
     : '';
 
   if (ingenAendring) {
     await sendSystemTrigger(
-      `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen (${data.evalueret} kombinationer afsøgt${stikproeveNote}, ` +
+      `Jeg har kørt sekventeringsoptimeringen for udbetalingsrækkefølgen (${data.evalueret} kombinationer afsøgt${soegeMetodeNote}, ` +
       `${data.antal_gennemfoerlige} gennemførlige). Resultatet er at DIN NUVÆRENDE PLAN allerede er den bedste fundne — ` +
       `ingen anden kombination af start-aldre, engangsbeløbs-timing eller folkepensions-opsætning giver et højere fast ` +
       `månedsbeløb uden enten at forringe det værste enkeltår eller skabe flere lavindkomst-år end du allerede har. ` +
@@ -3582,7 +3582,7 @@ async function koerOptimering(forPartner = false) {
     `der skjuler en flerårig lavindkomst-periode. ` +
     `Evalueret ${data.evalueret} kombinationer af per-produkt start-aldre, ratepensioners udbetalingsperiode ` +
     `(min. 10 år, lovkrav), folkepensions-opsætning, og udbetalingsår for engangsbeløb der er markeret til at ` +
-    `indgå i bufferen${stikproeveNote} ` +
+    `indgå i bufferen${soegeMetodeNote} ` +
     `(engangsbeløb der er FRAVALGT bufferen er IKKE en del af søgningen — det er allerede et truffet valg), ` +
     `heraf ${data.antal_gennemfoerlige} gennemførlige (optimeringen kan aldrig gøre det værste enkeltår eller antallet af lavindkomst-år ringere end det allerede er i din nuværende plan). ` +
     `Bedste fundne plan — start-aldre: ${startLinjer || 'uændret'}. ` +

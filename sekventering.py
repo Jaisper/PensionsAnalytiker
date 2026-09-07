@@ -52,9 +52,10 @@ Tre tidligere, svagere forsøg er droppet undervejs:
    der selv fandt en bedre rækkefølge ved at trække i tidslinjen kunne derfor
    opleve at optimeringen forkastede præcis den samme forbedring.
 
-Den nuværende tjek har derfor TRE dele — DYBDE, VARIGHED og
-BUFFERDÆKNING — fordi DYBDE og VARIGHED alene viste sig utilstrækkelige
-(se nedenfor):
+Den nuværende tjek har derfor FIRE dele — DYBDE, VARIGHED,
+BUFFERDÆKNING og BUFFER-VARIGHED — fordi DYBDE og VARIGHED alene viste sig
+utilstrækkelige (se nedenfor), og BUFFERDÆKNING alene senere viste sig at
+have PRÆCIS samme svaghed som det oprindelige dybde-gulv:
 
 1. DYBDE (absolut gulv): den enkelte kandidats LAVESTE rå alder-indkomst
    skal mindst matche default-planens EGEN laveste rå alder-indkomst (med
@@ -92,6 +93,20 @@ BUFFERDÆKNING — fordi DYBDE og VARIGHED alene viste sig utilstrækkelige
    dybde-tjekket, blot på buffer_rest i stedet for rå indkomst, så det
    hverken kollapser ved 0-underskud eller bliver virkningsløst ved et stort
    engangsbeløb.
+
+4. BUFFER-VARIGHED: opdaget efter en bruger rapporterede "et par år med
+   hul" i en optimeret plan, selvom BUFFERDÆKNING (punkt 3) ikke fandt noget
+   galt — fordi BUFFERDÆKNING, ligesom det oprindelige rene dybde-gulv i
+   punkt 1, kun ser på det ENKELTE værste punkt. En kandidat kan sagtens
+   have flere ÅR I TRÆK med et bufferunderskud der hver især er lige akkurat
+   inden for `BUFFER_TOLERANCE_MAANEDER` af default-planens ENE værste
+   punkt, selvom default-planen selv kun har ét sådant år. Derfor tælles nu
+   også antallet af år med et REELT bufferunderskud (`buffer_rest < 0` —
+   samme tærskel som diagrammet selv bruger til at fjerne den udjævnede
+   linje for netop det år, se engine.py), og dette antal må højst overstige
+   default-planens EGET antal med en lille, fast tolerance
+   (`BUFFER_HUL_EKSTRA_AAR_TILLADT`) — samme VARIGHED-princip som punkt 2,
+   blot på buffer_rest i stedet for rå indkomst.
 
 Søgerummet kan blive langt større end det er praktisk at gennemgå
 udtømmende (fx 5 produkter × 15 aldre × 5 opsætningsår > 1 million
@@ -184,6 +199,15 @@ HARDSHIP_EKSTRA_AAR_TILLADT = 0
 # varighedstjek alene fanger et bufferunderskud, der ikke er tilstrækkeligt
 # dækket af allerede modtagne penge.
 BUFFER_TOLERANCE_MAANEDER = 1.0
+
+# Et år tælles som et "buffer-hul" hvis buffer_rest reelt er negativ (samme
+# tærskel som diagrammet selv bruger til at fjerne den udjævnede linje for
+# netop det år). Kandidatens antal buffer-hul-år må højst overstige
+# default-planens EGET antal med denne tolerance — se modulets docstring,
+# punkt 4 (BUFFER-VARIGHED), for hvorfor BUFFERDÆKNING alene (punkt 3) ikke
+# fanger flere år i træk med et underskud der hver især er inden for
+# BUFFER_TOLERANCE_MAANEDER af default-planens ene værste punkt.
+BUFFER_HUL_EKSTRA_AAR_TILLADT = 0
 
 
 @dataclass
@@ -391,12 +415,22 @@ def _laveste_buffer_rest(resultat: dict) -> float:
     return min((row["buffer_rest"] for row in resultat["jaevn_tabel"]), default=0.0)
 
 
+def _antal_buffer_hul_aar(resultat: dict) -> int:
+    """Antal år med et REELT bufferunderskud (buffer_rest < 0) gennem hele
+    forløbet — samme tærskel som diagrammet selv bruger til at fjerne den
+    udjævnede linje for netop det år. Bruges til at begrænse VARIGHEDEN af
+    bufferunderskud, ikke kun dybden af det enkelte værste punkt (se
+    modulets docstring, punkt 4)."""
+    return sum(1 for row in resultat["jaevn_tabel"] if row["buffer_rest"] < 0)
+
+
 def score(
     resultat: dict,
     obj: Objektiv,
     baseline_laveste_raa: float,
     baseline_hardship_aar: int,
     baseline_laveste_buffer: float,
+    baseline_buffer_hul_aar: int,
 ) -> tuple[float, float]:
     """Returnerer (score, jaevn_niveau_realt). Score er det faste,
     bæredygtige månedsbeløb i DAGENS købekraft — højere er bedre, det ER
@@ -404,8 +438,9 @@ def score(
     bundgrænse, presser sin EGEN laveste rå alder-indkomst under
     default-planens EGEN laveste (dybde), har flere "hardship"-år end
     default-planen (varighed), presser sit EGET værste buffer_rest markant
-    dybere end default-planens (reel bufferdækning — se modulets
-    docstring), eller indeholder et fuldstændigt indkomst-hul."""
+    dybere end default-planens (reel bufferdækning), har flere år med et
+    reelt bufferunderskud end default-planen (buffer-varighed — se modulets
+    docstring, punkt 4), eller indeholder et fuldstændigt indkomst-hul."""
     jaevn_tabel = [r for r in resultat["jaevn_tabel"] if r["fase"] == "pension"]
     jaevn_niveau = jaevn_niveau_realt(resultat)
     graense = obj.haard_minimum_mdr if obj.haard_minimum_mdr is not None else 0.0
@@ -426,6 +461,9 @@ def score(
 
     buffer_tolerance_kr = jaevn_niveau * BUFFER_TOLERANCE_MAANEDER
     if _laveste_buffer_rest(resultat) < baseline_laveste_buffer - buffer_tolerance_kr:
+        return float("-inf"), 0.0
+
+    if _antal_buffer_hul_aar(resultat) > baseline_buffer_hul_aar + BUFFER_HUL_EKSTRA_AAR_TILLADT:
         return float("-inf"), 0.0
 
     # Et fuldstændigt indkomst-hul (fx før pensionsalder, eller hvis ALLE
@@ -478,6 +516,7 @@ def optimer(
         1 for v in baseline_raa_pr_alder.values() if v < baseline_jaevn * HARDSHIP_ANDEL_AF_JAEVN
     )
     baseline_laveste_buffer = _laveste_buffer_rest(baseline)
+    baseline_buffer_hul_aar = _antal_buffer_hul_aar(baseline)
 
     alle_produkter = baseline["produkter"]
 
@@ -504,7 +543,10 @@ def optimer(
         sete.add(vektor)
         p, _, _ = _parametre_for_vektor(parametre, vektor)
         resultat = generer_udbetalingstabel(profil, p, skat_params)
-        s, jaevn = score(resultat, obj, baseline_laveste_raa, baseline_hardship_aar, baseline_laveste_buffer)
+        s, jaevn = score(
+            resultat, obj, baseline_laveste_raa, baseline_hardship_aar,
+            baseline_laveste_buffer, baseline_buffer_hul_aar,
+        )
         evaluerede.append((vektor, s, jaevn))
         score_for[vektor] = s
 

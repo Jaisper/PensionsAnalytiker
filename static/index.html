@@ -2555,9 +2555,13 @@ async function loadAndRenderChart() {
   if (!res || !res.ok) return;
   _chartData = await res.json();
   _activeTab = 'primary';
+  // #chart-panel skal være synligt FØR Chart.js måler sin container — ellers
+  // måler den en skjult (0px bred) forælder og låser diagrammet fast på en
+  // forkert, for smal bredde, hvilket også ville få renderTimeline's
+  // gutter-matching (læser _chartInstance.chartArea.left) til at ramme forkert.
+  document.getElementById('chart-panel').style.display = 'block';
   renderChart(_chartData);
   renderTimeline(_chartData, 'primary');
-  document.getElementById('chart-panel').style.display = 'block';
   // Fold parametre-panel så chat-området ikke klemmes
   const pb = document.getElementById('parametre-panel-body');
   const pt = document.getElementById('parametre-panel-toggle');
@@ -3080,10 +3084,17 @@ function renderTimeline(data, target = 'primary') {
   const engangs   = data.engangsbeloeb || [];
   const tabelStart = data.tabel_start;
   const fpAlder    = data.fp_alder;
-  const pensionEnd = data.pensionsalder + (data.parametre?.udbetaling_aar || 30);
 
-  const ageMin = Math.min(tabelStart, 55);
-  const ageMax = Math.max(pensionEnd + 5, fpAlder + 5);
+  // Aldersdomænet skal matche diagrammets kategori-akse PRÆCIS (samme
+  // tabelStart, samme antal kategorier) — ellers driver søjlerne her væk fra
+  // diagrammets søjler jo længere til højre man kommer, selvom venstre kant
+  // tilfældigvis matcher. Diagrammets sidste kategori-kolonne slutter ved
+  // tabelStart + antal rækker (én mere end sidste rækkes alder, da hver
+  // kategori optager et helt "år"-bånd) — se tabel_slut i engine.py, som
+  // allerede garanterer tabellen dækker alle produkters fulde forløb, så
+  // der er ikke brug for ekstra "hovedrum" ud over selve tabellens længde.
+  const ageMin = tabelStart;
+  const ageMax = tabelStart + (data.tabel ? data.tabel.length : 1);
   const span   = ageMax - ageMin;
 
   function pct(age) { return Math.max(0, Math.min(100, ((age - ageMin) / span) * 100)); }
@@ -3096,9 +3107,20 @@ function renderTimeline(data, target = 'primary') {
     scaleMarks.push(`<span style="position:absolute;left:${pct(a)}%;transform:translateX(-50%)">${a}</span>`);
   }
 
+  // Venstre "gutter" (row-label-kolonnens bredde + mellemrum) skal matche
+  // diagrammets Y-akse-gutter PIXEL FOR PIXEL — ellers rykker alderskolonnerne
+  // sig sidelæns i forhold til diagrammet, selv når selve aldersdomænet (ovenfor)
+  // er korrekt. Diagrammet og tidslinjen er lige brede søskende-elementer i
+  // samme forælder (se #person-tab-panel-chart), så chartArea.left er direkte
+  // sammenlignelig med denne container. Falder tilbage til den tidligere
+  // faste værdi (168px) hvis diagrammet af en eller anden grund ikke er
+  // klar endnu.
+  const gutterPx = Math.round(_chartInstance?.chartArea?.left ?? 168);
+  const rowLabelPx = Math.max(40, gutterPx - 8);  // 8px = .tl-row's gap
+
   let html = `<div class="tl-label">Juster udbetalingstidspunkter</div>
   <div class="tl-track-area">
-    <div style="position:relative;height:16px;margin-bottom:2px;margin-left:168px">${scaleMarks.join('')}</div>`;
+    <div style="position:relative;height:16px;margin-bottom:2px;margin-left:${gutterPx}px">${scaleMarks.join('')}</div>`;
 
   const allProds = [...produkter, ...engangs];
   allProds.forEach((prod, idx) => {
@@ -3134,7 +3156,7 @@ function renderTimeline(data, target = 'primary') {
         : `Venstre kant: juster start · Midten: flyt · fra ${startAge} år, livsvarig`;
 
     html += `<div class="tl-row" data-key="${escapeAttr(prod.key)}" data-idx="${idx}">
-      <div class="tl-row-label" title="${label}">${label}</div>
+      <div class="tl-row-label" style="width:${rowLabelPx}px" title="${label}">${label}</div>
       <div class="tl-track" id="tl-track-${idx}"
            data-agemin="${ageMin}" data-agemax="${ageMax}" data-span="${span}"
            data-start="${startAge}" data-stop="${stopAge}"
@@ -3151,7 +3173,7 @@ function renderTimeline(data, target = 'primary') {
 
   // Folkepension marker
   html += `<div class="tl-row">
-    <div class="tl-row-label" style="color:#f97316">Folkepension</div>
+    <div class="tl-row-label" style="width:${rowLabelPx}px;color:#f97316">Folkepension</div>
     <div class="tl-track" style="pointer-events:none">
       <div class="tl-bar" style="left:${pct(fpAlder)}%;width:${100 - pct(fpAlder)}%;background:${FP_COLOR}cc">
         <span style="padding:0 4px">${fpAlder}→</span>
@@ -3167,7 +3189,7 @@ function renderTimeline(data, target = 'primary') {
     const ffLeftPct  = pct(ffStart);
     const ffWidthPct = Math.max(1, pct(ffStop) - ffLeftPct);
     html += `<div class="tl-row">
-      <div class="tl-row-label" style="color:#0f766e">Fri formue</div>
+      <div class="tl-row-label" style="width:${rowLabelPx}px;color:#0f766e">Fri formue</div>
       <div class="tl-track" style="pointer-events:none">
         <div class="tl-bar" style="left:${ffLeftPct}%;width:${ffWidthPct}%;background:#0f766ecc">
           <span style="padding:0 4px">${ff2.mdr_netto.toLocaleString('da-DK')} kr/mdr</span>

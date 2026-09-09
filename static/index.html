@@ -2286,6 +2286,17 @@ Upload derefter PDF'en her øverst til højre.`,
         });
       }
 
+      // Engine-beregningen kører allerede server-side FØR LLM-kaldet
+      // overhovedet starter (se _get_dynamic_context/_kør_engine i app.py) —
+      // på dette tidspunkt (fetch()-kaldet er resolvet, dvs. serveren har
+      // allerede parset "Mine svar:" og opdateret beregningsparametre) er
+      // diagram-data derfor allerede klar. Vent IKKE på at hele chat-svaret
+      // er streamet færdigt (kan tage adskillige sekunder for en "grundig"
+      // forklaring) før diagrammet/tidslinjen hentes — kør dem i PARALLEL i
+      // stedet for i serie, så diagrammet dukker op med det samme, ligesom
+      // det allerede gør for partneren (som slet ikke går via en LLM-chat).
+      if (isAnalysis) loadAndRenderChart();
+
       typingEl.remove();
       const assistantBubble = addMessage('assistant', '');
       scrollToElement(assistantBubble);
@@ -2317,10 +2328,11 @@ Upload derefter PDF'en her øverst til højre.`,
       }
     } finally {
       isStreaming = false;
-      // After streaming completes, if it was an analysis, load the chart
+      // Diagrammet er allerede sat i gang ovenfor (parallelt med selve
+      // streamingen) — her markeres blot at Tabel 1-3 nu er vist, når hele
+      // "Mine svar:"-analysen er streamet helt færdig.
       if (isAnalysis) {
-        setTimeout(() => loadAndRenderChart(), 500);
-        _markerTabellerFriske();  // dette ER Tabel 1-3 — den fulde "Mine svar:"-analyse
+        _markerTabellerFriske();
       }
       setInputLocked(false);
     }

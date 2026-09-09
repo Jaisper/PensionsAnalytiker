@@ -822,9 +822,15 @@
         <div style="font-size:0.85rem;font-weight:600;color:#1a3a5c;margin-bottom:8px">Samlet udbetalingsdiagram — alle ordninger, begge personer</div>
         <div class="chart-wrap"><canvas id="samlet-chart"></canvas></div>
       </div>
-      <p style="font-size:0.76rem;color:#888;margin-top:14px">Begge beløb er allerede beregnet med jeres koblede pensionstillæg/tillægsprocent — det er ikke to uafhængige overslag lagt sammen. Diagrammet er justeret til kalenderår (ikke alder), da I ikke nødvendigvis har samme alder.</p>`;
+      <p style="font-size:0.76rem;color:#888;margin:10px 0 18px">Begge beløb er allerede beregnet med jeres koblede pensionstillæg/tillægsprocent — det er ikke to uafhængige overslag lagt sammen. Diagrammet er justeret til kalenderår (ikke alder), da I ikke nødvendigvis har samme alder.</p>
+      <div style="background:white;border:1px solid #dde6ee;border-radius:10px;padding:16px 18px">
+        <div style="font-size:0.85rem;font-weight:600;color:#1a3a5c;margin-bottom:8px">Udbetalingstidspunkter — alle ordninger, begge personer</div>
+        <div id="samlet-timeline" class="tl-track-area"></div>
+        <p style="font-size:0.76rem;color:#888;margin-top:10px">Read-only overblik — rediger den enkelte ordnings tidspunkt på personens egen fane.</p>
+      </div>`;
 
     renderSamletChart(egenRes, partnerRes);
+    renderSamletTimeline(egenRes, partnerRes);
   }
 
   let _chartInstanceSamlet = null;
@@ -1032,6 +1038,99 @@
         },
       },
     });
+  }
+
+  // Vandret "tidslinje"-udgave af renderSamletChart — de enkelte ordninger fra
+  // BEGGE personer som vandrette barrer, ligesom hver persons eget
+  // "Juster udbetalingstidspunkter" (renderTimeline), men LÆSBAR/ikke-
+  // trækbar her (redigering sker stadig på personens egen fane — Samlet er
+  // et overblik, ikke et redigeringsværktøj) og på kalenderår i stedet for
+  // alder, af samme grund som renderSamletChart (de to har typisk forskellig
+  // alder). Samme farvekonvention som renderSamletChart/renderChart, så et
+  // givent element ser ens ud i alle tre diagrammer.
+  function renderSamletTimeline(primaryData, partnerData) {
+    const container = document.getElementById('samlet-timeline');
+    if (!container) return;
+
+    const basisaar = new Date().getFullYear();
+    const alderNu = d => (d.parametre?.n != null) ? (d.pensionsalder - d.parametre.n) : d.tabel_start;
+    const kalenderaarForAlder = (d, alder) => basisaar + (alder - alderNu(d));
+    // Samme "én kategori-bånd per tabel-række"-konvention som renderTimeline
+    // bruger for alder — her bare oversat til kalenderår.
+    const slutAar = d => kalenderaarForAlder(d, d.tabel_start + (d.tabel ? d.tabel.length : 0));
+    const aarMin = Math.min(
+      kalenderaarForAlder(primaryData, primaryData.tabel_start),
+      kalenderaarForAlder(partnerData, partnerData.tabel_start),
+    );
+    const aarMax = Math.max(slutAar(primaryData), slutAar(partnerData));
+    const span = Math.max(1, aarMax - aarMin);
+    function pct(aar) { return Math.max(0, Math.min(100, ((aar - aarMin) / span) * 100)); }
+
+    const scaleMarks = [];
+    const step = span > 30 ? 10 : 5;
+    for (let a = Math.ceil(aarMin / step) * step; a <= aarMax; a += step) {
+      scaleMarks.push(`<span style="position:absolute;left:${pct(a)}%;transform:translateX(-50%)">${a}</span>`);
+    }
+
+    // Samme gutter-bredde som det stablede søjlediagram ovenfor (chartArea.left)
+    // — se renderTimeline's tilsvarende kommentar for hvorfor det er nødvendigt
+    // for lodret alignment mellem de to diagrammer.
+    const gutterPx = Math.round(_chartInstanceSamlet?.chartArea?.left ?? 168);
+    const rowLabelPx = Math.max(40, gutterPx - 8);
+
+    let html = `<div style="position:relative;height:16px;margin-bottom:2px;margin-left:${gutterPx}px">${scaleMarks.join('')}</div>`;
+
+    function raekke(label, farve, leftPct, widthPct, barTekst, titel) {
+      html += `<div class="tl-row">
+        <div class="tl-row-label" style="width:${rowLabelPx}px" title="${titel || label}">${label}</div>
+        <div class="tl-track" style="pointer-events:none">
+          <div class="tl-bar" style="left:${leftPct}%;width:${Math.max(1, widthPct)}%;background:${farve}">
+            <span class="tl-bar-label" style="padding:0 4px;pointer-events:none;overflow:hidden;font-size:0.6rem">${barTekst}</span>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    function tilfoejPerson(data, personLabel, farveOffset) {
+      const produkter = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
+      produkter.forEach((prod, idx) => {
+        const color = CHART_COLORS[(farveOffset + idx) % CHART_COLORS.length];
+        const startAar = kalenderaarForAlder(data, prod.start_alder);
+        const stopAar = prod.stopper_ved_alder != null ? kalenderaarForAlder(data, prod.stopper_ved_alder) : aarMax;
+        const isRate = prod.udb_type === 'rate';
+        const barTekst = isRate ? `${startAar}–${stopAar} (${stopAar - startAar} år i alt)` : `${startAar}→`;
+        raekke(`${personLabel}: ${prod.selskab} – ${prod.produkttype}`, color, pct(startAar), pct(stopAar) - pct(startAar), barTekst);
+      });
+
+      const fpAar = kalenderaarForAlder(data, data.fp_alder);
+      raekke(`${personLabel}: Folkepension`, `${FP_COLOR}cc`, pct(fpAar), 100 - pct(fpAar), `${fpAar}→`);
+
+      // Engangsbeløb — samme farvekonvention som renderSamletChart (rød =
+      // udbetales direkte, lilla = indgår i buffer), som en smal markør.
+      (data.engangsbeloeb || []).forEach(prod => {
+        const isDirekte = prod.i_buffer === false;
+        const farve = isDirekte ? '#dc2626' : '#7c3aed';
+        const aar = kalenderaarForAlder(data, prod.start_alder);
+        const netto = prod.skat_type === 'A' ? Math.round((prod.fv || 0) * 0.60) : Math.round(prod.fv || 0);
+        const statusTekst = isDirekte ? 'udbetalt direkte, ikke buffer' : 'tilføjet til buffer';
+        raekke(
+          `${personLabel}: ${prod.selskab} – ${prod.produkttype}`, farve, pct(aar), 2, `${aar}`,
+          `${personLabel}: ${prod.selskab} – ${prod.produkttype} (${statusTekst}) — ${netto.toLocaleString('da-DK')} kr`,
+        );
+      });
+
+      const ff = data.fri_formue_analyse;
+      if (ff && ff.mdr_netto > 0) {
+        const ffStartAar = kalenderaarForAlder(data, data.pensionsalder);
+        const ffStopAar = kalenderaarForAlder(data, data.pensionsalder + ff.udbetaling_aar);
+        raekke(`${personLabel}: Fri formue`, '#0f766ecc', pct(ffStartAar), pct(ffStopAar) - pct(ffStartAar), `${ff.mdr_netto.toLocaleString('da-DK')} kr/mdr`);
+      }
+    }
+
+    tilfoejPerson(primaryData, 'Dig', 0);
+    tilfoejPerson(partnerData, 'Partner', 5);
+
+    container.innerHTML = html;
   }
 
   // ── Upload ────────────────────────────────────────────────────────────────

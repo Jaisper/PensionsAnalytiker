@@ -838,6 +838,7 @@
   function renderSamletChart(primaryData, partnerData) {
     const basisaar = new Date().getFullYear();
     const alderNu = d => (d.parametre?.n != null) ? (d.pensionsalder - d.parametre.n) : d.tabel_start;
+    const kalenderaarForAlder = (d, alder) => basisaar + (alder - alderNu(d));
     const medKalenderaar = d => {
       const alder_nu = alderNu(d);
       return d.tabel.map(row => ({ kalenderaar: basisaar + (row.alder - alder_nu), row }));
@@ -849,6 +850,22 @@
       ...partnerRows.map(r => r.kalenderaar),
     ])).sort((a, b) => a - b);
     const findRow = (rows, aar) => rows.find(r => r.kalenderaar === aar)?.row;
+    // jaevn_tabel er nøglet på ALDER ligesom tabel — samme kalenderårs-
+    // oversættelse som ovenfor, bare den modsatte vej (år → alder).
+    const findJaevnRow = (d, aar) => {
+      const alder = alderNu(d) + (aar - basisaar);
+      return (d.jaevn_tabel || []).find(r => r.alder === alder);
+    };
+
+    // Fælles markør-højde for engangsbeløb (samme princip som renderChart,
+    // men skaleret på tværs af BEGGE personers niveau, så en markør ikke
+    // ser uforholdsmæssigt stor/lille ud i forhold til den andens søjler).
+    const maxNettoMdrBegge = Math.max(
+      1,
+      ...(primaryData.tabel || []).map(r => r.total_netto_mdr || 0),
+      ...(partnerData.tabel || []).map(r => r.total_netto_mdr || 0),
+    );
+    const MARKØR_HØJDE = Math.max(500, Math.round(maxNettoMdrBegge * 0.08));
 
     const datasets = [];
     function tilfoejPerson(data, rows, personLabel, farveOffset, tillaegFarve) {
@@ -886,6 +903,85 @@
         borderWidth: 1,
         stack: 'a',
       });
+
+      // Engangsbeløb — udeladt her tidligere, hvilket fik dem til at
+      // "forsvinde" i det samlede diagram selvom de er synlige i begges
+      // egne diagrammer. Samme farvekonvention og markør-stil som
+      // renderChart (farven kodér STATUS — rød=udbetales direkte, lilla=
+      // indgår i buffer — ikke hvilket produkt eller hvilken person), så et
+      // givent engangsbeløb altid ser ens ud uanset hvilket diagram det vises i.
+      const engangs = data.engangsbeloeb || [];
+      const engangsDirekte = engangs.filter(e => e.i_buffer === false);
+      engangsDirekte.forEach((prod, i) => {
+        const netto = prod.skat_type === 'A' ? Math.round((prod.fv || 0) * 0.60) : Math.round(prod.fv || 0);
+        const aar = kalenderaarForAlder(data, prod.start_alder);
+        const color = '#dc2626';
+        datasets.push({
+          type: 'bar',
+          label: `${personLabel}: ${prod.selskab} – ${prod.produkttype} (udbetalt direkte, ikke buffer)`,
+          data: alleAar.map(a => a === aar ? MARKØR_HØJDE : null),
+          _trueValues: alleAar.map(a => a === aar ? netto : null),
+          backgroundColor: color + 'cc',
+          borderColor: color,
+          borderWidth: 1,
+          stack: `${personLabel}-direkte${i}`,
+          barThickness: 14,
+          _direkteBeloeb: true,
+        });
+      });
+      const engangsBuffer = engangs.filter(e => e.i_buffer !== false);
+      engangsBuffer.forEach((prod, i) => {
+        const netto = prod.skat_type === 'A' ? Math.round((prod.fv || 0) * 0.60) : Math.round(prod.fv || 0);
+        const aar = kalenderaarForAlder(data, prod.start_alder);
+        const color = '#7c3aed';
+        datasets.push({
+          type: 'bar',
+          label: `${personLabel}: ${prod.selskab} – ${prod.produkttype} (tilføjet til buffer)`,
+          data: alleAar.map(a => a === aar ? MARKØR_HØJDE : null),
+          _trueValues: alleAar.map(a => a === aar ? netto : null),
+          backgroundColor: color + 'cc',
+          borderColor: color,
+          borderWidth: 1,
+          stack: `${personLabel}-buffertilskud${i}`,
+          barThickness: 14,
+          _direkteBeloeb: true,
+        });
+      });
+
+      // Frie midler / Til buffer (overskud) — samme farver og betydning som
+      // renderChart. Uden disse reflekterede søjlerne her kun den RÅ
+      // indkomst, ikke den udjævning bufferen allerede yder i personens eget
+      // jaevn_netto_mdr-tal (den "Samlet husstand"-summen ovenfor bygger på)
+      // — de to ville derfor ikke stemme overens.
+      const jaevnTabel = data.jaevn_tabel || [];
+      const hasBuffer = jaevnTabel.some(r => (r.fra_buffer || 0) > 0 || (r.buffer_afkast_mdr || 0) > 0);
+      if (hasBuffer) {
+        datasets.push({
+          label: `${personLabel}: Frie midler`,
+          data: alleAar.map(aar => {
+            const jr = findJaevnRow(data, aar);
+            if (!jr) return 0;
+            return jr.fase === 'pre_pension' ? (jr.buffer_afkast_mdr || 0) : (jr.fra_buffer || 0);
+          }),
+          backgroundColor: '#a78bfacc',
+          borderColor: '#a78bfa',
+          borderWidth: 1,
+          stack: 'a',
+        });
+        if (jaevnTabel.some(r => (r.til_buffer || 0) > 0)) {
+          datasets.push({
+            label: `${personLabel}: Til buffer (overskud)`,
+            data: alleAar.map(aar => {
+              const jr = findJaevnRow(data, aar);
+              return jr ? -(jr.til_buffer || 0) : 0;
+            }),
+            backgroundColor: '#34d39966',
+            borderColor: '#34d399',
+            borderWidth: 1,
+            stack: 'b',
+          });
+        }
+      }
     }
     tilfoejPerson(primaryData, primaryRows, 'Dig', 0, '#fb923c');
     tilfoejPerson(partnerData, partnerRows, 'Partner', 5, '#0ea5e9');
@@ -913,9 +1009,22 @@
           legend: { position: 'top', labels: { font: { size: 10 }, boxWidth: 12, padding: 8 } },
           tooltip: {
             callbacks: {
-              label: c => { const v = c.parsed.y; return v ? ` ${c.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr/mdr` : null; },
+              label: c => {
+                if (c.dataset._direkteBeloeb) {
+                  const v = c.dataset._trueValues?.[c.dataIndex];
+                  if (!v) return null;
+                  return ` ${c.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr (engangsbeløb — ikke til skala)`;
+                }
+                const v = c.parsed.y;
+                return v ? ` ${c.dataset.label}: ${Math.round(v).toLocaleString('da-DK')} kr/mdr` : null;
+              },
               footer: items => {
-                const total = items.reduce((s, i) => s + (i.parsed.y || 0), 0);
+                // Samme filter som renderChart — stack 'a' er den reelle,
+                // skalerede kr/mdr-indkomst. Engangsbeløb-markørerne bruger
+                // hver deres egen stack (fast pixel-højde, ikke et kr/mdr-tal)
+                // og "Til buffer" bruger stack 'b' (allerede talt med i 'a'
+                // via Frie midler/jaevn-niveauet), så begge skal udelades her.
+                const total = items.filter(i => i.dataset.stack === 'a').reduce((s, i) => s + (i.parsed.y || 0), 0);
                 return total > 0 ? `Husstand i alt: ${Math.round(total).toLocaleString('da-DK')} kr/mdr` : '';
               },
             },

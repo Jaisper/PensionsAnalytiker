@@ -835,6 +835,27 @@
 
   let _chartInstanceSamlet = null;
 
+  // Samme princip som _minGutterPx (se dens kommentar) — men målt på tværs af
+  // BEGGE personers produkter og med "Dig: "/"Partner: "-præfikset talt med,
+  // da det er DET der rent faktisk vises som label i Samlet-diagrammerne.
+  // Delt mellem renderSamletChart (Y-akse-bredde) og renderSamletTimeline
+  // (row-label-kolonne), så de to forbliver lodret justerede.
+  function _minGutterPxSamlet(primaryData, partnerData) {
+    const labels = [];
+    [['Dig', primaryData], ['Partner', partnerData]].forEach(([personLabel, data]) => {
+      const produkter = (data.produkter || []).filter(p => p.udb_type !== 'engangsbeloeb');
+      const engangs = data.engangsbeloeb || [];
+      [...produkter, ...engangs].forEach(p => {
+        labels.push(`${personLabel}: ${p.selskab} – ${p.produkttype}`.slice(0, 30));
+      });
+    });
+    if (!labels.length) return 0;
+    const mctx = document.createElement('canvas').getContext('2d');
+    mctx.font = "11.84px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    const maxTextPx = Math.max(...labels.map(l => mctx.measureText(l).width));
+    return Math.ceil(maxTextPx) + 12;
+  }
+
   // Kalenderårs-justeret (IKKE alder — de to personer har typisk forskellig
   // alder) stablet søjlediagram med hvert produkt fra BEGGE personer. Samme
   // alder->kalenderår-konvention som engine.py/husstand.py bruger internt
@@ -845,6 +866,7 @@
     const basisaar = new Date().getFullYear();
     const alderNu = d => (d.parametre?.n != null) ? (d.pensionsalder - d.parametre.n) : d.tabel_start;
     const kalenderaarForAlder = (d, alder) => basisaar + (alder - alderNu(d));
+    const minGutterPx = _minGutterPxSamlet(primaryData, partnerData);
     const medKalenderaar = d => {
       const alder_nu = alderNu(d);
       return d.tabel.map(row => ({ kalenderaar: basisaar + (row.alder - alder_nu), row }));
@@ -1009,6 +1031,12 @@
             title: { display: true, text: 'Netto kr/mdr', font: { size: 11 } },
             ticks: { font: { size: 10 }, callback: v => v.toLocaleString('da-DK') },
             beginAtZero: true,
+            // Tvinger Y-aksens bredde op til mindst minGutterPx, samme
+            // teknik som renderChart — ellers ville gutteren her (typisk
+            // smal, da kun korte kronebeløb står på aksen) være smallere end
+            // renderSamletTimeline's row-label-kolonne, og de to ville ikke
+            // flugte lodret.
+            afterFit: axis => { if (axis.width < minGutterPx) axis.width = minGutterPx; },
           },
         },
         plugins: {
@@ -1072,10 +1100,15 @@
       scaleMarks.push(`<span style="position:absolute;left:${pct(a)}%;transform:translateX(-50%)">${a}</span>`);
     }
 
-    // Samme gutter-bredde som det stablede søjlediagram ovenfor (chartArea.left)
-    // — se renderTimeline's tilsvarende kommentar for hvorfor det er nødvendigt
-    // for lodret alignment mellem de to diagrammer.
-    const gutterPx = Math.round(_chartInstanceSamlet?.chartArea?.left ?? 168);
+    // Samme gutter-bredde som det stablede søjlediagram ovenfor (chartArea.left,
+    // som selv er tvunget til mindst _minGutterPxSamlet via afterFit, se
+    // renderSamletChart) — og samme gulv her som en sikkerhed, hvis diagrammet
+    // af en eller anden grund ikke er klar endnu. Se renderTimeline's
+    // tilsvarende kommentar for hvorfor det er nødvendigt for lodret alignment.
+    const gutterPx = Math.max(
+      Math.round(_chartInstanceSamlet?.chartArea?.left ?? 0),
+      _minGutterPxSamlet(primaryData, partnerData),
+    ) || 168;
     const rowLabelPx = Math.max(40, gutterPx - 8);
 
     let html = `<div style="position:relative;height:16px;margin-bottom:2px;margin-left:${gutterPx}px">${scaleMarks.join('')}</div>`;

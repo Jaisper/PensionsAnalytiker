@@ -613,9 +613,11 @@
     </div>
     <div class="chart-actions">
       <button id="btn-opdater-analyse" class="chart-btn primary" onclick="opdaterAnalyse()"
-              title="Genopfrisker diagrammet, tidslinjen OG de skrevne tabeller i chatten. Diagrammet/tidslinjen opdateres i sig selv når du trækker eller ændrer et parameter — men de skrevne tabeller i chatten kræver dette klik.">&#x21BB; Opdater analyse (Tabel 1-3)</button>
+              title="Genopfrisker diagrammet, tidslinjen OG de skrevne tabeller i chatten. Diagrammet/tidslinjen opdateres i sig selv når du trækker eller ændrer et parameter — men de skrevne tabeller i chatten kræver dette klik."
+              data-base-title="Genopfrisker diagrammet, tidslinjen OG de skrevne tabeller i chatten. Diagrammet/tidslinjen opdateres i sig selv når du trækker eller ændrer et parameter — men de skrevne tabeller i chatten kræver dette klik.">&#x21BB; Opdater analyse (Tabel 1-3)</button>
       <button id="btn-koer-optimering" class="chart-btn secondary" onclick="koerOptimering()"
-              title="Foreslår en bedre udbetalingsrækkefølge. Ændrer ikke noget i sig selv — klik 'Anvend denne plan' i resultatet for rent faktisk at opdatere diagram og tabeller.">&#x1F50D; Find bedste udbetalingsrækkefølge</button>
+              title="Foreslår en bedre udbetalingsrækkefølge. Ændrer ikke noget i sig selv — klik 'Anvend denne plan' i resultatet for rent faktisk at opdatere diagram og tabeller."
+              data-base-title="Foreslår en bedre udbetalingsrækkefølge. Ændrer ikke noget i sig selv — klik 'Anvend denne plan' i resultatet for rent faktisk at opdatere diagram og tabeller.">&#x1F50D; Find bedste udbetalingsrækkefølge</button>
       <button id="btn-gem-analyse" class="chart-btn secondary" onclick="gemAnalyse()">&#x2193; Gem analyse</button>
       <span id="chart-status"></span>
     </div>
@@ -2367,6 +2369,23 @@ Upload derefter PDF'en her øverst til højre.`,
       b.style.opacity = locked ? '0.4' : '';
       b.style.pointerEvents = locked ? 'none' : '';
     });
+    // "Opdater analyse" og "Find bedste udbetalingsrækkefølge" skriver begge
+    // til chat-samtalen (sendSystemTrigger) og må derfor IKKE køre samtidig
+    // med en igangværende chat-stream — de har allerede et internt
+    // isStreaming-tjek der stille no-op'er. Uden denne visuelle spærring
+    // SÅ knappen ud til bare "ikke at virke" hvis man klikkede på den mens
+    // fx den indledende "Mine svar:"-analyse stadig blev streamet (nu hvor
+    // diagrammet vises med det samme, er den situation langt mere sandsynlig
+    // at ramme). "Gem analyse" rører ikke chatten og er upåvirket.
+    ['btn-opdater-analyse', 'btn-koer-optimering'].forEach(id => {
+      const b = document.getElementById(id);
+      if (!b) return;
+      b.disabled = locked;
+      b.style.opacity = locked ? '0.5' : '';
+      b.title = locked
+        ? 'Vent til den igangværende besked er færdig med at blive skrevet i chatten'
+        : b.dataset.baseTitle || '';
+    });
   }
 
   function askQuick(text) {
@@ -3473,8 +3492,11 @@ function renderTimeline(data, target = 'primary') {
     // Ratepension: vis både år-til-år-intervallet og den samlede periode, så
     // varigheden (den nu justerbare søgevariabel) er til at se uden at skulle
     // regne start/slut sammen selv. Livsvarig pension har ingen fast slutalder.
+    // Engangsbeløb: markøren er for smal til at vise beløbet læseligt (den
+    // klippes af/overlapper) — kun alderen vises, det fulde beløb står i
+    // hover-tooltippen (barTitle nedenfor) i stedet.
     const barLabel = isEngangs
-      ? `${startAge} år · ${engNetto.toLocaleString('da-DK')} kr`
+      ? `${startAge} år`
       : isRate
         ? `${startAge}–${stopAge} år (${stopAge - startAge} år i alt)`
         : `${startAge} år→`;

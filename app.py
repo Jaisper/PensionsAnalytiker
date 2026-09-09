@@ -35,7 +35,7 @@ from pension_rules import PENSION_REGLER
 from engine import (generer_udbetalingstabel, format_engine_til_llm, SkatParametre,
                      fordel_pmt_default, format_fordeling_til_llm, generer_scenarier,
                      analyser_forsikring, beregn_fri_formue_tabel, skat_params_fra_parametre,
-                     civilstand_fra_parametre)
+                     civilstand_fra_parametre, jaevn_niveau_realt)
 import sekventering
 import husstand
 
@@ -1433,6 +1433,13 @@ async def get_engine_data(session_id: str):
         "tabel_start": result["tabel_start"],
         "parametre": result["parametre"],
         "jaevn_netto_mdr": result.get("jaevn_netto_mdr", 0),
+        # jaevn_netto_mdr er nominel VED PENSIONSALDEREN, ikke i dag — se
+        # engine.jaevn_niveau_realt's docstring. Frontend-kort der viser "det
+        # jævne niveau" til brugeren (Samlet-oversigten, husstands-summen)
+        # skal bruge DENNE (deflateret til i dag), ellers stemmer det
+        # viste tal ikke overens med diagrammets egen "Jævn netto/mdr
+        # (nutidskr)"-linje for samme plan.
+        "jaevn_niveau_realt": jaevn_niveau_realt(result),
         "jaevn_tabel": result.get("jaevn_tabel", []),
         "produkt_start_aldre": params.get("produkt_start_aldre", {}),
         "produkt_i_buffer":   params.get("produkt_i_buffer", {}),
@@ -1463,6 +1470,7 @@ async def get_engine_data_partner(session_id: str):
         "tabel_start": result["tabel_start"],
         "parametre": result["parametre"],
         "jaevn_netto_mdr": result.get("jaevn_netto_mdr", 0),
+        "jaevn_niveau_realt": jaevn_niveau_realt(result),
         "jaevn_tabel": result.get("jaevn_tabel", []),
         "produkt_start_aldre": params.get("partner_produkt_start_aldre", {}),
         "produkt_i_buffer":   params.get("partner_produkt_i_buffer", {}),

@@ -798,20 +798,25 @@
       return;
     }
 
-    const egen    = egenRes.jaevn_netto_mdr || 0;
-    const partner = partnerRes.jaevn_netto_mdr || 0;
+    // jaevn_netto_mdr er nominel VED PENSIONSALDEREN, ikke i dag — jaevn_niveau_realt
+    // (backend, jf. engine.jaevn_niveau_realt) er deflateret tilbage til i dag og er
+    // DEN der matcher diagrammets egen "Jævn netto/mdr (nutidskr)"-linje. Uden dette
+    // viste kortene her et markant HØJERE (og forvirrende) tal end diagrammet, især
+    // når der er flere år mellem i dag og pensionsalderen.
+    const egen    = egenRes.jaevn_niveau_realt ?? egenRes.jaevn_netto_mdr ?? 0;
+    const partner = partnerRes.jaevn_niveau_realt ?? partnerRes.jaevn_netto_mdr ?? 0;
     const fmt = n => Math.round(n).toLocaleString('da-DK');
     wrap.innerHTML = `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
         <div style="background:#eef4fb;border-radius:10px;padding:14px 16px">
           <div style="font-size:0.8rem;color:#5578a0;margin-bottom:4px">Dig</div>
           <div style="font-size:1.3rem;font-weight:600;color:#1a3a5c">${fmt(egen)} kr/mdr</div>
-          <div style="font-size:0.78rem;color:#5578a0;margin-top:2px">jævnt niveau, pensionsalder ${egenRes.pensionsalder ?? '—'}</div>
+          <div style="font-size:0.78rem;color:#5578a0;margin-top:2px">jævnt niveau i dagens kroner, pensionsalder ${egenRes.pensionsalder ?? '—'}</div>
         </div>
         <div style="background:#eef4fb;border-radius:10px;padding:14px 16px">
           <div style="font-size:0.8rem;color:#5578a0;margin-bottom:4px">Partner</div>
           <div style="font-size:1.3rem;font-weight:600;color:#1a3a5c">${fmt(partner)} kr/mdr</div>
-          <div style="font-size:0.78rem;color:#5578a0;margin-top:2px">jævnt niveau, pensionsalder ${partnerRes.pensionsalder ?? '—'}</div>
+          <div style="font-size:0.78rem;color:#5578a0;margin-top:2px">jævnt niveau i dagens kroner, pensionsalder ${partnerRes.pensionsalder ?? '—'}</div>
         </div>
       </div>
       <div style="background:#dceaf8;border-radius:10px;padding:16px 18px;margin-bottom:18px">
@@ -3023,9 +3028,11 @@ function _opdaterHusstandTotal() {
     el.innerHTML = '';
     return;
   }
-  const egen    = _chartData.jaevn_netto_mdr || 0;
-  const partner = _chartDataPartner.jaevn_netto_mdr || 0;
-  el.innerHTML = `<strong>Samlet husstand:</strong> ${(egen + partner).toLocaleString('da-DK')} kr/mdr ` +
+  // Se kommentaren i initSamletOnlyView — jaevn_niveau_realt (deflateret til
+  // i dag), ikke det rå jaevn_netto_mdr (nominel ved pensionsalderen).
+  const egen    = _chartData.jaevn_niveau_realt ?? _chartData.jaevn_netto_mdr ?? 0;
+  const partner = _chartDataPartner.jaevn_niveau_realt ?? _chartDataPartner.jaevn_netto_mdr ?? 0;
+  el.innerHTML = `<strong>Samlet husstand (i dagens kroner):</strong> ${(egen + partner).toLocaleString('da-DK')} kr/mdr ` +
     `<span style="opacity:0.75">(dig: ${egen.toLocaleString('da-DK')} + partner: ${partner.toLocaleString('da-DK')})</span>`;
 }
 

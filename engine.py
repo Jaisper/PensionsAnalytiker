@@ -426,6 +426,12 @@ def generer_udbetalingstabel(
     ordninger         = profil.get("ordninger", [])
     pensionsprodukter = profil.get("pensionsprodukter", [])
     advarsler         = []
+    # Samles pr. alder under årsløkken og konsolideres til ét (eller få,
+    # hvis der er huller) intervals-baseret varsel EFTER løkken — se linjen
+    # der bygger dette til `advarsler` nedenfor. Uden konsolidering fik en
+    # 20-årig sammenhængende periode over mellemskattegrænsen 20 separate
+    # "Alder X: ..."-linjer, ét pr. år, hvilket druknede listen i støj.
+    over_topskat_aldre: list[int] = []
 
     total_opsparing = sum(
         o.get("opsparing") or 0
@@ -791,9 +797,7 @@ def generer_udbetalingstabel(
         # top- eller top-topskat) — mellemskattens grænse er den laveste.
         over_topskat = total_pi > satser_2026.PROGRESSION[0].bundgraense
         if over_topskat:
-            msg = f"Alder {alder}: bruttoudbetalingen overstiger mellemskattegrænsen — høj effektiv marginalbeskatning"
-            if msg not in advarsler:
-                advarsler.append(msg)
+            over_topskat_aldre.append(alder)
 
         # Engangsbeloeb udbetales i det år produktet starter
         engangs_dette_aar = sum(
@@ -822,6 +826,26 @@ def generer_udbetalingstabel(
             "engangs_netto":   engangs_dette_aar,
             "over_topskat":    over_topskat,
         })
+
+    # Konsoliderer over_topskat_aldre til intervaller (fx [72,73,...,91] ->
+    # "72–91") i stedet for ét varsel pr. år — se kommentaren ved
+    # over_topskat_aldre's oprettelse for hvorfor.
+    if over_topskat_aldre:
+        intervaller: list[tuple[int, int]] = []
+        start = forrige = over_topskat_aldre[0]
+        for alder in over_topskat_aldre[1:]:
+            if alder == forrige + 1:
+                forrige = alder
+                continue
+            intervaller.append((start, forrige))
+            start = forrige = alder
+        intervaller.append((start, forrige))
+        for fra, til in intervaller:
+            alder_str = f"{fra}" if fra == til else f"{fra}–{til}"
+            advarsler.append(
+                f"Alder {alder_str}: bruttoudbetalingen overstiger mellemskattegrænsen — "
+                f"høj effektiv marginalbeskatning"
+            )
 
     # ── Engangsbeløb som frie midler — buffer over hele pensionsperioden ─────────
     # Provenuet placeres som fri kapital og forrentes med afkast minus kapitalafgift.

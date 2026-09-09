@@ -168,9 +168,20 @@ def _progressiv_skat_total_aar(
     kommunal_sats: float,
     strict: bool = False,
     spor: list[str] | None = None,
+    escalering: float = 1.0,
 ) -> float:
     """Samlet mellemskat + topskat + top-topskat − skatteloft-nedslag for hele
-    husstandens/personens personlige indkomst i året."""
+    husstandens/personens personlige indkomst i året.
+
+    escalering: satser_2026's grænser (bundgraense) er 2026-lovens NOMINELLE
+    kr-beløb — men skattegrænserne satsreguleres reelt hvert år (jf. PSL § 20,
+    samme mekanisme som allerede antages for FP/ATP, se aar_fra_nu/
+    sats_escalering i hovedløkken). Uden denne parameter ville en fremskrivning
+    mange år ud i fremtiden sammenligne et STIGENDE nominelt indkomsttal mod en
+    FAST 2026-grænse — og dermed vise stadig mere (og urealistisk meget)
+    mellem-/topskat jo længere ud i fremtiden man kigger, selvom den REELLE
+    grænse forventes at følge med. Default 1.0 (ingen eskalering) bevarer den
+    hidtidige, IKKE-eskalerede opførsel for kald der ikke sender parameteren."""
     if spor is None:
         spor = []
     mellemskat = topskat = toptopskat = 0.0
@@ -180,7 +191,8 @@ def _progressiv_skat_total_aar(
                            # så et rettet trin-sats aldrig kan komme ud af trit
                            # med skatteloft-sammenligningen nedenfor.
     for trin in satser_2026.PROGRESSION:
-        beloeb = max(0.0, personlig_indkomst - trin.bundgraense) * trin.sats
+        bundgraense_esk = trin.bundgraense * escalering
+        beloeb = max(0.0, personlig_indkomst - bundgraense_esk) * trin.sats
         if beloeb > 0:
             hoejeste_loft = trin.skatteloft
             ramte_trin_sats += trin.sats
@@ -197,7 +209,7 @@ def _progressiv_skat_total_aar(
         marginalsats = BUNDSKAT + kommunal_sats + ramte_trin_sats
         if marginalsats > hoejeste_loft:
             overskydende = marginalsats - hoejeste_loft
-            trin_grundlag = max(0.0, personlig_indkomst - satser_2026.PROGRESSION[0].bundgraense)
+            trin_grundlag = max(0.0, personlig_indkomst - satser_2026.PROGRESSION[0].bundgraense * escalering)
             loft_nedslag = trin_grundlag * overskydende
             spor.append("skat.skatteloft")
 
@@ -211,35 +223,40 @@ def _progressiv_skat_andel(
     strict: bool = False,
     spor: list[str] | None = None,
     progressiv_skat_total: float | None = None,
+    escalering: float = 1.0,
 ) -> float:
     """Fordeler husstandens/personens samlede progressive skat forholdsmæssigt
     ud på det enkelte produkts andel af den personlige indkomst.
     progressiv_skat_total: lad kalderen genbruge ét allerede beregnet total-
     tal for året (samme total_pi/kommunal_sats genbruges typisk 4-5 gange pr.
     år — ét pr. produkt plus FP/ATP/tillæg/ældrecheck — så uden dette regnes
-    hele den progressive skattetrappe unødvendigt om hver gang)."""
+    hele den progressive skattetrappe unødvendigt om hver gang). escalering:
+    se _progressiv_skat_total_aar — ignoreres når progressiv_skat_total
+    allerede er beregnet (kalderen har så selv anvendt eskaleringen)."""
     if total_pi <= 0:
         return 0.0
     total = progressiv_skat_total if progressiv_skat_total is not None else \
-        _progressiv_skat_total_aar(total_pi, kommunal_sats, strict, spor)
+        _progressiv_skat_total_aar(total_pi, kommunal_sats, strict, spor, escalering)
     return total * (dette_pi / total_pi)
 
 
-def _personfradrag_andel(dette_pi: float, total_pi: float, flad_sats: float) -> float:
+def _personfradrag_andel(dette_pi: float, total_pi: float, flad_sats: float, escalering: float = 1.0) -> float:
     """Personfradraget nedsætter bundskat+kommuneskat+kirkeskat af hele den
     personlige indkomst, ikke af den enkelte indkomststrøm — samme forholds-
     mæssige fordeling som _progressiv_skat_andel, og samme cap (kan aldrig
-    give en større skattelettelse end selve indkomsten kan bære)."""
+    give en større skattelettelse end selve indkomsten kan bære). escalering:
+    personfradraget (PSL § 12) satsreguleres på samme måde som skattegrænserne
+    — se _progressiv_skat_total_aar's docstring."""
     if total_pi <= 0:
         return 0.0
-    fradrag_effekt = min(total_pi, satser_2026.PERSONFRADRAG_AAR.vaerdi) * flad_sats
+    fradrag_effekt = min(total_pi, satser_2026.PERSONFRADRAG_AAR.vaerdi * escalering) * flad_sats
     return fradrag_effekt * (dette_pi / total_pi)
 
 
 def _netto_s(
     brutto: float, skat: SkatParametre, total_pi: float, dette_pi: float,
     har_am_bidrag: bool, strict: bool = False, spor: list[str] | None = None,
-    progressiv_skat_total: float | None = None,
+    progressiv_skat_total: float | None = None, escalering: float = 1.0,
 ) -> float:
     """Netto af en S-beskattet indkomststrøm. har_am_bidrag skelner private
     løbende udbetalinger (S-produkter, AM-bidrag trækkes først) fra
@@ -248,14 +265,16 @@ def _netto_s(
     som delte al anden logik og derfor let kunne rettes ét sted og glemmes
     i det andet. progressiv_skat_total: se _progressiv_skat_andel — lader
     kalderen genbruge ét allerede beregnet total-tal for et helt regnskabsår
-    i stedet for at regne skattetrappen om for hver indkomststrøm."""
+    i stedet for at regne skattetrappen om for hver indkomststrøm. escalering:
+    se _progressiv_skat_total_aar's docstring — satsregulering af skatte-
+    grænser/personfradrag for FREMTIDIGE år, samme princip som FP/ATP."""
     basis = BUNDSKAT + skat.kommuneskat + skat.kirkeskat
     brutto_efter_am = brutto * (1 - AM_BIDRAG) if har_am_bidrag else brutto
     netto = brutto_efter_am * (1 - basis)
     # Skatteloftet (PSL § 19, jf. satser_2026.py's egen kommentar) gælder den
     # samlede marginalsats EKSKL. kirkeskat — kun kommuneskat sendes videre.
-    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat, strict, spor, progressiv_skat_total)
-    netto += _personfradrag_andel(dette_pi, total_pi, basis)
+    netto -= _progressiv_skat_andel(dette_pi, total_pi, skat.kommuneskat, strict, spor, progressiv_skat_total, escalering)
+    netto += _personfradrag_andel(dette_pi, total_pi, basis, escalering)
     return netto
 
 
@@ -716,7 +735,8 @@ def generer_udbetalingstabel(
         # forskellige total (total_pi + aeldrecheck_aar) og er udeladt her —
         # den forekommer kun én gang pr. år, så der er intet at genbruge.
         progressiv_skat_total_denne_aar = (
-            _progressiv_skat_total_aar(total_pi, skat_params.kommuneskat) if total_pi > 0 else 0.0
+            _progressiv_skat_total_aar(total_pi, skat_params.kommuneskat, escalering=sats_escalering)
+            if total_pi > 0 else 0.0
         )
 
         produkt_data: dict[str, dict] = {}
@@ -730,7 +750,8 @@ def generer_udbetalingstabel(
             if p["skat_type"] == "S":
                 dette_pi  = b_aar * (1 - AM_BIDRAG)
                 netto_aar = _netto_s(b_aar, skat_params, total_pi, dette_pi, har_am_bidrag=True,
-                                      progressiv_skat_total=progressiv_skat_total_denne_aar)
+                                      progressiv_skat_total=progressiv_skat_total_denne_aar,
+                                      escalering=sats_escalering)
             elif p["skat_type"] == "F":
                 netto_aar = b_aar
             else:
@@ -743,7 +764,8 @@ def generer_udbetalingstabel(
 
         if har_atp:
             atp_netto_aar = _netto_s(float(atp_mdr_esc * 12), skat_params, total_pi, float(atp_mdr_esc * 12), har_am_bidrag=False,
-                                      progressiv_skat_total=progressiv_skat_total_denne_aar)
+                                      progressiv_skat_total=progressiv_skat_total_denne_aar,
+                                      escalering=sats_escalering)
             atp_mdr_netto = atp_netto_aar / 12
         else:
             atp_mdr_netto = 0.0
@@ -751,14 +773,16 @@ def generer_udbetalingstabel(
         if har_fp:
             fp_brutto_aar = fp_grundbeloeb_mdr * 12 * fp_venteprocent
             fp_netto_aar  = _netto_s(fp_brutto_aar, skat_params, total_pi, fp_brutto_aar, har_am_bidrag=False,
-                                      progressiv_skat_total=progressiv_skat_total_denne_aar)
+                                      progressiv_skat_total=progressiv_skat_total_denne_aar,
+                                      escalering=sats_escalering)
             fp_mdr_netto  = fp_netto_aar / 12
             # Ventetillægget (Fase C, forenklet — se satser_2026.py) forhøjer
             # også det allerede aftrapnings-justerede pensionstillæg, ligesom
             # i den porterede kilde (samspil.ts: "tillaeg * venteprocent") —
             # ventetillægget er allerede indregnet i tillaeg_aar ovenfor.
             tillaeg_netto_aar = _netto_s(tillaeg_aar, skat_params, total_pi, tillaeg_aar, har_am_bidrag=False,
-                                          progressiv_skat_total=progressiv_skat_total_denne_aar) if tillaeg_aar > 0 else 0.0
+                                          progressiv_skat_total=progressiv_skat_total_denne_aar,
+                                          escalering=sats_escalering) if tillaeg_aar > 0 else 0.0
             tillaeg_mdr_netto = tillaeg_netto_aar / 12
 
             tillaegsprocent = beregn_tillaegsprocent(indtaegtsgrundlag_aar, skat_params.enlig)
@@ -769,7 +793,8 @@ def generer_udbetalingstabel(
             # den beskattes imod).
             aeldrecheck_aar = ydelser["aeldrecheck"]
             aeldrecheck_netto_aar = (
-                _netto_s(aeldrecheck_aar, skat_params, total_pi + aeldrecheck_aar, aeldrecheck_aar, har_am_bidrag=False)
+                _netto_s(aeldrecheck_aar, skat_params, total_pi + aeldrecheck_aar, aeldrecheck_aar, har_am_bidrag=False,
+                         escalering=sats_escalering)
                 if aeldrecheck_aar > 0 else 0.0
             )
             aeldrecheck_mdr  = aeldrecheck_netto_aar / 12
@@ -795,7 +820,11 @@ def generer_udbetalingstabel(
 
         # "over_topskat" dækker nu ethvert af de tre progressive trin (mellem-,
         # top- eller top-topskat) — mellemskattens grænse er den laveste.
-        over_topskat = total_pi > satser_2026.PROGRESSION[0].bundgraense
+        # Eskaleret med sats_escalering (samme satsregulerings-antagelse som
+        # FP/ATP), ellers ville et fjernt fremtidsår fejlagtigt blive flagget
+        # som "over mellemskattegrænsen" alene fordi det nominelle beløb er
+        # vokset — ikke fordi den REELLE (satsregulerede) grænse også er nået.
+        over_topskat = total_pi > satser_2026.PROGRESSION[0].bundgraense * sats_escalering
         if over_topskat:
             over_topskat_aldre.append(alder)
 
@@ -1302,6 +1331,19 @@ def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder:
     kirke_pct = parametre.get("kirkeskat_pct", KIRKESKAT_DEFAULT * 100) / 100
     basis_pct = (BUNDSKAT + kom_pct / 100 + kirke_pct) * 100
 
+    # Samme satsregulerings-antagelse som hovedløkken (sats_escalering, se
+    # dens kommentar) — "ÅR 1" i dette eksempel er brugerens FØRSTE pensionsår,
+    # ikke nødvendigvis i år: er der fx 7 år til pensionsalderen, skal
+    # skattegrænserne i eksemplet vise deres FORVENTEDE niveau OM 7 år, ikke
+    # 2026-niveauet, ellers stemmer tabellen ikke overens med hovedløkkens
+    # egen (allerede eskalerede) beregning af samme års total_netto_mdr.
+    n = parametre.get("n") or 0
+    pensionsalder_lokal = parametre.get("pensionsalder", alder)
+    alder_nu_lokal = pensionsalder_lokal - n
+    aar_fra_nu = max(0, alder - alder_nu_lokal)
+    inflation_pct_lokal = float(parametre.get("inflation_pct", 0.0)) / 100
+    escalering = (1 + inflation_pct_lokal) ** aar_fra_nu
+
     def kr(v: float) -> str:
         return f"{v:,.0f}".replace(",", ".")
 
@@ -1334,7 +1376,7 @@ def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder:
     basis_skat      = total_pi * (BUNDSKAT + kom_pct / 100 + kirke_pct)
 
     # Skatteloftet er eksklusive kirkeskat (samme rettelse som _netto_s_*).
-    progressiv_skat = _progressiv_skat_total_aar(total_pi, kom_pct / 100)
+    progressiv_skat = _progressiv_skat_total_aar(total_pi, kom_pct / 100, escalering=escalering)
 
     netto_mdr = row["total_netto_mdr"]
 
@@ -1366,24 +1408,31 @@ def _format_skatteeksempel(row: dict, loebende: list, parametre: dict, fp_alder:
     add(f"Bundskat + kommuneskat + kirkeskat", f"{kr(total_pi)} × {basis_pct:.2f}%", basis_skat, "− ")
     trin_ramt = False
     for trin in satser_2026.PROGRESSION:
-        beloeb = max(0.0, total_pi - trin.bundgraense) * trin.sats
+        bundgraense_esk = trin.bundgraense * escalering
+        beloeb = max(0.0, total_pi - bundgraense_esk) * trin.sats
         if beloeb > 0:
             trin_ramt = True
             add(
-                f"{trin.navn} {trin.sats*100:.1f}% (PI over {kr(trin.bundgraense)} kr)",
-                f"{kr(total_pi - trin.bundgraense)} × {trin.sats*100:.1f}%",
+                f"{trin.navn} {trin.sats*100:.1f}% (PI over {kr(bundgraense_esk)} kr)",
+                f"{kr(total_pi - bundgraense_esk)} × {trin.sats*100:.1f}%",
                 beloeb, "− ",
             )
     if not trin_ramt:
-        rows.append(f"| Mellemskat/topskat | PI under grænsen ({kr(satser_2026.PROGRESSION[0].bundgraense)} kr) | — |")
-    elif abs(progressiv_skat - sum(max(0.0, total_pi - t.bundgraense) * t.sats for t in satser_2026.PROGRESSION)) > 1:
-        rows.append(f"| Skatteloft-nedslag (PSL § 19) | | − {kr(sum(max(0.0, total_pi - t.bundgraense) * t.sats for t in satser_2026.PROGRESSION) - progressiv_skat)} |")
+        rows.append(f"| Mellemskat/topskat | PI under grænsen ({kr(satser_2026.PROGRESSION[0].bundgraense * escalering)} kr) | — |")
+    elif abs(progressiv_skat - sum(max(0.0, total_pi - t.bundgraense * escalering) * t.sats for t in satser_2026.PROGRESSION)) > 1:
+        rows.append(f"| Skatteloft-nedslag (PSL § 19) | | − {kr(sum(max(0.0, total_pi - t.bundgraense * escalering) * t.sats for t in satser_2026.PROGRESSION) - progressiv_skat)} |")
     rows.append("|---|---|---:|")
 
     rows.append(f"| **Netto/år** | | **{kr(netto_mdr * 12)}** |")
     rows.append(f"| **Netto/mdr** | | **{kr(netto_mdr)}** |")
     rows.append("")
     rows.append("*(Lille afvigelse mulig: engine fordeler skat forholdsmæssigt per produkt)*")
+    if aar_fra_nu > 0:
+        rows.append(
+            f"*(Skattegrænserne ovenfor er 2026-niveauet fremskrevet {aar_fra_nu} år med samme "
+            f"inflationsantagelse som resten af beregningen — et FORSIGTIGT skøn for den reelle "
+            f"satsregulering, ikke en juridisk præcis fremtidig grænse.)*"
+        )
 
     return "\n".join(rows)
 

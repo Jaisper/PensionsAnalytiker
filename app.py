@@ -267,7 +267,7 @@ Hvis inflation er oplyst: vis Real/mdr-kolonnen (2025-købekraft) efter Netto/md
 - Brutto/år = sum af alle produktkolonner (Folkepension + ATP) — IKKE engangsbeløb
 - Netto/mdr = samlet netto månedligt efter AM-bidrag, indkomstskat og topskat — IKKE engangsbeløb
 - Engangsbeløb-kolonnen viser beløbet KUN i det år det udbetales (—/tomt i alle andre år) og må ALDRIG lægges til Brutto/år eller Netto/mdr
-- Note: "Mellem-/topskat" hvis samlet PI > 641.200 kr; "Modregning -X kr" hvis pensionstillæg reduceres; "Tillægsprocent X%" hvis under 100; "+ældrecheck/mediecheck X kr/mdr" hvis ydelser udbetales; ellers "—"
+- Note: "Mellem-/topskat" hvis samlet PI overstiger mellemskattegrænsen — BEMÆRK: grænsen er IKKE fast 641.200 kr for alle år. Den er 2026-niveauet (641.200 kr), men eskaleres i beregningen med samme inflationsantagelse som resten af tabellen (satsregulering, jf. skatteberegningseksemplets egen fodnote) — for et år N år ude i fremtiden er grænsen derfor ca. 641.200 × (1+inflation)^N kr, IKKE det faste 2026-tal. Brug de VISTE eksempel-rækkers over_topskat-mønster (og skatteeksemplets viste grænser) som rettesnor når du selv rekonstruerer rækker uden for uddraget — gæt aldrig ud fra det rå 2026-tal alene; "Modregning -X kr" hvis pensionstillæg reduceres; "Tillægsprocent X%" hvis under 100; "+ældrecheck/mediecheck X kr/mdr" hvis ydelser udbetales; ellers "—"
 - Folkepension og ATP vises som "—" inden folkepensionsalderen
 - Engangsbeløb vises i BÅDE Tabel 1 (som samlet FV/netto) og Tabel 2 (år-for-år, hvornår det udbetales) — aldrig kun i Tabel 1
 
@@ -328,6 +328,7 @@ Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsræk
 - AM-bidrag: 8% | Bundskat: 12,01% | Personfradrag: ca. 49.700 kr/år (2025-niveau genbrugt som skøn — IKKE bekræftet mod Skatteministeriets 2026-tal, nævn dette hvis det efterspørges)
 - Progressiv topskat (personlig indkomst, hvert trin har sit eget skatteloft jf. PSL §19, EKSKL. AM-bidrag og kirkeskat):
   mellemskat 7,5% over 641.200 kr (loft 44,57%) | topskat 7,5% over 777.900 kr (loft 52,07%) | top-topskat 5% over 2.592.700 kr (loft 57,07%)
+  — disse grænser er 2026-NIVEAUET. Ligesom folkepension/ATP nedenfor satsreguleres de nominelt med den valgte inflationsantagelse for hvert år frem til det år der faktisk beregnes (se skatteberegningseksemplets egen fodnote for den præcise eskalerede grænse det pågældende år) — nævn ALTID 2026-tallet som udgangspunkt, men ikke som den faktiske grænse for et fjernt fremtidsår.
 - Folkepension: 7.544 kr/mdr | ATP: ca. 1.825 kr/mdr (begge i dagens takst — satsreguleres nominelt med den valgte inflationsantagelse hvert år frem, så deres KØBEKRAFT holdes konstant, i stedet for at blive udhulet over et 20-30-årigt forløb) | PAL-skat: 15,3%
 - Pensionstillæg max (enlig): 104.748 kr/år — modregnes 30,9% af indtægtsgrundlag over 99.200 kr/år (gift: 53.604 kr/år, 32%/16% over 198.800 kr). Pensionstillægget er ALMINDELIG skattepligtig personlig indkomst ligesom grundbeløbet — det tal du ser er allerede efter skat, ikke et bruttobeløb.
 - Ældrecheck: op til 26.900 kr/år (skattepligtig) | Mediecheck: uverificeret sats, nævn dette hvis den vises

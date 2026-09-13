@@ -1174,6 +1174,19 @@
   }
 
   // ── Upload ────────────────────────────────────────────────────────────────
+  // Et ikke-JSON svar er typisk en HTML-fejlside fra en reverse proxy foran
+  // serveren (fx et 502/503/504 hvis behandlingen af en stor rapport tog for
+  // lang tid, eller serveren lige er "vågnet op" efter inaktivitet) — vis en
+  // forklarende dansk besked i stedet for at dumpe den rå HTML i UI'et.
+  function _friendlyServerFejl(status, raaTekst) {
+    console.error('Server-fejl ved upload (rå respons, trunkeret):', raaTekst.slice(0, 500));
+    if (status === 502 || status === 503 || status === 504) {
+      return 'Serveren svarede ikke i tide. Det sker typisk ved en stor/kompleks rapport, eller hvis '
+        + 'serveren lige er startet op igen efter en periode uden aktivitet — prøv igen om et halvt minut.';
+    }
+    return `Server fejl (${status}) — prøv igen om lidt. Fortsætter det, så prøv en ny session.`;
+  }
+
   document.getElementById('file-input').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1200,7 +1213,7 @@
         data = await res.json();
       } else {
         const txt = await res.text();
-        throw new Error(`Server fejl (${res.status}): ${txt.slice(0, 200)}`);
+        throw new Error(_friendlyServerFejl(res.status, txt));
       }
 
       if (data.success) {
@@ -1825,7 +1838,7 @@ Upload derefter PDF'en her øverst til højre.`,
         data = await res.json();
       } else {
         const txt = await res.text();
-        throw new Error(`Server fejl (${res.status}): ${txt.slice(0, 200)}`);
+        throw new Error(_friendlyServerFejl(res.status, txt));
       }
       if (!res.ok || !data.success) throw new Error(data.detail || 'Ukendt fejl');
 

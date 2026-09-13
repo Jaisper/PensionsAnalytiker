@@ -1526,7 +1526,7 @@ Upload derefter PDF'en her øverst til højre.`,
                  onchange="const n=document.getElementById('iq_spredaar_${idx}'); n.style.display=this.checked?'inline':'none'; scheduleRefresh(300, true)">
                Spred over
                <input type="number" id="iq_spredaar_${idx}" data-key="${escapeAttr(key)}" value="10" min="10" max="30"
-                 style="width:44px;display:none;margin:0 3px" oninput="scheduleRefresh(300, true)">
+                 style="width:60px;display:none;margin:0 3px;box-sizing:content-box" oninput="scheduleRefresh(300, true)">
                år (i stedet for engangsbeløb)
              </label>`
           : '';

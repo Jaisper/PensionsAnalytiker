@@ -2790,14 +2790,19 @@ function _collectPayload(includePanel = false) {
     const key = inp.dataset.key;
     if (key) produktIBuffer[key] = inp.checked;
   });
-  // Spred-valget (se engine.py's "kapital_rate") sidder i parametre-panelet,
-  // ikke i selve tidslinjen (#timeline-container) — engangsbeløb tegnes der
-  // som en smal markør uden justerbar periode, se renderTidslinje. Læses
-  // derfor samme sted/mønster som produktIBuffer ovenfor, ikke via
-  // _collectTimelineTracks.
+  // Spred-checkboksen i parametre-panelet er kun nødvendig for at STARTE
+  // spredningen — et engangsbeløb der endnu ikke er spredt tegnes som en
+  // smal markør uden periode-dimension i tidslinjen (se renderTidslinje),
+  // så _collectTimelineTracks kan ikke opdage et førstegangsvalg. Når
+  // produktet DERIMOD allerede er spredt (kapital_rate), tegnes det som en
+  // helt normal, højre-kant-justerbar bar ligesom ratepension, og
+  // _collectTimelineTracks har ALLEREDE læst den (evt. lige trukne) periode
+  // korrekt et par linjer ovenfor — panelets (potentielt forældede) tal må
+  // derfor ALDRIG overskrive den, ellers "springer" perioden tilbage til
+  // panelfeltets gamle værdi efter et træk i baren.
   document.querySelectorAll('[id^="iq_spred_"]').forEach(inp => {
     const key = inp.dataset.key;
-    if (key && inp.checked) {
+    if (key && inp.checked && !(key in produktUdbAar)) {
       const aarInput = document.getElementById(inp.id.replace('iq_spred_', 'iq_spredaar_'));
       produktUdbAar[key] = Math.max(10, parseInt(aarInput?.value || '10'));
     }
@@ -2955,13 +2960,14 @@ function _collectPartnerPayload(includePanel = false) {
   // ellers en helt anden persons produkter.
   const { produktStartAldre, produktUdbAar } = _activeTab === 'partner'
     ? _collectTimelineTracks() : { produktStartAldre: {}, produktUdbAar: {} };
-  // Samme begrundelse som i _collectPayload: spred-valget sidder i
-  // parametre-panelet, ikke i tidslinjen, og læses derfor kun med når
-  // partner-fanen (og dermed partnerens panel) rent faktisk er den viste.
+  // Samme begrundelse som i _collectPayload: spred-checkboksen bruges kun til
+  // at STARTE spredningen — når produktet allerede er spredt, har
+  // _collectTimelineTracks ovenfor allerede læst den (evt. lige trukne)
+  // periode direkte fra baren, og panelets tal må ikke overskrive den.
   if (_activeTab === 'partner') {
     document.querySelectorAll('[id^="iq_spred_"]').forEach(inp => {
       const key = inp.dataset.key;
-      if (key && inp.checked) {
+      if (key && inp.checked && !(key in produktUdbAar)) {
         const aarInput = document.getElementById(inp.id.replace('iq_spred_', 'iq_spredaar_'));
         produktUdbAar[key] = Math.max(10, parseInt(aarInput?.value || '10'));
       }
@@ -3797,11 +3803,15 @@ function tlApplyChanges(d) {
     return;
   }
   if (!_chartData) return;
-  // Synk panel-inputs med den nye position
+  // Synk KUN start-alder-feltet i panelet med den nye position — ikke andre
+  // felter der tilfældigvis deler samme data-key (fx "iq_buffer_"/"iq_spred_"/
+  // "iq_spredaar_"), ellers overskriver et træk fejlagtigt fx den valgte
+  // spredningsperiode med start-alderen (se _collectPayload for hvorfor
+  // spredningsperioden i øvrigt læses fra selve tidslinjen, ikke panelet).
   const key = d.key;
   if (key) {
-    document.querySelectorAll(`[data-key]`).forEach(inp => {
-      if (inp.dataset.key === key && inp.tagName === 'INPUT') inp.value = d.start;
+    document.querySelectorAll(`input[id^="iq_start_"]`).forEach(inp => {
+      if (inp.dataset.key === key) inp.value = d.start;
     });
   }
   scheduleRefresh(0);  // øjeblikkelig efter drag — ingen debounce-forsinkelse

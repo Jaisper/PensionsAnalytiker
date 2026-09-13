@@ -571,8 +571,25 @@ def generer_udbetalingstabel(
 
         # Udbetalingstype
         if "kapital" in ptype_l or "aldersopsparing" in ptype_l:
-            udb_type, udb_aar  = "engangsbeloeb", 0
-            mdr_brutto, stopper = 0.0, produkt_start_alder
+            # Et engangsbeløb kan alternativt spredes over flere år (samme
+            # override-mekanisme som ratepensionens periode nedenfor) — så
+            # den resterende, endnu ikke udbetalte del bliver stående til
+            # PAL-skattens ~15,3% (den sats "r" allerede forudsætter, jf.
+            # interviewets "Forventet afkast efter PAL-skat") i stedet for at
+            # forlade pensionsordningen med det samme og blive geninvesteret
+            # til den lavere, personligt beskattede buffer-rente (r_buffer,
+            # se engangs_buffer_skat_pct nedenfor). Kun en reel fordel når
+            # pengene rent faktisk ikke skal bruges med det samme — uden
+            # override er default uændret: hele beløbet på én gang.
+            override_udb_aar = produkt_udb_aar_param.get(key)
+            if override_udb_aar:
+                udb_aar    = int(override_udb_aar)
+                udb_type   = "kapital_rate"
+                mdr_brutto = beregn_maanedlig_annuitet(fv, r, udb_aar)
+                stopper    = produkt_start_alder + udb_aar
+            else:
+                udb_type, udb_aar  = "engangsbeloeb", 0
+                mdr_brutto, stopper = 0.0, produkt_start_alder
         elif "livsvarig" in ptype_l or "livrente" in ptype_l:
             # Restlevetid fra pensionsstart — konservativt skøn (levetidsindeks K2023)
             udb_aar    = max(LIVSVARIG_ESTIMAT_AAR, 90 - produkt_start_alder)
@@ -874,6 +891,18 @@ def generer_udbetalingstabel(
             advarsler.append(
                 f"Alder {alder_str}: bruttoudbetalingen overstiger mellemskattegrænsen — "
                 f"høj effektiv marginalbeskatning"
+            )
+
+    for pr in produkter:
+        if pr["udb_type"] == "kapital_rate":
+            advarsler.append(
+                f"{pr['selskab']} – {pr['produkttype']} udbetales spredt over {pr['udb_aar']} år i "
+                f"stedet for som ét engangsbeløb: den endnu ikke udbetalte del bliver stående i "
+                f"pensionsordningen og vokser videre til den lave pensionsafkastskat (PAL), i stedet "
+                f"for at blive udbetalt med det samme og geninvesteret uden for pension til en "
+                f"typisk højere skat. I praksis kræver dette ofte at ordningen omlægges til (eller "
+                f"udbetales via) en ratepensionslignende konstruktion — tjek med selskabet om det er "
+                f"muligt for netop denne ordning, det er ikke en generel ret."
             )
 
     # ── Engangsbeløb som frie midler — buffer over hele pensionsperioden ─────────
@@ -1499,7 +1528,12 @@ def format_engine_til_llm(result: dict) -> str:
             None,
         )
         n_mdr    = first["produkter"][pr["key"]]["mdr_netto"] if first else 0.0
-        varighed = f"livsvarig ({pr['udb_aar']} år est.)" if pr["udb_type"] == "livsvarig" else f"{pr['udb_aar']} år"
+        if pr["udb_type"] == "livsvarig":
+            varighed = f"livsvarig ({pr['udb_aar']} år est.)"
+        elif pr["udb_type"] == "kapital_rate":
+            varighed = f"spredt over {pr['udb_aar']} år (i stedet for engangsudbetaling)"
+        else:
+            varighed = f"{pr['udb_aar']} år"
         L.append(
             f"| {pr['selskab']} – {pr['produkttype']} | {pr['skat_type']}"
             f" | {pr['start_alder']} år"

@@ -316,11 +316,18 @@ Hvis der derimod findes en "## PARTNERENS UDBETALINGSANALYSE"-sektion i kontekst
 Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsrækkefølge:
 - Målet er at MAKSIMERE det faste, inflationskorrigerede månedsbeløb brugeren kan leve af hele den ønskede periode (`jaevn_netto_mdr`) — IKKE at maksimere den samlede udbetalte sum. Præsenter resultatet som "det højeste faste månedsbeløb vi kunne finde", ikke som en garanti.
 - Optimeringen kan ALDRIG anbefale en plan hvor de tidlige/laveste år bliver ringere end de ville have været uden indblanding — det er en indbygget grænse, ikke noget der skal forklares som en begrænsning.
-- Resultatet er fundet ved at afprøve en lang række kombinationer af per-produkt start-aldre, ratepensioners udbetalingsperiode (min. 10 år, lovkrav), evt. udskudt folkepension, og udbetalingsår for engangsbeløb der indgår i bufferen — IKKE ved at forudse fremtiden.
+- Resultatet er fundet ved at afprøve en lang række kombinationer af per-produkt start-aldre, ratepensioners udbetalingsperiode (min. 10 år, lovkrav), evt. udskudt folkepension, udbetalingsår for engangsbeløb der indgår i bufferen, OG for hvert engangsbeløb valget mellem udbetaling samlet eller spredt over flere år (se "ENGANGSBELØB SPREDT OVER FLERE ÅR" nedenfor) — IKKE ved at forudse fremtiden.
 - Et engangsbeløb brugeren aktivt har FRAVALGT bufferen for (udbetales direkte, ikke som buffer) rører optimeringen IKKE — det er brugerens eget, allerede trufne valg.
 - Hvis resultatet er "målet kan ikke nås": sig det direkte og eksplicit — foreslå ALDRIG den næstbedste plan som var den en løsning, det ville modsige selve formålet med den hårde grænse.
 - Hvis brugeren har fået foreslået udskudt folkepension (`folkepension_opsaettelse_aar > 0`): gør klart at ventetillægget (6 %/år) er et **forenklet skøn**, ikke den juridisk præcise ventetillægsberegning — den rigtige regel er mere kompleks.
 - Nævn at optimeringen kun ser på brugerens egne produkter — en eventuel partners egen pension indgår ikke i søgningen.
+
+## ENGANGSBELØB SPREDT OVER FLERE ÅR (kapitalpension/aldersopsparing)
+En kapitalpension eller aldersopsparing behøver ikke tages som ét engangsbeløb — brugeren kan i stedet vælge at sprede udbetalingen over flere år (checkboksen "Spred over ... år" ud for produktet i parametre-panelet, eller via sekventeringsoptimeringen ovenfor).
+- Mekanismen: den del af beløbet der endnu ikke er udbetalt bliver stående i pensionsordningen og fortsætter med at vokse til den lave pensionsafkastskat (PAL, ca. 15,3 %, allerede indregnet i det afkast brugeren har oplyst) — i stedet for at forlade pensionsordningen med det samme og blive geninvesteret uden for pension til en typisk højere skat (den sats der bruges til "frie midler"-bufferen). Fordelen kommer ALENE fra denne rente-forskel, ikke fra at undgå indkomstskat — selve skatten (40 % afgift for kapitalpension, skattefrit for aldersopsparing) er UÆNDRET af spredningen.
+- Er kun en reel fordel når det faktiske afkast overstiger den rente pengene ellers ville få uden for pension — nævn det som en afvejning, ikke en automatisk gevinst.
+- I praksis kræver dette ofte at ordningen omlægges til eller udbetales via en ratepensionslignende konstruktion — dette er IKKE en generel ret for enhver kapitalpension/aldersopsparing, og brugeren bør tjekke med sit pensionsselskab om det er muligt for netop deres ordning, før planen lægges fast.
+- Hvis engine-outputtets advarsler nævner "udbetales spredt over ... år": forklar dette som en aktiv, valgt strategi (ikke en fejl eller automatik brugeren ikke har bedt om).
 - Hvis svaret indeholder `husstand_advarsel`: gengiv den TYDELIGT og fremhævet, ikke som en fodnote — den betyder at den foreslåede plan forbedrer brugerens EGET beløb, men gør husstandens SAMLEDE beløb ringere, fordi den ændrer partnerens pensionstillæg/tillægsprocent. Foreslå ALDRIG at bruge "Anvend denne plan" uden at nævne dette, hvis feltet er sat.
 
 ## NØGLESATSER 2026
@@ -816,7 +823,9 @@ def _prune_history(session: dict) -> None:
 ORDNING_FORKLARINGER = {
     "kapitalpension": (
         "**Kapitalpension** er en gammel ordning lukket for nye indbetalinger siden 2013. "
-        "Den udbetales som ét engangsbeløb. Normalt trækkes 40% i afgift ved udbetaling — "
+        "Den udbetales normalt som ét engangsbeløb, men kan (typisk via en omlægning hos "
+        "selskabet) alternativt spredes over flere år — se 'Spred over ... år' i "
+        "parametre-panelet. Normalt trækkes 40% i afgift ved udbetaling — "
         "men mange valgte i 2013 at forudbetale afgiften til en reduceret sats (37,3%) og "
         "konvertere ordningen. Hvis det er tilfældet hos dig, er den nu **afgiftsfri** ved udbetaling."
     ),

@@ -1137,7 +1137,7 @@
         const color = CHART_COLORS[(farveOffset + idx) % CHART_COLORS.length];
         const startAar = kalenderaarForAlder(data, prod.start_alder);
         const stopAar = prod.stopper_ved_alder != null ? kalenderaarForAlder(data, prod.stopper_ved_alder) : aarMax;
-        const isRate = prod.udb_type === 'rate';
+        const isRate = HAR_JUSTERBAR_PERIODE.has(prod.udb_type);
         const barTekst = isRate ? `${startAar}–${stopAar} (${stopAar - startAar} år i alt)` : `${startAar}→`;
         raekke(`${personLabel}: ${prod.selskab} – ${prod.produkttype}`, color, pct(startAar), pct(stopAar) - pct(startAar), barTekst);
       });
@@ -1514,6 +1514,22 @@ Upload derefter PDF'en her øverst til højre.`,
                Indgår i buffer
              </label>`
           : '';
+        // Alternativ til engangsudbetaling: sprede beløbet over flere år, så den
+        // endnu ikke udbetalte del bliver stående til pensionsafkastskat (PAL,
+        // ~15,3%) i stedet for at forlade pensionsordningen med det samme — se
+        // engine.py's "kapital_rate" og advarslen der forklarer forudsætningen.
+        const spredToggle = isEngangs
+          ? `<label style="font-size:0.78rem;color:#4a6a80;margin-left:12px;cursor:pointer;white-space:nowrap"
+               title="I stedet for ét engangsbeløb: udbetal over flere år, så resten fortsat vokser til pensionsafkastskat i stedet for at blive geninvesteret uden for pension. Kræver typisk at ordningen kan/omlægges til en ratepensionslignende udbetaling — tjek med selskabet.">
+               <input type="checkbox" id="iq_spred_${idx}" data-key="${escapeAttr(key)}"
+                 style="vertical-align:middle;margin-right:3px"
+                 onchange="const n=document.getElementById('iq_spredaar_${idx}'); n.style.display=this.checked?'inline':'none'; scheduleRefresh(300, true)">
+               Spred over
+               <input type="number" id="iq_spredaar_${idx}" data-key="${escapeAttr(key)}" value="10" min="10" max="30"
+                 style="width:44px;display:none;margin:0 3px" oninput="scheduleRefresh(300, true)">
+               år (i stedet for engangsbeløb)
+             </label>`
+          : '';
         return `<tr style="border:none">
           <td style="padding:3px 2px;font-size:0.82rem;color:#4a6a80;padding-right:10px;min-width:180px">
             ${selskab} – ${ptype}${hint}</td>
@@ -1521,7 +1537,7 @@ Upload derefter PDF'en her øverst til højre.`,
             <input type="number" id="iq_start_${idx}" value="${startAlder}" min="60" max="85"
               data-key="${escapeAttr(key)}" data-is-engangs="${isEngangs}"
               oninput="this.dataset.touched='1'" style="width:70px">
-            <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">år</span>${planHint}${bufferToggle}
+            <span style="font-size:0.8rem;color:#5a7a90;margin-left:4px">år</span>${planHint}${bufferToggle}${spredToggle}
           </td>
         </tr>`;
       }).join('');
@@ -1906,6 +1922,7 @@ Upload derefter PDF'en her øverst til højre.`,
     const loebendeKeys = computeProductKeys(profil);
     const produktStartAldre = {};
     const produktIBuffer = {};
+    const produktUdbAar = {};
     if (loebendeKeys.length > 0) {
       const pensionsalderVal2 = parseInt(v('iq3')) || 65;
       loebendeKeys.forEach(({key, isEngangs}, idx) => {
@@ -1913,6 +1930,10 @@ Upload derefter PDF'en her øverst til højre.`,
         produktStartAldre[key] = startAlder;
         if (isEngangs) {
           produktIBuffer[key] = document.getElementById(`iq_buffer_${idx}`)?.checked !== false;
+          if (document.getElementById(`iq_spred_${idx}`)?.checked) {
+            const spredAar = parseInt(document.getElementById(`iq_spredaar_${idx}`)?.value || '10');
+            produktUdbAar[key] = Math.max(10, spredAar);
+          }
         }
       });
     }
@@ -1942,6 +1963,7 @@ Upload derefter PDF'en her øverst til højre.`,
         partner_kirkeskat_pct:       kirkeskatPct,
         partner_produkt_start_aldre: Object.keys(produktStartAldre).length ? produktStartAldre : undefined,
         partner_produkt_i_buffer:    Object.keys(produktIBuffer).length ? produktIBuffer : undefined,
+        partner_produkt_udb_aar:     Object.keys(produktUdbAar).length ? produktUdbAar : undefined,
         partner_saldi_overrides:     saldiOverrides.length ? saldiOverrides : undefined,
         partner_fri_formue:                  frieMidler > 0 ? frieMidler : undefined,
         partner_fri_formue_kapital_skat_pct: frieMidler > 0 ? frieSkat   : undefined,
@@ -2106,6 +2128,7 @@ Upload derefter PDF'en her øverst til højre.`,
     const loebendeKeys = computeProductKeys(profil);
     const produktStartAldre = {};
     const produktIBuffer = {};
+    const produktUdbAar = {};
     if (loebendeKeys.length > 0) {
       const pensionsalderVal2 = parseInt(v('iq3')) || 65;
       const startAldreLinjer = [];
@@ -2115,12 +2138,21 @@ Upload derefter PDF'en her øverst til højre.`,
         startAldreLinjer.push(`${selskab} – ${ptype}: ${startAlder} år`);
         if (isEngangs) {
           produktIBuffer[key] = document.getElementById(`iq_buffer_${idx}`)?.checked !== false;
+          if (document.getElementById(`iq_spred_${idx}`)?.checked) {
+            const spredAar = parseInt(document.getElementById(`iq_spredaar_${idx}`)?.value || '10');
+            produktUdbAar[key] = Math.max(10, spredAar);
+          }
         }
       });
       parts.push(`4b. Start-aldre: ${startAldreLinjer.join(', ')}`);
       const bufferFravalg = Object.entries(produktIBuffer).filter(([, v]) => !v).map(([k]) => k);
       if (bufferFravalg.length) {
         parts.push(`4c. Engangsbeløb IKKE i buffer (udbetales direkte): ${bufferFravalg.join(', ')}`);
+      }
+      const spredValg = Object.entries(produktUdbAar);
+      if (spredValg.length) {
+        parts.push(`4d. Engangsbeløb spredt over flere år (i stedet for udbetalt samlet): ` +
+          spredValg.map(([k, aar]) => `${k}: ${aar} år`).join(', '));
       }
     }
 
@@ -2182,6 +2214,7 @@ Upload derefter PDF'en her øverst til højre.`,
         kirkeskat_pct:        kirkeskatPct,
         produkt_start_aldre:  Object.keys(produktStartAldre).length ? produktStartAldre : undefined,
         produkt_i_buffer:     Object.keys(produktIBuffer).length ? produktIBuffer : undefined,
+        produkt_udb_aar:      Object.keys(produktUdbAar).length ? produktUdbAar : undefined,
         fri_formue:                  frieMidler > 0 ? frieMidler : undefined,
         fri_formue_kapital_skat_pct: frieMidler > 0 ? frieSkat   : undefined,
       }),
@@ -2650,6 +2683,11 @@ let _chartPanelOpen = true;
 let _activeTab = 'primary';
 let _tlDrag = null;  // active drag state
 const MIN_RATEPENSION_AAR = 10;  // lovkrav: ratepension skal mindst udbetales over 10 år
+// Udbetalingstyper med en justerbar periode (en fast varighed, ikke bare "fra
+// X år og resten af livet") — ratepension, og et engangsbeløb der er valgt
+// spredt over flere år i stedet for udbetalt samlet (se engine.py's
+// "kapital_rate"). Samme 10-års-gulv genbruges for begge, se MIN_RATEPENSION_AAR.
+const HAR_JUSTERBAR_PERIODE = new Set(['rate', 'kapital_rate']);
 
 // Kommuneskat-lookup (2025-satser, ca.-værdier) — delt mellem submitInterviewForm
 // og _collectPayload, så "Opdater analyse" ikke skal gætte separat.
@@ -2729,10 +2767,10 @@ function _collectTimelineTracks() {
     if (!key) return;
     const start = parseInt(track.dataset.start);
     if (!isNaN(start)) produktStartAldre[key] = start;
-    // Kun ratepension har en justerbar udbetalingsperiode (se tlBarDown) —
+    // Kun typer med en justerbar udbetalingsperiode (se tlBarDown) —
     // stop-start for andre produkttyper er blot chartets visning af hele
     // resten af perioden, ikke et reelt valg.
-    if (track.dataset.udbType === 'rate') {
+    if (HAR_JUSTERBAR_PERIODE.has(track.dataset.udbType)) {
       const stop = parseInt(track.dataset.stop);
       if (!isNaN(start) && !isNaN(stop)) produktUdbAar[key] = stop - start;
     }
@@ -2751,6 +2789,18 @@ function _collectPayload(includePanel = false) {
   document.querySelectorAll('[id^="iq_buffer_"]').forEach(inp => {
     const key = inp.dataset.key;
     if (key) produktIBuffer[key] = inp.checked;
+  });
+  // Spred-valget (se engine.py's "kapital_rate") sidder i parametre-panelet,
+  // ikke i selve tidslinjen (#timeline-container) — engangsbeløb tegnes der
+  // som en smal markør uden justerbar periode, se renderTidslinje. Læses
+  // derfor samme sted/mønster som produktIBuffer ovenfor, ikke via
+  // _collectTimelineTracks.
+  document.querySelectorAll('[id^="iq_spred_"]').forEach(inp => {
+    const key = inp.dataset.key;
+    if (key && inp.checked) {
+      const aarInput = document.getElementById(inp.id.replace('iq_spred_', 'iq_spredaar_'));
+      produktUdbAar[key] = Math.max(10, parseInt(aarInput?.value || '10'));
+    }
   });
   const payload = { session_id: sessionId };
   if (includePanel) {
@@ -2905,6 +2955,18 @@ function _collectPartnerPayload(includePanel = false) {
   // ellers en helt anden persons produkter.
   const { produktStartAldre, produktUdbAar } = _activeTab === 'partner'
     ? _collectTimelineTracks() : { produktStartAldre: {}, produktUdbAar: {} };
+  // Samme begrundelse som i _collectPayload: spred-valget sidder i
+  // parametre-panelet, ikke i tidslinjen, og læses derfor kun med når
+  // partner-fanen (og dermed partnerens panel) rent faktisk er den viste.
+  if (_activeTab === 'partner') {
+    document.querySelectorAll('[id^="iq_spred_"]').forEach(inp => {
+      const key = inp.dataset.key;
+      if (key && inp.checked) {
+        const aarInput = document.getElementById(inp.id.replace('iq_spred_', 'iq_spredaar_'));
+        produktUdbAar[key] = Math.max(10, parseInt(aarInput?.value || '10'));
+      }
+    });
+  }
   const payload = { session_id: sessionId };
   if (Object.keys(produktStartAldre).length) payload.partner_produkt_start_aldre = produktStartAldre;
   if (Object.keys(produktUdbAar).length)     payload.partner_produkt_udb_aar     = produktUdbAar;
@@ -3488,13 +3550,14 @@ function renderTimeline(data, target = 'primary') {
     const engNetto = isEngangs
       ? (prod.skat_type === 'A' ? Math.round((prod.fv || 0) * 0.60) : Math.round(prod.fv || 0))
       : 0;
-    const isRate = prod.udb_type === 'rate';
-    // Ratepension: vis både år-til-år-intervallet og den samlede periode, så
-    // varigheden (den nu justerbare søgevariabel) er til at se uden at skulle
-    // regne start/slut sammen selv. Livsvarig pension har ingen fast slutalder.
-    // Engangsbeløb: markøren er for smal til at vise beløbet læseligt (den
-    // klippes af/overlapper) — kun alderen vises, det fulde beløb står i
-    // hover-tooltippen (barTitle nedenfor) i stedet.
+    const isRate = HAR_JUSTERBAR_PERIODE.has(prod.udb_type);
+    // Ratepension og en spredt engangsudbetaling (se HAR_JUSTERBAR_PERIODE):
+    // vis både år-til-år-intervallet og den samlede periode, så varigheden
+    // (den justerbare søgevariabel) er til at se uden at skulle regne
+    // start/slut sammen selv. Livsvarig pension har ingen fast slutalder.
+    // Engangsbeløb der IKKE er spredt: markøren er for smal til at vise
+    // beløbet læseligt (den klippes af/overlapper) — kun alderen vises, det
+    // fulde beløb står i hover-tooltippen (barTitle nedenfor) i stedet.
     const barLabel = isEngangs
       ? `${startAge} år`
       : isRate
@@ -3585,10 +3648,10 @@ function tlBarDown(e, idx) {
   const rect   = bar.getBoundingClientRect();
   const xInBar = e.clientX - rect.left;
   const zone   = Math.min(24, rect.width * 0.22);
-  // Kun ratepension har en justerbar udbetalingsperiode — livsvarig pension
-  // løber til levetiden slutter (intet slut-håndtag giver mening) og
-  // engangsbeløb er et enkelt tidspunkt (kun flyt).
-  const kanJustereSlut = track.dataset.udbType === 'rate';
+  // Kun typer med en justerbar udbetalingsperiode — livsvarig pension løber
+  // til levetiden slutter (intet slut-håndtag giver mening) og et rent
+  // engangsbeløb er et enkelt tidspunkt (kun flyt), se HAR_JUSTERBAR_PERIODE.
+  const kanJustereSlut = HAR_JUSTERBAR_PERIODE.has(track.dataset.udbType);
   let handleType;
   if (track.dataset.isEngangs === 'true') {
     handleType = 'move';  // kun flyt — buffer løber automatisk hele perioden
@@ -3613,7 +3676,7 @@ function tlBarTouch(e, idx) {
   const rect   = bar.getBoundingClientRect();
   const xInBar = e.touches[0].clientX - rect.left;
   const zone   = Math.min(24, rect.width * 0.22);
-  const kanJustereSlut = track.dataset.udbType === 'rate';
+  const kanJustereSlut = HAR_JUSTERBAR_PERIODE.has(track.dataset.udbType);
   let handleType;
   if (track.dataset.isEngangs === 'true') {
     handleType = 'move';
@@ -3646,7 +3709,7 @@ function tlDragStart(e, idx, handleType) {
     start:     parseInt(track.dataset.start),
     stop:      parseInt(track.dataset.stop),
     isEngangs: track.dataset.isEngangs === 'true',
-    isRate:    track.dataset.udbType === 'rate',
+    isRate:    HAR_JUSTERBAR_PERIODE.has(track.dataset.udbType),
     key:       track.dataset.key,
     target:    track.dataset.target || 'primary',
   };
@@ -3673,8 +3736,9 @@ function tlDragStart(e, idx, handleType) {
       _tlDrag.start = newStart;
       _tlDrag.stop  = newStart + dur;
     } else if (_tlDrag.handleType === 'start') {
-      // Ratepension må lovligt ikke udbetales over under 10 år — juster
-      // start-håndtaget kan derfor ikke presse perioden kortere end det.
+      // Ratepension (og en spredt engangsudbetaling, se HAR_JUSTERBAR_PERIODE)
+      // må ikke gå under 10 år — juster start-håndtaget kan derfor ikke presse
+      // perioden kortere end det.
       const minVarighed = _tlDrag.isRate ? MIN_RATEPENSION_AAR : 1;
       _tlDrag.start = Math.max(_tlDrag.minAge, Math.min(age, _tlDrag.stop - minVarighed));
     } else {
@@ -3900,7 +3964,12 @@ async function koerOptimering(forPartner = false) {
   const huidigePerioder = {};
   (chartData?.produkter || []).forEach(pr => {
     huidigeStartAldre[pr.key] = pr.start_alder;
-    if (pr.udb_type === 'rate') huidigePerioder[pr.key] = pr.udb_aar;
+    // Et engangsbeløb der (endnu) ikke er spredt har periode 0 i søgerummet
+    // (se sekventering.py's _byg_soegerum/_default_vektor) — uden denne gren
+    // ville huidigePerioder[key] være undefined, og sammenligningen nedenfor
+    // fejlagtigt tro at optimeringens periode:0-forslag ER en ændring.
+    if (HAR_JUSTERBAR_PERIODE.has(pr.udb_type)) huidigePerioder[pr.key] = pr.udb_aar;
+    else if (pr.udb_type === 'engangsbeloeb')   huidigePerioder[pr.key] = 0;
   });
   const nuvaerendeOpsaettelse = chartData?.parametre?.folkepension_opsaettelse_aar || 0;
   const ingenAendring =
@@ -3957,8 +4026,9 @@ async function koerOptimering(forPartner = false) {
     `inflationskorrigerede månedsbeløb der reelt kan udbetales hvert år — ikke den største samlede sum og ikke et gennemsnit ` +
     `der skjuler en flerårig lavindkomst-periode. ` +
     `Evalueret ${data.evalueret} kombinationer af per-produkt start-aldre, ratepensioners udbetalingsperiode ` +
-    `(min. 10 år, lovkrav), folkepensions-opsætning, og udbetalingsår for engangsbeløb der er markeret til at ` +
-    `indgå i bufferen${soegeMetodeNote} ` +
+    `(min. 10 år, lovkrav), folkepensions-opsætning, udbetalingsår for engangsbeløb der er markeret til at ` +
+    `indgå i bufferen, og for hvert engangsbeløb valget mellem udbetaling samlet ELLER spredt over flere år ` +
+    `(så pengene fortsætter til pensionsafkastskat i stedet for at forlade pensionsordningen)${soegeMetodeNote} ` +
     `(engangsbeløb der er FRAVALGT bufferen er IKKE en del af søgningen — det er allerede et truffet valg), ` +
     `heraf ${data.antal_gennemfoerlige} gennemførlige (optimeringen kan aldrig gøre det værste enkeltår eller antallet af lavindkomst-år ringere end det allerede er i din nuværende plan). ` +
     `Bedste fundne plan — start-aldre: ${startLinjer || 'uændret'}. ` +

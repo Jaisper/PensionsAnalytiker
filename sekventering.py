@@ -260,8 +260,12 @@ def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: 
     PERIODE (i modsætning til livsvarig pension, hvor perioden er et
     levetidsskøn, ikke et frit valg) må lovligt ikke være under
     `MIN_RATEPENSION_UDB_AAR` (10 år) — samme gulv som UI'ets tidslinje-træk
-    håndhæver. ATP er slet ikke en del af `produkter`-listen og indgår
-    derfor aldrig."""
+    håndhæver. Et buffer-egnet engangsbeløb har DESUDEN sin egen PERIODE-
+    dimension: 0 (nuværende plan, udbetalt samlet) eller en spredning over
+    `STANDARD_PERIODE_INTERVAL` år (se engine.py's "kapital_rate") — så
+    optimeringen frit kan afveje engangsudbetaling mod spredning for hvert
+    produkt, ikke kun HVORNÅR det sker. ATP er slet ikke en del af
+    `produkter`-listen og indgår derfor aldrig."""
     # Den generelle lovmæssige tommelfingerregel (fp_alder - 5) er kun en
     # DEFAULT-hjælp i interviewet — søgerummet skal ALDRIG ekskludere en alder
     # brugeren faktisk allerede har valgt (hverken pensionsalderen generelt
@@ -287,6 +291,16 @@ def _byg_soegerum(baseline_produkter: list[dict], fp_alder: int, pensionsalder: 
             # med docstringens løfte om samme 10-års-gulv som UI'ets træk.
             baseline_periode = max(pr["udb_aar"], MIN_RATEPENSION_UDB_AAR)
             periode_interval = set(STANDARD_PERIODE_INTERVAL) | {baseline_periode}
+            dimensioner.append([("periode", key, p) for p in sorted(periode_interval)])
+            noegler.append(f"periode:{key}")
+        elif pr["udb_type"] == "engangsbeloeb":
+            # Et engangsbeløb kan alternativt SPREDES over flere år i stedet
+            # for at blive udbetalt samlet (se engine.py's "kapital_rate") —
+            # 0 er en ligeværdig kandidatværdi i denne dimension og betyder
+            # "behold som engangsbeløb" (nuværende, uændrede plan), så
+            # optimeringen frit kan vælge mellem de to strategier for hvert
+            # enkelt produkt i stedet for at spredning tvinges igennem.
+            periode_interval = {0} | set(STANDARD_PERIODE_INTERVAL)
             dimensioner.append([("periode", key, p) for p in sorted(periode_interval)])
             noegler.append(f"periode:{key}")
     opsaettelse_interval = sorted(set(STANDARD_OPSAETTELSE) | {nuvaerende_opsaettelse})
@@ -392,6 +406,11 @@ def _default_vektor(baseline_produkter: list[dict], nuvaerende_opsaettelse: int)
             # søgerummets dimension, og de to vektorer holder op med at være
             # positions-/værdi-konsistente (se docstring ovenfor).
             delvektor.append(("periode", pr["key"], max(pr["udb_aar"], MIN_RATEPENSION_UDB_AAR)))
+        elif pr["udb_type"] == "engangsbeloeb":
+            # Nuværende plan for et engangsbeløb er (medmindre brugeren aktivt
+            # har valgt at sprede det) 0 år — dvs. udbetalt samlet. Samme
+            # positions-/værdi-konsistens-krav som ratepension-grenen ovenfor.
+            delvektor.append(("periode", pr["key"], 0))
     return tuple(delvektor) + (("opsaet", None, nuvaerende_opsaettelse),)
 
 

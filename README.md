@@ -49,21 +49,32 @@ class Sats:
 
 Hver sats bærer sin egen kilde og et `verificeret`-flag. `verificeret=False` betyder: tallet er et forsigtigt skøn eller genbrugt fra et tidligere år, IKKE bekræftet mod en officiel 2026-kilde. En `strict`-parameter findes allerede i infrastrukturen (`satser_2026.brug()`) til at kunne kaste en fejl hvis en uverificeret sats bruges — slået fra i dag, men klar til at aktiveres hvis værktøjet nogensinde skal bruges i en kontekst hvor det kræves.
 
-**Satser markeret `verificeret=False` i skrivende stund:**
+**Satser markeret `verificeret=False` i skrivende stund** (efter et gennemsyn 2026-09-20 mod officielle kilder — se nedenfor for hvad der blev rettet):
 
-| Sats | Værdi | Hvorfor uverificeret |
+| Sats | Værdi | Hvorfor stadig uverificeret |
 |---|---|---|
-| `PERSONFRADRAG_AAR` | 49.700 kr/år | 2025-niveau genbrugt — pension-core-kildepakken modellerede det slet ikke, og et bekræftet 2026-tal fra Skatteministeriet er ikke indsat endnu |
-| `MEDIECHECK` | 1.552 kr/år | Ikke individuelt bekræftet mod Satser 2026 |
-| `RATEPENSION_LOFT` | 63.100 kr/år | 2025-niveau — ikke bekræftet mod Skatteministeriets 2026-udmelding |
-| `ATP_MDR_STANDARD` | 1.825 kr/mdr | Kun et fallback-estimat brugt når PDF-rapporten ikke selv oplyser et ATP-beløb |
-| `LIVSVARIG_ESTIMAT_AAR` | 18 år | Fallback-skøn for livsvarig pensions periode — overstyres normalt af et alder-justeret levetidsestimat |
-| `FOLKEPENSION_VENTEPROCENT_PR_AAR` | 6%/år | Forenklet tilnærmelse til ventetillæg ved udskudt folkepension — den reelle regel bygger på Finanstilsynets levetidsforudsætninger og er væsentligt mere kompleks |
-| `app.py`'s `KOMMUNESKAT` (98 kommuner) | — | Indsat som 2025-niveau, ikke individuelt verificeret mod KL/skat.dk's 2026-udmelding for hver kommune |
+| `LIVSVARIG_ESTIMAT_AAR` | 18 år | Kræver Finanstilsynets faktiske K2023-levetidsbenchmark (en aldersspecifik restlevetidstabel, ikke ét samlet tal) for reel verifikation — ikke gjort ved dette gennemsyn |
+| `FOLKEPENSION_VENTEPROCENT_PR_AAR` | 5,71%/år | Strukturelt umuligt at "verificere" som én flad sats — den reelle regel er forholdet mellem måneders udskydelse og restlevetiden ved DEN alder pensionen opsættes fra, altså alders-/levetidsafhængig. Værdien er opdateret fra en uafklaret 6%/år-arv til det konkrete, kildehenviste eksempel for udskydelse fra 67 år i 2026 (Ældre Sagen/borger.dk) |
+
+**Verificeret 2026-09-20 mod primære, officielle kilder** (tidligere `verificeret=False`, nu rettet og bekræftet — se `satser_2026.py`'s `kilde`-felter for de fulde citater):
+
+| Sats | Gammel værdi | Ny, verificeret værdi | Kilde |
+|---|---|---|---|
+| `PERSONFRADRAG_AAR` | 49.700 kr/år | **54.100 kr/år** | Skatteministeriet (svmn.dk), PSL § 20-regulering — hverken den gamle værdi eller "2025-niveau"-antagelsen bag den var korrekt; 2025 var faktisk 51.600 kr. |
+| `RATEPENSION_LOFT` | 63.100 kr/år | **68.700 kr/år** | skat.dk, direkte citat: "Du kan samlet set få fradrag for indbetalinger på op til 68.700 kr. i 2026 (65.500 kr. i 2025)." |
+| `ATP_MDR_STANDARD` | 1.825 kr/mdr | **1.445 kr/mdr** | ATP.dk's pressemeddelelse om 2026-stigningen: 17.340 kr./år for et gennemsnitligt medlem |
+| `MEDIECHECK` | 1.552 kr/år | 1.552 kr/år (uændret — nu bekræftet) | borger.dk: "får du 1.552 kr. (2026) før skat" |
+| `app.py`'s `KOMMUNESKAT` (98 kommuner) | 2025-niveau, flere ukorrekte/uramte nøgler | **Alle 98 kommuner opdateret** | Skatteministeriets officielle 2026-regneark (svmn.dk) |
+
+**En vigtig pointe fundet undervejs**: `satser_2026.py`'s progressive topskattetrin (mellemskat 641.200 kr / topskat 777.900 kr / top-topskat 2.592.700 kr) var allerede korrekte og blev bekræftet direkte mod skat.dk — de var IKKE blandt de rettede tal, på trods af at flere uafhængige (ikke-officielle) aggregatorsider undervejs i researchen viste helt andre tal for de samme grænser (det viste sig at være de samme grænser opgjort FØR AM-bidrag i stedet for efter — ikke en fejl, blot en anden opgørelsesmåde). God grund til altid at bekræfte mod en primær kilde (skat.dk/Skatteministeriet), ikke en sekundær opsummering.
+
+**Ventetillægget ved udskudt folkepension fik en reel modelforbedring, ikke kun en satsrettelse**: den tidligere flade tilnærmelse (samme procent uanset hvor mange år man udskyder) er nu erstattet af `satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67` — en nøjagtig, år-for-år-tabel (Ældre Sagen, 2026-niveau) for det almindelige tilfælde: opsætning fra 67 år, højst 10 år. Tabellen er bevidst IKKE lineær (år 10 giver over 15 gange så stort et tillæg som år 1, fordi restlevetiden falder jo ældre man opsætter fra) — noget en enkelt flad sats aldrig kunne gengive. `engine._fp_venteprocent()` bruger denne tabel når den passer, og falder ellers tilbage til den forenklede, fortsat uverificerede sats. Sekventeringsoptimeringens svar (`/api/optimer`) markerer nu eksplicit via `usikker_venteprocent`, hvilken af de to der er brugt for en given vinderplan.
+
+**En ny, dokumenteret men bevidst IKKE modelleret ydelse**: `satser_2026.CHECK_2026_ENGANGS` — en skattefri engangscheck til folkepensionister i 2026 (hastelov, betinget af likvid formue ≤ 350.000 kr., fm.dk-faktaark 27.01.2026). Den indgår ikke i selve udbetalingsfremskrivningen, se `satser_2026.py`'s kommentar for hvorfor.
 
 Alt andet i `satser_2026.py` (progressiv topskat, folkepensionens grundbeløb, pensionstillæg, ældrecheck, formuegrænse, aldersopsparingens lofter) er markeret `verificeret=True` med en konkret lov- eller kildehenvisning i `kilde`-feltet.
 
-**Hvorfor det er vigtigt at det KUN står ét sted**: en tidligere version af koden havde flere uafhængige kopier af de samme tal — `engine.py` havde sine egne bare konstanter, systemprompten i `app.py` havde en hel sats-sektion hånd-skrevet som prosa (i to versioner, én stemplet "2025" og én "2026", med forskellige tal for topskattegrænsen), en helt separat `pension_rules.py`-fil havde en tredje, indbyrdes modstridende kopi, og frontendens JavaScript havde sin egen kommuneskat-tabel. Ved en gennemgang i forbindelse med dette dokument blev det opdaget at to af disse kopier reelt var **forkerte** eller **indbyrdes uenige** — bl.a. brugte frontendens ratepensionsloft (68.700 kr) en anden værdi end selve beregningen (63.100 kr), og flere steder viste stadig den forældede 2025-folkepension (7.955 kr/mdr) og den forældede, ikke-progressive topskattegrænse (588.900 kr) i tekst brugeren faktisk så. Alle disse steder er nu rettet til at læse fra `satser_2026.py` i stedet for at duplikere tallet — se "Årlig satsopdatering" nedenfor for hvordan det forbliver sådan.
+**Hvorfor det er vigtigt at det KUN står ét sted**: en tidligere version af koden havde flere uafhængige kopier af de samme tal — `engine.py` havde sine egne bare konstanter, systemprompten i `app.py` havde en hel sats-sektion hånd-skrevet som prosa (i to versioner, én stemplet "2025" og én "2026", med forskellige tal for topskattegrænsen), en helt separat `pension_rules.py`-fil havde en tredje, indbyrdes modstridende kopi, og frontendens JavaScript havde sin egen kommuneskat-tabel. Ved en gennemgang i forbindelse med dette dokument blev det opdaget at flere af disse kopier reelt var **forkerte** eller **indbyrdes uenige** — bl.a. brugte frontendens ratepensionsloft (68.700 kr) en anden værdi end selve beregningen (63.100 kr, som det viste sig var den forældede af de to), og flere steder viste stadig den forældede 2025-folkepension (7.955 kr/mdr) og den forældede, ikke-progressive topskattegrænse (588.900 kr) i tekst brugeren faktisk så. Alle disse steder er nu rettet til at læse fra `satser_2026.py` i stedet for at duplikere tallet — se "Årlig satsopdatering" nedenfor for hvordan det forbliver sådan.
 
 ## Årlig satsopdatering — checkliste
 
@@ -79,7 +90,7 @@ Når nye satser for et kommende år offentliggøres (typisk Skatteministeriet, s
 
 Ud over ovenstående `verificeret=False`-satser er der modelleringsvalg værd at være eksplicit om:
 
-- **Folkepensions-ventetillæg ved udskudt folkepension** (`FOLKEPENSION_VENTEPROCENT_PR_AAR`, 6%/år): en grov tilnærmelse. Den reelle regel er levetidsforudsætningsbaseret (Finanstilsynet) og væsentligt mere kompleks — nævnes eksplicit i UI og chat hver gang den bruges.
+- **Folkepensions-ventetillæg ved udskudt folkepension**: for opsætning fra 67 år i højst 10 år bruges en nøjagtig, kildehenvist tabel (`satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67`). For enhver anden opsætningsalder/-periode falder beregningen tilbage til en flad tilnærmelse (`FOLKEPENSION_VENTEPROCENT_PR_AAR`, 5,71%/år) — den reelle regel er restlevetidsbaseret og afhænger af den alder pensionen rent faktisk opsættes fra, så en flad sats kan aldrig gengive den præcist for andre aldre. Se `usikker_venteprocent`-feltet i `/api/optimer`-svaret for hvilken af de to der er brugt.
 - **Samspil mellem gifte/samlevende** (`husstand.py`): det kombinerede indtægtsgrundlag for pensionstillæg/tillægsprocent er en forenklet tilnærmelse til Lov om social pension § 29's fulde modregningsregel. Uden partnerens egen uploadede rapport er partnerens indkomst desuden kun et fast årligt overslagstal, ikke en år-for-år-fremskrivning.
 - **CPR-fødselsårs-parsing** (`pdf_parser.py`): antager fødselsår i 1900-tallet uden at tjekke CPR-nummerets 7. ciffer (den formelle regel for at skelne 1900- fra 2000-tal). Forsvarligt fordi værktøjets aldersgrænser (typisk 55-85 år) gør at ingen reel bruger kan være født i 2000-tallet.
 - **PDF-ekstraktionens back-udledte fremtidsværdier** (`pdf_parser.py`s `_fv_fra_payout`): når en PensionsInfo-rapport ikke direkte oplyser en opsparingssaldo, "fortrydes" annuiteten fra det viste udbetalingsbeløb med en uafhængig, konservativ diskonteringssats (4%) og et skønnet antal år (25 år for livsvarig pension/livrente) — bevidst adskilt fra brugerens egen afkastantagelse og fra `LIVSVARIG_ESTIMAT_AAR`, som løser en anden opgave (fremadrettet udbetalingsperiode, ikke et gæt på en manglende saldo).

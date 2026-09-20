@@ -154,9 +154,12 @@ kun brugerens) og fødes ind i hver kandidats samspils-beregning — ellers
 ville optimeringen score kandidater mod et forkert, husstands-uafhængigt
 indtægtsgrundlag.
 
-Folkepensions-opsætningens ventetillæg er en bevidst forenkling (samme skøn
-som kildepakken selv bruger, jf. satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR)
-— IKKE en juridisk præcis beregning.
+Folkepensions-opsætningens ventetillæg bruger en nøjagtig, kildehenvist tabel
+for det almindelige tilfælde (opsætning fra 67 år, højst 10 år, se
+engine._fp_venteprocent/satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67) og en
+bevidst forenklet flad tilnærmelse for alle andre opsætningsaldre/-perioder
+(satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR) — IKKE en juridisk præcis
+beregning i det sidste tilfælde.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field

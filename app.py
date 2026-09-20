@@ -34,7 +34,7 @@ from pdf_parser import parse_pensionsinfo_pdf, format_profil_til_tekst
 from engine import (generer_udbetalingstabel, format_engine_til_llm, SkatParametre,
                      fordel_pmt_default, format_fordeling_til_llm, generer_scenarier,
                      analyser_forsikring, beregn_fri_formue_tabel, skat_params_fra_parametre,
-                     civilstand_fra_parametre, jaevn_niveau_realt)
+                     civilstand_fra_parametre, jaevn_niveau_realt, _fp_venteprocent)
 import sekventering
 import husstand
 import satser_2026
@@ -78,62 +78,60 @@ async def rate_limit(request: Request, call_next):
     return await call_next(request)
 
 # ── Kommuneskat — alle 98 kommuner ────────────────────────────────────────────
-# TODO: verificér alle 98 satser mod KL/skat.dk's 2026-udmelding — indsat som
-# 2025-niveau, ikke individuelt kildehenvist per kommune (samme forbehold som
-# satser_2026.PERSONFRADRAG_AAR). Eneste kildested for disse tal — hentes af
-# static/index.html via GET /api/kommuneskat (se nedenfor) i stedet for at
-# holde sin egen, uafhængigt vedligeholdte kopi.
+# Verificeret 2026-09-20 mod Skatteministeriets officielle regneark — se
+# kildekommentar ved selve dictet nedenfor. Eneste kildested for disse tal —
+# hentes af static/index.html via GET /api/kommuneskat (se nedenfor) i stedet
+# for at holde sin egen, uafhængigt vedligeholdte kopi.
 
 def _normalize_kommune(s: str) -> str:
     return (s.lower()
             .replace("æ", "ae").replace("ø", "o").replace("å", "a")
             .replace("-", "").replace(" ", ""))
 
+# Kilde: Skatteministeriet (svmn.dk), "Kommuneskattesatser 2026" — hentet og
+# verificeret 2026-09-20 direkte fra det officielle regneark (98 kommuner).
+# Nøglerne er produceret programmatisk med SAMME transform som
+# _normalize_kommune ovenfor, for at undgå den klasse af fejl der var i den
+# tidligere hånd-typede udgave (bl.a. "allerrod" med et ekstra r, "korsor" der
+# slet ikke er en kommune, "nordfyn"/"vesthimmerlands" med forkert endelse,
+# og "samsoe"/"morsoe"/"fanoe" stavet med "oe" hvor _normalize_kommune rent
+# faktisk producerer "o" for ø — ingen af disse nøgler kunne nogensinde blive
+# ramt af et rigtigt opslag). "arhus" og "lyngby" er bevidst bevarede aliaser
+# (historisk stavemåde hhv. udbredt kortform), ikke en del af kildedataen.
 KOMMUNESKAT: dict[str, float] = {
-    # Hovedstaden
-    "kobenhavn": 23.7, "frederiksberg": 22.9, "albertslund": 25.4,
-    "allerrod": 24.6, "ballerup": 25.4, "brondby": 25.9,
-    "dragor": 25.9, "egedal": 25.8, "fredensborg": 25.7,
-    "frederikssund": 25.8, "fureso": 24.1, "gentofte": 22.0,
-    "gladsaxe": 23.8, "gladsakse": 23.8, "glostrup": 24.4,
-    "gribskov": 26.5, "halsnaes": 26.7, "helsingor": 25.7,
-    "herlev": 25.2, "hillerod": 25.8, "horsholm": 22.5,
-    "hvidovre": 24.6, "hojetaastrup": 24.8, "ishoj": 24.1,
-    "koge": 25.7, "lejre": 26.4, "lyngby": 22.9,
-    "lyngbytaarbaek": 22.9, "rudersdal": 21.9, "roskilde": 26.3,
-    "rodovre": 25.0, "solrod": 24.7, "stevns": 26.2,
-    "taarnby": 24.3, "vallensbaek": 24.6, "greve": 24.6,
-    # Sjælland
-    "holbaek": 26.2, "kalundborg": 26.7, "naestved": 26.4,
-    "odsherred": 27.4, "ringsted": 26.4, "slagelse": 26.5,
-    "soro": 26.6, "vordingborg": 26.8, "faxe": 27.2,
-    "korsor": 26.5,
-    # Bornholm
-    "bornholm": 26.4,
-    # Fyn
-    "assens": 26.5, "faaborgmidtfyn": 25.9, "kerteminde": 26.2,
-    "langeland": 27.6, "middelfart": 26.1, "nordfyn": 27.0,
-    "nyborg": 26.2, "odense": 25.3, "svendborg": 26.0, "aero": 26.6,
-    # Syddanmark
-    "billund": 24.4, "esbjerg": 25.6, "fanoe": 25.5,
-    "fredericia": 25.6, "haderslev": 25.8, "kolding": 25.3,
-    "sonderborg": 26.1, "tonder": 27.0, "varde": 26.1,
-    "vejen": 26.1, "vejle": 25.5, "aabenraa": 25.9,
-    # Midtjylland
-    "aarhus": 24.5, "arhus": 24.5, "favrskov": 25.2,
-    "hedensted": 25.3, "herning": 25.3, "holstebro": 25.8,
-    "horsens": 25.5, "ikastbrande": 25.5, "lemvig": 26.5,
-    "norddjurs": 26.8, "odder": 25.2, "randers": 26.0,
-    "ringkobingskjern": 26.0, "samsoe": 26.3, "silkeborg": 24.7,
-    "skanderborg": 24.7, "skive": 26.1, "struer": 26.3,
-    "syddjurs": 25.7, "viborg": 24.9,
-    # Nordjylland
-    "bronderslev": 26.7, "frederikshavn": 27.4, "hjorring": 26.0,
-    "jammerbugt": 26.5, "laeso": 26.0, "mariagerfjord": 26.3,
-    "morsoe": 26.8, "rebild": 26.0, "thisted": 26.7,
-    "vesthimmerlands": 26.8, "aalborg": 25.4,
-    # Lolland-Falster
-    "guldborgsund": 27.3, "lolland": 27.8,
+    "kobenhavn": 23.39, "frederiksberg": 24.5, "ballerup": 25.5,
+    "brondby": 24.3, "dragor": 24.8, "gentofte": 24.14,
+    "gladsaxe": 23.6, "glostrup": 24.6, "herlev": 23.7,
+    "albertslund": 25.6, "hvidovre": 25.4, "hojetaastrup": 24.6,
+    "lyngbytaarbaek": 24.38, "lyngby": 24.38, "rodovre": 25.7, "ishoj": 25,
+    "tarnby": 24.1, "vallensbaek": 25.6, "fureso": 24.88,
+    "allerod": 25.3, "fredensborg": 25.3, "helsingor": 25.82,
+    "hillerod": 25.6, "horsholm": 23.7, "rudersdal": 23.47,
+    "egedal": 25.7, "frederikssund": 25.6, "greve": 24.59,
+    "koge": 25.26, "halsnaes": 25.7, "roskilde": 25.2,
+    "solrod": 24.99, "gribskov": 25.4, "odsherred": 26.3,
+    "holbaek": 25.3, "faxe": 25.8, "kalundborg": 24.2,
+    "ringsted": 26.1, "slagelse": 26.1, "stevns": 26,
+    "soro": 26.3, "lejre": 25.31, "lolland": 26.3,
+    "naestved": 25, "guldborgsund": 25.8, "vordingborg": 26.3,
+    "bornholm": 26.2, "middelfart": 25.8, "assens": 26.1,
+    "faaborgmidtfyn": 26.1, "kerteminde": 26.1, "nyborg": 26.3,
+    "odense": 25.5, "svendborg": 26.3, "nordfyns": 26,
+    "langeland": 26.3, "aero": 26.1, "haderslev": 26.3,
+    "billund": 24, "sonderborg": 25.7, "tonder": 25.3,
+    "esbjerg": 26.1, "fano": 26.1, "varde": 25.1,
+    "vejen": 25.8, "aabenraa": 25.6, "fredericia": 25.5,
+    "horsens": 25.69, "kolding": 25.5, "vejle": 23.4,
+    "herning": 25.4, "holstebro": 25.5, "lemvig": 25.7,
+    "struer": 25.3, "syddjurs": 25.9, "norddjurs": 26,
+    "favrskov": 25.7, "odder": 25.1, "randers": 26,
+    "silkeborg": 25.5, "samso": 25.9, "skanderborg": 26,
+    "aarhus": 24.52, "arhus": 24.52, "ikastbrande": 25.1, "ringkobingskjern": 25,
+    "hedensted": 25.52, "morso": 25.8, "skive": 25.5,
+    "thisted": 25.5, "viborg": 25.5, "bronderslev": 26.3,
+    "frederikshavn": 26.2, "vesthimmerland": 26.3, "laeso": 26.3,
+    "rebild": 25.83, "mariagerfjord": 25.9, "jammerbugt": 25.7,
+    "aalborg": 25.6, "hjorring": 26.21,
 }
 
 
@@ -1295,9 +1293,17 @@ def _forklar_optimering(baseline: dict, vinder: dict, bedste, foelsomhed: dict) 
         )
 
     if getattr(bedste, "folkepension_opsaettelse_aar", 0):
+        opsaet_aar = bedste.folkepension_opsaettelse_aar
+        fp_alder_baseline = baseline.get("fp_alder")
+        er_noejagtig_tabel = fp_alder_baseline == 67 and opsaet_aar <= 10
+        venteprocent_pct = (_fp_venteprocent(fp_alder_baseline, opsaet_aar) - 1) * 100
+        kilde_note = (
+            "nøjagtig tabel for opsætning fra 67 år" if er_noejagtig_tabel
+            else "forenklet skøn, IKKE en juridisk præcis beregning for denne opsætningsalder/-periode"
+        )
         aendringer.append(
-            f"- **Folkepension** udskydes {bedste.folkepension_opsaettelse_aar} år — det forhøjer både grundbeløb "
-            f"og pensionstillæg med et ventetillæg (forenklet skøn: 6%/år, IKKE en juridisk præcis beregning)."
+            f"- **Folkepension** udskydes {opsaet_aar} år — det forhøjer både grundbeløb "
+            f"og pensionstillæg med et ventetillæg på {venteprocent_pct:.1f}% ({kilde_note})."
         )
 
     if not aendringer:
@@ -1471,12 +1477,21 @@ async def optimer_udbetalingsplan(req: dict):
         "foelsomhed": {k: round(v) for k, v in res.foelsomhed.items()},
         "husstand_advarsel": husstand_advarsel,
         "forklaring": forklaring,
-        # satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR er eksplicit uverificeret
-        # (forenklet 6%/år-skøn, ikke en juridisk præcis ventetillægsberegning)
-        # — når den bedste plan rent faktisk bygger på at udskyde folkepension,
-        # skal ENHVER forbruger af dette svar (UI, LLM, en fremtidig API-klient)
-        # kunne se det uden at skulle kende sekventering.py's interne satser.
-        "usikker_venteprocent": bool(b.folkepension_opsaettelse_aar > 0),
+        # Engine._fp_venteprocent bruger en nøjagtig, kildehenvist tabel når
+        # opsætningen sker fra 67 år og varer højst 10 år — ellers et
+        # forenklet, eksplicit uverificeret skøn (satser_2026.
+        # FOLKEPENSION_VENTEPROCENT_PR_AAR). Når den bedste plan rent faktisk
+        # bygger på at udskyde folkepension, skal ENHVER forbruger af dette
+        # svar (UI, LLM, en fremtidig API-klient) kunne se hvilket af de to
+        # der gælder, uden at skulle kende sekventering.py's interne satser.
+        "usikker_venteprocent": bool(
+            b.folkepension_opsaettelse_aar > 0
+            and not (
+                baseline_resultat is not None
+                and baseline_resultat.get("fp_alder") == 67
+                and b.folkepension_opsaettelse_aar <= 10
+            )
+        ),
     })
 
 

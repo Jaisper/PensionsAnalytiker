@@ -130,6 +130,23 @@ def tidligste_private_pensionsalder(fp_alder: int) -> int:
     return fp_alder - 5
 
 
+def _fp_venteprocent(fp_alder: int, opsaettelse_aar: int) -> float:
+    """Ventetillæggets multiplikator (1 + venteprocent) for udskudt
+    folkepension. Bruger satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67's
+    nøjagtige, IKKE-lineære tabel når opsætningen rent faktisk sker fra 67 år
+    (langt den mest almindelige folkepensionsalder i dag) og varer højst 10
+    år — det dækkede, kildehenviste tilfælde. Falder tilbage til den flade
+    lineære tilnærmelse (FOLKEPENSION_VENTEPROCENT_PR_AAR) for enhver anden
+    opsætningsalder eller periode over 10 år, hvor der ikke findes en
+    tilsvarende tabel. Se satser_2026.py for hvorfor en flad sats i det
+    tilfælde kun er et forsigtigt skøn, ikke en nøjagtig beregning."""
+    if opsaettelse_aar <= 0:
+        return 1.0
+    if fp_alder == 67 and opsaettelse_aar in satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67:
+        return 1 + satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67[opsaettelse_aar]
+    return 1 + satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR.vaerdi * opsaettelse_aar
+
+
 # ── Finansielle kernefunktioner ──────────────────────────────────────────────
 
 def beregn_fv(pv: float, pmt: float, r: float, n: int, g: float = 0.0) -> float:
@@ -682,10 +699,7 @@ def generer_udbetalingstabel(
         # der eksplicit friholder ATP fra opsætningsdimensionen.
         har_atp = alder >= fp_alder
         har_fp  = alder >= (fp_alder + folkepension_opsaettelse_aar)
-        fp_venteprocent = (
-            1 + satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR.vaerdi * folkepension_opsaettelse_aar
-            if folkepension_opsaettelse_aar > 0 else 1.0
-        )
+        fp_venteprocent = _fp_venteprocent(fp_alder, folkepension_opsaettelse_aar)
 
         # S-indkomst dette år — kun aktive produkter
         privat_s_brutto = sum(

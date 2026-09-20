@@ -56,12 +56,13 @@ PROGRESSION: list[Progressionstrin] = [
 # ── Personfradrag ─────────────────────────────────────────────────────────────
 # Skattefrit bundfradrag der trækkes fra INDEN bundskat/kommuneskat/kirkeskat
 # beregnes — savnet helt i den porterede pension-core-kilde (som ikke selv
-# modellerer det), så 2025-niveauet genbruges som et forsigtigt skøn indtil
-# det 2026-tal Skatteministeriet fastsætter kan indsættes og verificeres.
+# modellerer det). Verificeret 2026-09-20 mod Skatteministeriets egen
+# satsopgørelse (svmn.dk, PSL § 20-regulering): 54.100 kr. i 2026 (op fra
+# 51.600 kr. i 2025) — den tidligere værdi her (49.700 kr.) var hverken det
+# ene eller det andet års korrekte tal.
 PERSONFRADRAG_AAR = Sats(
-    "skat.personfradrag", 49_700,
-    "2025-niveau (ej porteret fra pension-core) — skøn, ikke bekræftet mod Skatteministeriets 2026-tal",
-    verificeret=False,
+    "skat.personfradrag", 54_100,
+    "Skatteministeriet (svmn.dk), PSL § 20-regulering, 2026",
 )
 
 # ── Folkepension grundbeløb ───────────────────────────────────────────────────
@@ -107,7 +108,9 @@ TILLAEGSPROCENT_GIFT = {
 LIKVID_FORMUEGRAENSE = Sats("yd.formuegraense", 108_000, "Satser 2026 (samme for enlige og par) — HÅRD tærskel, ikke glidende")
 AELDRECHECK = Sats("yd.aeldrecheck", 26_900, "Satser 2026, supplerende pensionsydelse")
 AELDRECHECK_SKATTEPLIGTIG = Sats("yd.aeldrecheck.skat", True, "Beskattes som anden pensionsindkomst")
-MEDIECHECK = Sats("yd.mediecheck", 1_552, "Satser 2026; kræver tillægsprocent 100", verificeret=False)
+# Verificeret 2026-09-20 mod borger.dk (den officielle borgerportal): "Hvis
+# du har ret til mediecheck, får du 1.552 kr. (2026) før skat."
+MEDIECHECK = Sats("yd.mediecheck", 1_552, "borger.dk, mediecheck, 2026; kræver tillægsprocent 100")
 
 # ── Pensionsafkastbeskatning (PAL) ───────────────────────────────────────────
 # Rent informativ i denne kodebase — bruges ALDRIG i selve beregningen, fordi
@@ -117,13 +120,48 @@ MEDIECHECK = Sats("yd.mediecheck", 1_552, "Satser 2026; kræver tillægsprocent 
 PAL_SATS = Sats("pal.sats", 0.153, "Pensionsafkastbeskatningsloven (PAL) § 2")
 
 # ── Folkepensions-opsættelse (sekventeringsoptimering) ───────────────────────
-# Forenklet ventetillæg-tilnærmelse, porteret 1:1 fra pension-core (samme
-# uverificerede skøn som kildepakken selv bruger) — den reelle regel bygger på
-# Finanstilsynets levetidsforudsætninger og er væsentligt mere kompleks.
+# Forenklet ventetillæg-tilnærmelse — den REELLE regel beregner venteprocenten
+# som forholdet mellem antal måneder pensionen er udskudt og den gennemsnitlige
+# restlevetid ved den alder pensionen faktisk opsættes fra, dvs. den er
+# alders-/levetidsafhængig og IKKE lineær (hvert ekstra opsættelsesår giver et
+# STØRRE tillæg end det foregående, fordi restlevetiden falder) — en enkelt
+# flad sats kan derfor aldrig blive "verificeret" i egentlig forstand.
+# Bruges som FALLBACK når det konkrete tabelopslag nedenfor ikke dækker
+# (anden opsættelsesalder end 67, eller mere end 10 år) — sat til den
+# nøjagtige tabels år-1-værdi som en forsigtig nedre-grænse-tilnærmelse.
 FOLKEPENSION_VENTEPROCENT_PR_AAR = Sats(
-    "fp.opsaettelse.venteprocent", 0.06,
-    "Forenklet estimat, jf. pension-core — bør erstattes af Finanstilsynets levetidsforudsatte ventetillæg",
+    "fp.opsaettelse.venteprocent", 0.0571,
+    "Ældre Sagen, eksempel for udskydelse fra 67 år i 2026 — den reelle regel er "
+    "alders-/levetidsafhængig og ikke-lineær, ikke en fast sats; se "
+    "VENTEPROCENT_LIVSVARIG_2026_FRA_67 for den nøjagtige, ikke-lineære tabel",
     verificeret=False,
+)
+
+# Nøjagtig, kildehenvist tabel for det specifikke (men almindelige) tilfælde:
+# opsættelse af folkepensionen fra netop 67 år, 2026-niveau. Nøgle = antal
+# opsatte hele år, værdi = venteprocent (multiplikator - 1) for resten af
+# livet. IKKE lineær — bekræfter at FOLKEPENSION_VENTEPROCENT_PR_AAR ovenfor
+# kun er en forsigtig tilnærmelse for andre opsættelsesaldre/-år.
+# Betingelse for at optjene: mindst 750 løntimer/år i opsættelsesperioden,
+# maks. 10 år. Kilde: Ældre Sagen, 2026-satser (SEKUNDÆR — ikke en primær
+# myndighedskilde, men internt konsistent med den generelle beregningsregel).
+VENTEPROCENT_LIVSVARIG_2026_FRA_67: dict[int, float] = {
+    1: 0.0571, 2: 0.1194, 3: 0.1875, 4: 0.2623, 5: 0.3448,
+    6: 0.4337, 7: 0.5350, 8: 0.6443, 9: 0.7660, 10: 0.9023,
+}
+
+# ── Engangsydelser (ikke modelleret i selve beregningen) ─────────────────────
+# Skattefri engangscheck til folkepensionister i 2026, indført ved hastelov —
+# betinget af likvid formue <= 350.000 kr. (årsopgørelsen 2025) og modtaget
+# folkepension i november 2025. Udbetalt maj 2026, modregnes ikke i andre
+# ydelser. Optaget som dokumenteret fakta, men IKKE bygget ind i
+# udbetalingsfremskrivningen: den er et engangsbeløb i ét specifikt år, ikke
+# en tilbagevendende sats, og ville kræve en formue-tærskel-kontrol
+# engine.py i dag ikke har (kun det bredere `likvid_formue`-felt til
+# ældrecheck). Se README.md.
+CHECK_2026_ENGANGS = Sats(
+    "yd.engangscheck_2026", 2_500,
+    "fm.dk, faktaark om skattefri check til folkepensionister i 2026 (27.01.2026)",
 )
 
 # ── Finansielle grundkonstanter (tidligere bare navngivne tal i engine.py,
@@ -135,22 +173,40 @@ A_SKAT_NETTO_FAKTOR = Sats(
     "kapital.a_skat_netto_faktor", 0.60,
     "Netto-andel efter 40% afgift ved udbetaling af afgiftspligtig kapitalpension (PBL § 25)",
 )
+# Verificeret 2026-09-20 direkte mod skat.dk: "Du kan samlet set få fradrag
+# for indbetalinger på op til 68.700 kr. i 2026 (65.500 kr. i 2025)." Den
+# tidligere værdi her (63.100 kr.) var et ældre (2023/2024-niveau) tal.
+# Uafhængigt krydsbekræftet af PenSam (samme tal, +4,8% fra 65.500 kr. i 2025
+# — matcher PSL § 20's generelle 2026-reguleringssats).
 RATEPENSION_LOFT = Sats(
-    "ratepension.loft", 63_100,
-    "PBL § 16 stk. 1, fradragsberettiget indbetalingsloft — 2025-niveau, IKKE bekræftet mod "
-    "Skatteministeriets 2026-udmelding (samme forbehold som PERSONFRADRAG_AAR ovenfor)",
-    verificeret=False,
+    "ratepension.loft", 68_700,
+    "skat.dk, fradrag for indbetalinger til pension, 2026 (2025: 65.500 kr.) — "
+    "uafhængigt krydsbekræftet af PenSam",
 )
+# Verificeret 2026-09-20 mod ATP.dk's egen pressemeddelelse om 2026-stigningen:
+# "Den udbetalte ATP-pension lyder på 17.340 kr. om året for et gennemsnitligt
+# medlem fra 1. januar 2026" (svarer til 1.445 kr./mdr.) — den tidligere
+# værdi her (1.825 kr./mdr.) havde ingen fundet kilde.
 ATP_MDR_STANDARD = Sats(
-    "atp.mdr_standard", 1_825,
-    "Estimeret gennemsnitlig ATP-udbetaling ved fuld optjening — bruges kun som fallback når "
-    "PDF-rapporten ikke selv oplyser et konkret ATP-beløb",
-    verificeret=False,
+    "atp.mdr_standard", 1_445,
+    "ATP.dk, pressemeddelelse om pensionsstigning pr. 1. januar 2026 (17.340 kr./år for et "
+    "gennemsnitligt medlem) — bruges kun som fallback når PDF-rapporten ikke selv oplyser et "
+    "konkret ATP-beløb",
 )
+# Bevidst valg af "gennemsnitligt medlem" (inkl. delvis optjening) frem for
+# et "fuldt optjent"-tal (~2.150 kr./mdr., Seniorhåndbogen, svagere kildet)
+# — som fallback for en UKENDT brugers ATP er gennemsnittet det mere
+# forsvarlige gæt, uafhængigt af hvilket tal der isoleret set er højest.
+# IKKE verificeret ved dette gennemsyn: kræver Finanstilsynets faktiske
+# K2023-levetidsbenchmark (aldersspecifik restlevetidstabel), ikke blot ét
+# samlet tal — se finanstilsynet.dk/finansielle-temaer/forsikring-og-pension/
+# levetidsmodel. 18 år er en grov, konservativ tommelfingerregel, ikke
+# efterprøvet mod selve benchmark-tabellen.
 LIVSVARIG_ESTIMAT_AAR = Sats(
     "livsvarig.estimat_aar", 18,
     "Konservativt fallback-skøn for livsvarig pensions udbetalingsperiode (overstyres normalt af "
-    "et alder-justeret levetidsestimat, K2023-levetidsindeks) — bruges kun når det ikke kan udledes",
+    "et alder-justeret levetidsestimat) — bør efterprøves mod Finanstilsynets K2023-benchmark, "
+    "ikke gjort ved dette gennemsyn",
     verificeret=False,
 )
 

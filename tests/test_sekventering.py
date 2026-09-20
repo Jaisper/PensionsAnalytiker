@@ -2,7 +2,8 @@
 import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sekventering as sk
 import husstand
-from engine import generer_udbetalingstabel, jaevn_niveau_realt
+import satser_2026
+from engine import generer_udbetalingstabel, jaevn_niveau_realt, _fp_venteprocent
 
 PASS, FAIL = [], []
 def check(label, ok, detail=""):
@@ -493,6 +494,23 @@ check("ATP tælles med i indtægtsgrundlaget selv i et udskudt folkepensions-år
       row_under_opsaettelse['atp_mdr_brutto'] > 0 and
       row_under_opsaettelse['indtaegtsgrundlag_aar'] >= row_under_opsaettelse['atp_mdr_brutto'] * 12,
       f"atp_mdr_brutto={row_under_opsaettelse['atp_mdr_brutto']}, indtaegtsgrundlag_aar={row_under_opsaettelse['indtaegtsgrundlag_aar']}")
+
+
+print("\n=== _fp_venteprocent: nøjagtig tabel (67 år, <=10 år) vs. flad tilnærmelse ===")
+check("3 års opsætning fra 67 år bruger den nøjagtige, kildehenviste tabelværdi (18,75%), ikke den flade sats",
+      abs(_fp_venteprocent(67, 3) - (1 + satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67[3])) < 1e-9,
+      f"fik {_fp_venteprocent(67, 3)}, tabellen siger {1 + satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67[3]}")
+check("Tabellen er reelt IKKE-lineær (år 10 giver mere end 10x år 1's tillæg)",
+      satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67[10] > 10 * satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67[1],
+      f"år1={satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67[1]}, år10={satser_2026.VENTEPROCENT_LIVSVARIG_2026_FRA_67[10]}")
+check("En anden folkepensionsalder end 67 falder tilbage til den flade tilnærmelse",
+      abs(_fp_venteprocent(68, 3) - (1 + satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR.vaerdi * 3)) < 1e-9,
+      f"fik {_fp_venteprocent(68, 3)}")
+check("Mere end 10 års opsætning fra 67 år falder tilbage til den flade tilnærmelse (uden for tabellen)",
+      abs(_fp_venteprocent(67, 11) - (1 + satser_2026.FOLKEPENSION_VENTEPROCENT_PR_AAR.vaerdi * 11)) < 1e-9,
+      f"fik {_fp_venteprocent(67, 11)}")
+check("Ingen opsætning giver ingen multiplikator, uanset alder",
+      _fp_venteprocent(67, 0) == 1.0 and _fp_venteprocent(70, 0) == 1.0)
 
 
 print("\n=== engine.py: real-terms deflatering virker selv uden et eksplicit 'alder'-felt ===")

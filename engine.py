@@ -14,24 +14,22 @@ from typing import Optional
 import satser_2026
 
 # ── 2025/2026-satser ─────────────────────────────────────────────────────────
-# Topskat, skatteloft, pensionstillæg/tillægsprocent og folkepensionens
-# grundbeløb er flyttet til satser_2026.py (progressiv 2026-struktur +
-# verificerede satser) — brug satser_2026.FOLKEPENSION_GRUNDBELOEB_AAR, IKKE
-# en lokal konstant her, ellers driver denne fil og regelpakken fra hinanden
-# uden nogen fejlmeddelelse (det er præcis det der skete med den tidligere
-# FOLKEPENSION_MDR=7.955, en forældet 2025-sats). De resterende konstanter
-# her har intet 2026-modstykke i den porterede regelpakke.
+# ALLE satser/beløbsgrænser bor i satser_2026.py, ikke her — hver med sin egen
+# kilde og verificeret-flag (se satser_2026.Sats). engine.py importerer dem
+# blot som lokale navne for at holde arithmetikken herunder læsbar, IKKE som
+# uafhængige definitioner — ellers driver denne fil og regelpakken fra
+# hinanden uden nogen fejlmeddelelse (det er præcis det der skete med den
+# tidligere lokale FOLKEPENSION_MDR=7.955, en forældet 2025-sats). Se
+# satser_2026.py og README.md for kilde/verifikationsstatus på hvert tal.
+KOMMUNESKAT_DEFAULT                = 0.250     # landsgennemsnit, administrativ default — ikke en lovsats
+KIRKESKAT_DEFAULT                  = 0.007     # typisk niveau, administrativ default — ikke en lovsats
 
-AM_BIDRAG                         = 0.08
-BUNDSKAT                          = 0.1201
-KOMMUNESKAT_DEFAULT               = 0.250
-KIRKESKAT_DEFAULT                 = 0.007
-A_SKAT_NETTO_FAKTOR                = 0.60      # netto-andel efter 40% afgift (kapitalpension/aldersopsparing, "A"-skat)
-
-ATP_MDR_STANDARD                  = 1_825      # kr/mdr estimat
-
-RATEPENSION_LOFT                  = 63_100
-LIVSVARIG_ESTIMAT_AAR             = 18             # fallback — overstyres af alder-justeret estimat
+AM_BIDRAG                          = satser_2026.AM_BIDRAG.vaerdi
+BUNDSKAT                           = satser_2026.BUNDSKAT.vaerdi
+A_SKAT_NETTO_FAKTOR                = satser_2026.A_SKAT_NETTO_FAKTOR.vaerdi
+ATP_MDR_STANDARD                   = satser_2026.ATP_MDR_STANDARD.vaerdi
+RATEPENSION_LOFT                   = satser_2026.RATEPENSION_LOFT.vaerdi
+LIVSVARIG_ESTIMAT_AAR              = satser_2026.LIVSVARIG_ESTIMAT_AAR.vaerdi  # fallback — overstyres af alder-justeret estimat
 
 
 @dataclass
@@ -565,6 +563,20 @@ def generer_udbetalingstabel(
         # Uden override: default = pensionsalder.
         override = produkt_start_aldre_param.get(key)
         produkt_start_alder = int(override) if override is not None else pensionsalder
+
+        if "aldersopsparing" in ptype_l:
+            # PBL § 16 stk. 1 (satser_2026.ALDERSOPSPARING_LOFT*) — det forhøjede
+            # loft gælder kun i indkomstår inden for et vist antal år af
+            # folkepensionsalderen, ellers gælder grundloftet. Afgøres af
+            # produktets (evt. overstyrede) start-alder, derfor først muligt
+            # her, efter produkt_start_alder er beregnet ovenfor.
+            aar_til_fp = fp_alder - produkt_start_alder
+            loft = (
+                satser_2026.ALDERSOPSPARING_LOFT_FORHOEJET.vaerdi
+                if 0 <= aar_til_fp < satser_2026.ALDERSOPSPARING_FORHOEJET_AAR_FOER_FOLKEPENSION
+                else satser_2026.ALDERSOPSPARING_LOFT.vaerdi
+            )
+            pmt = min(pmt, loft)
 
         n_i = max(0, produkt_start_alder - alder_nu)
         fv  = beregn_fv(pv, pmt, r, n_i, loenvaekst_pct)

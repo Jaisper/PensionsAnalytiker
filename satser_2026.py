@@ -109,6 +109,13 @@ AELDRECHECK = Sats("yd.aeldrecheck", 26_900, "Satser 2026, supplerende pensionsy
 AELDRECHECK_SKATTEPLIGTIG = Sats("yd.aeldrecheck.skat", True, "Beskattes som anden pensionsindkomst")
 MEDIECHECK = Sats("yd.mediecheck", 1_552, "Satser 2026; kræver tillægsprocent 100", verificeret=False)
 
+# ── Pensionsafkastbeskatning (PAL) ───────────────────────────────────────────
+# Rent informativ i denne kodebase — bruges ALDRIG i selve beregningen, fordi
+# brugerens eget "Forventet afkast"-interviewsvar allerede ER efter PAL-skat
+# (se interviewets egen formulering og app.py's dynamiske kontekstblok).
+# Optaget her udelukkende så tallet har ét kildested når det nævnes i prompten.
+PAL_SATS = Sats("pal.sats", 0.153, "Pensionsafkastbeskatningsloven (PAL) § 2")
+
 # ── Folkepensions-opsættelse (sekventeringsoptimering) ───────────────────────
 # Forenklet ventetillæg-tilnærmelse, porteret 1:1 fra pension-core (samme
 # uverificerede skøn som kildepakken selv bruger) — den reelle regel bygger på
@@ -118,3 +125,54 @@ FOLKEPENSION_VENTEPROCENT_PR_AAR = Sats(
     "Forenklet estimat, jf. pension-core — bør erstattes af Finanstilsynets levetidsforudsatte ventetillæg",
     verificeret=False,
 )
+
+# ── Finansielle grundkonstanter (tidligere bare navngivne tal i engine.py,
+# uden kilde/verifikationsstatus — flyttet hertil så AL sats-drift går gennem
+# samme provenance-mønster, ikke kun progressionstrin/tillæg) ────────────────
+AM_BIDRAG = Sats("skat.am_bidrag", 0.08, "Lov om arbejdsmarkedsbidrag § 1")
+BUNDSKAT = Sats("skat.bundskat", 0.1201, "Personskatteloven § 5/6, 2026-sats")
+A_SKAT_NETTO_FAKTOR = Sats(
+    "kapital.a_skat_netto_faktor", 0.60,
+    "Netto-andel efter 40% afgift ved udbetaling af afgiftspligtig kapitalpension (PBL § 25)",
+)
+RATEPENSION_LOFT = Sats(
+    "ratepension.loft", 63_100,
+    "PBL § 16 stk. 1, fradragsberettiget indbetalingsloft — 2025-niveau, IKKE bekræftet mod "
+    "Skatteministeriets 2026-udmelding (samme forbehold som PERSONFRADRAG_AAR ovenfor)",
+    verificeret=False,
+)
+ATP_MDR_STANDARD = Sats(
+    "atp.mdr_standard", 1_825,
+    "Estimeret gennemsnitlig ATP-udbetaling ved fuld optjening — bruges kun som fallback når "
+    "PDF-rapporten ikke selv oplyser et konkret ATP-beløb",
+    verificeret=False,
+)
+LIVSVARIG_ESTIMAT_AAR = Sats(
+    "livsvarig.estimat_aar", 18,
+    "Konservativt fallback-skøn for livsvarig pensions udbetalingsperiode (overstyres normalt af "
+    "et alder-justeret levetidsestimat, K2023-levetidsindeks) — bruges kun når det ikke kan udledes",
+    verificeret=False,
+)
+
+# ── Aldersopsparing — nær-pension-loft (PBL § 16, stk. 1, reguleret efter
+# PSL § 20). Rettet 2026-09-20 efter fund af to indbyrdes modstridende,
+# ukildede tal i koden (60.900 kr/7 år ét sted, 58.900 kr/5 år et andet,
+# ingen af dem korrekte) — se README.md's "Kendte forenklinger"-afsnit.
+# Kilde: skat.dk, Den juridiske vejledning C.A.10.2.6.3.3.1,
+#        "Beløbsgrænserne på 9.900 kr. og 64.200 kr." (2026)
+ALDERSOPSPARING_LOFT = Sats(
+    "aldersopsparing.loft", 9_900, "PBL § 16 stk. 1 / skat.dk C.A.10.2.6.3.3.1 (2026)"
+)
+ALDERSOPSPARING_LOFT_FORHOEJET = Sats(
+    "aldersopsparing.loft_forhoejet", 64_200, "PBL § 16 stk. 1 / skat.dk C.A.10.2.6.3.3.1 (2026)"
+)
+ALDERSOPSPARING_FORHOEJET_AAR_FOER_FOLKEPENSION = 7   # indkomstår
+ALDERSOPSPARING_FORHOEJET_AAR_EFTER_UDBETALINGSALDER = 20
+# De to nedenstående er dokumenteret som verificerede fakta, men bruges IKKE
+# til beregning i denne omgang — PDF-parseren udtrækker i dag ikke hvornår en
+# udbetaling er påbegyndt, som er forudsætningen for at kunne afgøre om
+# diskvalifikations-/overførsels-strafafgiften rammer. Se README.md.
+ALDERSOPSPARING_DISKVALIFIKATION_AAR = 10   # udbetaling påbegyndt efter 01-04-2018
+ALDERSOPSPARING_STRAFAFGIFT = 0.20
+ALDERSOPSPARING_STRAFAFGIFT_DISKVALIFICERET = 0.40
+ALDERSOPSPARING_STRAFAFGIFT_VED_OVERFOERSEL = 0.04

@@ -22,135 +22,7 @@ warnings.filterwarnings("ignore")
 # harmløse "Could get FontBBox..."-linjer per upload.
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
-# ── Simpelt, fokuseret ekstrakt-prompt ───────────────────────────────────────
-
-EXTRACTION_PROMPT = """Extract data from this Danish PensionsInfo PDF report. Return ONLY valid JSON, no prose.
-
-RULES:
-- Amounts: integers in DKK, no separators (e.g. 771000 not "771.000 kr.")
-- Missing value: null (never 0 unless explicitly stated as 0)
-- Do not invent numbers
-- ONE agreement = ONE entry in agreements[] and ONE entry in payout_products[].
-  Do NOT split a single agreement into multiple entries because it contains
-  investment pools, sub-funds, risk profiles, or asset allocations (aktier/obligationer/etc.).
-  A "puljeinvestering", "markedsrente" or similar is still just ONE product.
-
-Return exactly this structure:
-
-{
-  "name": "full name of the insured person",
-  "cpr": "CPR-number as shown on the front page, e.g. '010165-1234' or '0101651234' — digits 5+6 are birth year",
-  "agreements": [
-    {
-      "provider": "company name",
-      "number": "agreement number",
-      "type": "product type in Danish (e.g. Ratepension, Kapitalpension, Livsvarig pension, Markedsrente)",
-      "balance": null,
-      "annual_contribution": null,
-      "insurance_only": false,
-      "earliest_payout_age": null,
-      "agreed_payout_age": null
-    }
-  ],
-  "death_cover": null,
-  "disability_annual": null,
-  "critical_illness": null,
-  "has_health_insurance": false,
-  "earliest_retirement_age": null,
-  "payout_products": [
-    {
-      "provider": "company name",
-      "number": "agreement number",
-      "type": "product label",
-      "tax": "A or S or F",
-      "amounts": {"period label": integer_annual_amount}
-    }
-  ]
-}
-
-FIELD GUIDANCE:
-
-agreements[].balance
-  Look in "Nuværende pensionsopsparinger" section — this lists each agreement with its INDIVIDUAL balance.
-  Also check under each agreement block in "Dine aftaler" for "Saldo" or "Opsparing pr.".
-  If the report shows "Del af X kr" (part of total) under "Dine aftaler", that is the TOTAL, not the individual balance —
-  instead use the value from "Nuværende pensionsopsparinger" for that specific agreement/provider.
-  Set null if no individual balance found.
-
-agreements[].annual_contribution
-  Look under each agreement block in "Dine aftaler" for "Indbetaling i alt", "Bidrag i alt", or "Præmie i alt".
-  This is the TOTAL annual amount paid to this specific agreement.
-  If shown monthly, multiply by 12. Set null if not stated for this agreement.
-
-agreements[].insurance_only
-  Set true if the agreement says "Kun forsikring" or has no savings.
-
-death_cover
-  Total death/life cover lump sum from "Liv og erstatning" or front page summary.
-
-disability_annual
-  Total annual disability/loss-of-earning-capacity from "Tab af erhvervsevne" section.
-
-critical_illness
-  Critical illness lump sum — take the SINGLE total from the "Kritisk sygdom" header in the
-  "Liv og erstatning" summary section only. This is one number (e.g. 260000).
-  Do NOT sum across multiple agreements, scenarios or retirement-age blocks.
-  Do NOT pick up amounts from individual agreement blocks — only the top-level summary.
-  If the same amount appears multiple times (in different scenarios), use it ONCE.
-  If no "Kritisk sygdom" section exists, set null.
-
-has_health_insurance
-  true if any health insurance policy is mentioned.
-
-agreements[].earliest_payout_age
-  The earliest age at which THIS specific agreement can be paid out.
-  Find it on the "Pension - flere oplysninger" page for that agreement.
-  Look for phrases like:
-    "Tidligst mulig pensionsalder: X år"
-    "Tidligst udbetaling: X år"
-    "Du kan tidligst hæve fra X-årig"
-    "Tidligste pensionsalder: X"
-    "Opsparingsalder: X år"
-  Each agreement can have a DIFFERENT age (e.g. old contracts from before 2007
-  may allow payout from age 60, newer ones from 62 or 63).
-  Set null if not stated for this agreement.
-
-agreements[].agreed_payout_age
-  The age this SPECIFIC agreement is actually SCHEDULED/AGREED to start paying
-  out — this is a real commitment, distinct from earliest_payout_age (the
-  regulatory floor). Find it on the "Pension - flere oplysninger" page, under
-  "Udbetaling" for that agreement. Look for phrases like:
-    "Det er aftalt, at pensionen kommer til udbetaling [ved/fra] X år"
-    "Udbetales fra X år"
-  Each agreement can have a DIFFERENT agreed age (e.g. one may start at 65,
-  another at 70). Set null if the report does not state an agreed age for
-  this agreement (do NOT fall back to earliest_payout_age).
-
-earliest_retirement_age
-  The LOWEST earliest_payout_age across all agreements.
-  Also check "Hvis du går på pension som X-årig" section headers — the lowest
-  X shown there is a lower bound.
-  Return the overall minimum (e.g. if one policy says 60 and another 63, return 60).
-
-payout_products
-  From the EARLIEST retirement age scenario ONLY.
-  Each product line with amounts per time period (e.g. "60-67 år", "Fra 67 år", "Fra 68 år", etc.).
-  amounts keys = the time band labels exactly as shown.
-  amounts values = ANNUAL amounts (not monthly).
-  Include ATP and Folkepension if shown.
-
-  current_balance: the current savings balance for THIS specific product line, if shown separately
-  in "Nuværende pensionsopsparinger" or "Dine aftaler". Set null if not individually stated.
-  When a provider has multiple products (e.g. Aldersopsparing + Ratepension + Livsvarig pension),
-  each may have its own balance listed — extract each separately.
-
-  tax field rules:
-  - "S" = beskattes som indkomst (ratepension, livsvarig pension, ATP, folkepension)
-  - "F" = skattefri/afgiftsfri udbetaling (aldersopsparing; kapitalpension ONLY if the report
-    says "forudbetalt", "afgiftsfri", "afgift betalt", "konverteret" or "40% afgift er betalt")
-  - "A" = kapitalpension where 40% afgift has NOT been pre-paid (still owed at payout)
-  Default for kapitalpension: use "F" if any indication of pre-payment exists, otherwise "A".
-"""
+from prompts import EXTRACTION_PROMPT
 
 
 def _extract_pages(pdf_path: str) -> list[str]:
@@ -301,6 +173,14 @@ async def parse_pensionsinfo_pdf(pdf_path: str) -> dict:
     return profil
 
 
+# r=0.04 herunder er IKKE brugerens afkastantagelse (den bruges kun i selve
+# engine.py-fremskrivningen, jf. engine.satser_2026) — det er en uafhængig,
+# konservativ diskonteringssats brugt til at "fortryde" en annuitet og gætte
+# en manglende FV ud fra det payout-beløb rapporten selv viser, når PDF'en
+# ikke oplyser saldoen direkte. Samme grund til at m=25 (nedenfor) for
+# livsvarig/livrente er sit eget skøn, uafhængigt af engine.py's
+# LIVSVARIG_ESTIMAT_AAR (18) — de løser to forskellige opgaver: dette er et
+# forsigtigt gæt på en ukendt FV, ikke en fremadrettet udbetalingsperiode.
 def _fv_fra_payout(ptype: str, aldersperioder: dict, r: float = 0.04) -> float | None:
     """Estimér FV ved at 'fortryde' annuiteten fra payout-beløbet (første periode)."""
     if not aldersperioder:
@@ -312,7 +192,7 @@ def _fv_fra_payout(ptype: str, aldersperioder: dict, r: float = 0.04) -> float |
     if "kapitalpension" in pt or "aldersopsparing" in pt:
         return float(first)
     elif "livsvarig" in pt or "livrente" in pt:
-        m = 25
+        m = 25  # forsigtigt skøn for restlevetid — se modulets kommentar ovenfor
     else:
         m = 0
         for k in aldersperioder:
@@ -332,7 +212,7 @@ def _estimer_pmt_fordeling(
     ordninger: list,
     alder: int | None,
     tidligste: int | None,
-    r: float = 0.04,
+    r: float = 0.04,  # se _fv_fra_payout's kommentar — uafhængig af brugerens egen afkastantagelse
 ) -> None:
     """
     For providers med flere produkter under samme aftalenr:
@@ -440,6 +320,11 @@ def _to_legacy_format(raw: dict, full_text: str) -> dict:
         dd  = int(cpr_digits[0:2])
         mm  = int(cpr_digits[2:4])
         yy  = int(cpr_digits[4:6])
+        # Bevidst forenkling: et CPR-nummers 7. ciffer afgør reelt century
+        # (1900- vs. 2000-tal), som denne parsing ikke tjekker. Forsvarligt
+        # her, fordi værktøjets egne aldersgrænser (typisk 55-85 år) betyder
+        # at enhver reel bruger er født i 1900-tallet — en fejlfortolket
+        # 2000-talsfødsel ville aldrig bestå den efterfølgende alder-sanitet.
         yyyy = 1900 + yy
         try:
             foedselsdato = f"{dd:02d}.{mm:02d}.{yyyy}"

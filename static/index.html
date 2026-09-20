@@ -2047,7 +2047,11 @@ Upload derefter PDF'en her øverst til højre.`,
     const aarligVal = iq1Val * 12;  // konverter månedlig → årlig til fordeling
     const inputs = document.querySelectorAll('[id^="iq6pmt_"]');
     if (!inputs.length) return;
-    const RATE_LOFT = 68700; // 2026-loft for fradragsberettiget ratepension
+    // Skal MATCHE satser_2026.RATEPENSION_LOFT (engine.py's egen kildesandhed
+    // for det tal motoren rent faktisk regner med) — denne konstant driftede
+    // tidligere til 68700, mens engine.py hele tiden brugte 63100. Se
+    // README.md's "Kendte forenklinger"-afsnit.
+    const RATE_LOFT = 63100;
     let resterende = aarligVal;
     inputs.forEach(input => {
       const pt = (input.dataset.ptype || '');
@@ -2740,43 +2744,25 @@ const MIN_RATEPENSION_AAR = 10;  // lovkrav: ratepension skal mindst udbetales o
 // "kapital_rate"). Samme 10-års-gulv genbruges for begge, se MIN_RATEPENSION_AAR.
 const HAR_JUSTERBAR_PERIODE = new Set(['rate', 'kapital_rate']);
 
-// Kommuneskat-lookup (2025-satser, ca.-værdier) — delt mellem submitInterviewForm
-// og _collectPayload, så "Opdater analyse" ikke skal gætte separat.
-const KOMMUNESKAT = {
-  'københavn': 23.7, 'kobenhavn': 23.7,
-  'frederiksberg': 22.9,
-  'gentofte': 22.0,
-  'lyngby': 22.9, 'lyngbytaarbæk': 22.9, 'lyngbytaarbaek': 22.9,
-  'gladsaxe': 23.8, 'gladsakse': 23.8,
-  'rudersdal': 21.9,
-  'hørsholm': 22.5, 'horsholm': 22.5,
-  'aarhus': 24.5, 'århus': 24.5,
-  'odense': 25.3,
-  'aalborg': 25.4,
-  'esbjerg': 25.6,
-  'randers': 26.0,
-  'kolding': 25.3,
-  'horsens': 25.5,
-  'vejle': 25.5,
-  'roskilde': 26.3,
-  'helsingør': 25.7, 'helsingor': 25.7,
-  'næstved': 26.4, 'naestved': 26.4,
-  'silkeborg': 24.7,
-  'viborg': 24.9,
-  'herning': 25.3,
-  'svendborg': 26.0,
-  'hillerød': 25.8, 'hillerod': 25.8,
-  'holbæk': 26.2, 'holbaek': 26.2,
-  'slagelse': 26.5,
-  'køge': 25.7, 'koge': 25.7,
-  'ringsted': 26.4,
-  'ikast': 25.5,
-  'skanderborg': 24.7,
-  'hedensted': 25.3,
-};
+// Kommuneskat-lookup — hentet fra /api/kommuneskat (app.py's KOMMUNESKAT-dict,
+// alle 98 kommuner) i stedet for at holde sin egen, uafhængigt vedligeholdte
+// delmængde her. Populeres asynkront ved sideindlæsning (se fetch nedenfor);
+// kommuneskatPctFor falder tilbage til landsgennemsnittet (25.0) indtil den
+// er hentet, eller for en kommune der ikke findes i dictet — samme fallback
+// som app.py's egen _normalize_kommune-opslag bruger.
+let KOMMUNESKAT = {};
+fetch('/api/kommuneskat').then(r => r.json()).then(d => { KOMMUNESKAT = d; }).catch(() => {});
+
 function kommuneskatPctFor(kommune) {
+  // NFD-dekomponering fanger IKKE æ/ø (kun bogstaver der reelt er en
+  // bogstav+accent-kombination, fx å/é) — de er selvstændige Unicode-tegn
+  // uden dekomponering, så det tidligere \p{Diacritic}-forsøg lod dem stå
+  // urørt og derefter SLETTE dem via [^a-z] (fx "københavn" -> "kbenhavn",
+  // der ikke matcher noget). Reel bug fundet ved verifikation — erstattet
+  // med samme eksplicitte bogstav-for-bogstav-erstatning som app.py's egen
+  // _normalize_kommune bruger, så de to ALTID stemmer overens.
   const kommuneKey = (kommune || '').toLowerCase()
-    .normalize('NFD').replace(/\p{Diacritic}/gu, '')  // fjern accenter
+    .replace(/æ/g, 'ae').replace(/ø/g, 'o').replace(/å/g, 'a')
     .replace(/[^a-z]/g, '');
   return KOMMUNESKAT[kommuneKey] ?? 25.0;
 }

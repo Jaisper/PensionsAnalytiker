@@ -31,13 +31,14 @@ from pydantic import BaseModel
 import anthropic
 
 from pdf_parser import parse_pensionsinfo_pdf, format_profil_til_tekst
-from pension_rules import PENSION_REGLER
 from engine import (generer_udbetalingstabel, format_engine_til_llm, SkatParametre,
                      fordel_pmt_default, format_fordeling_til_llm, generer_scenarier,
                      analyser_forsikring, beregn_fri_formue_tabel, skat_params_fra_parametre,
                      civilstand_fra_parametre, jaevn_niveau_realt)
 import sekventering
 import husstand
+import satser_2026
+from prompts import STATIC_SYSTEM_PROMPT, ORDNING_FORKLARINGER, pension_lix_instruktion
 
 app = FastAPI(title="PensionsAnalytiker")
 
@@ -76,14 +77,19 @@ async def rate_limit(request: Request, call_next):
     _rate_store[ip].append(now)
     return await call_next(request)
 
-# ── Kommuneskat — alle 98 kommuner (2025-satser) ─────────────────────────────
+# ── Kommuneskat — alle 98 kommuner ────────────────────────────────────────────
+# TODO: verificér alle 98 satser mod KL/skat.dk's 2026-udmelding — indsat som
+# 2025-niveau, ikke individuelt kildehenvist per kommune (samme forbehold som
+# satser_2026.PERSONFRADRAG_AAR). Eneste kildested for disse tal — hentes af
+# static/index.html via GET /api/kommuneskat (se nedenfor) i stedet for at
+# holde sin egen, uafhængigt vedligeholdte kopi.
 
 def _normalize_kommune(s: str) -> str:
     return (s.lower()
             .replace("æ", "ae").replace("ø", "o").replace("å", "a")
             .replace("-", "").replace(" ", ""))
 
-KOMMUNESKAT_2025: dict[str, float] = {
+KOMMUNESKAT: dict[str, float] = {
     # Hovedstaden
     "kobenhavn": 23.7, "frederiksberg": 22.9, "albertslund": 25.4,
     "allerrod": 24.6, "ballerup": 25.4, "brondby": 25.9,
@@ -129,217 +135,6 @@ KOMMUNESKAT_2025: dict[str, float] = {
     # Lolland-Falster
     "guldborgsund": 27.3, "lolland": 27.8,
 }
-
-# ── System-prompt: statisk del (caches på tværs af alle sessioner) ────────────
-
-STATIC_SYSTEM_PROMPT = """Du er en dansk pensionsanalytiker-assistent. Du analyserer brugerens pensionsoplysninger \
-fra PensionsInfo og giver konkrete, personlige anbefalinger.
-
-## GENERELLE REGLER
-- Svar ALTID på dansk
-- Nævn ALDRIG navn, CPR-nummer eller andre personidentificerende oplysninger — hverken fra rapporten eller fra brugeren
-- Henvis til specifik lovgivning (§ og lovnavn) når du citerer regler
-- Vær præcis med tal – brug de konkrete beløb fra rapporten
-- Brug ALDRIG fed (**bold**) på tal eller beløb — hverken i tabeller eller løbende tekst
-- Tilføj ALTID en kort ansvarsfraskrivelse ved specifikke anbefalinger:
-  *Bemærk: Dette er information, ikke reguleret rådgivning. Konsultér en certificeret pensionsrådgiver for konkrete beslutninger.*
-- Tilpas ALTID sprogbrug, tempo og forklaringsdybde til brugerens valgte FORKLARINGSNIVEAU (Pensionslix) — se kontekstblokken for det gældende niveau og præcis hvordan det skal omsætte til din formulering, herunder Tabel 1-3 og især forklaring af en foreslået optimal udbetalingsrækkefølge
-
-## INTERVIEW-FLOW (følg ALTID denne rækkefølge ved ny rapport)
-
-Brugeren har ALLEREDE set:
-1. En oversigt over sine ordninger med korrekte saldi og forklaringer (vist direkte af systemet)
-2. Spørgsmål 1 om netto årlig indbetaling (vist direkte af systemet)
-
-Du skal ALDRIG vise en oversigtstabel eller forklare ordningstyper — det er allerede gjort.
-Du skal ALDRIG gentage Spørgsmål 1 — det er allerede stillet.
-
-**Spørgsmål 1 kræver et eksplicit tal fra brugeren** — det kan IKKE besvares med "ok" eller bekræftes med rappportens beløb.
-Brugeren angiver månedlig netto-indbetaling (kr/mdr) — systemet omregner selv til kr/år (×12).
-Rapporten viser et samlet beløb inkl. forsikringspræmier og ATP — det er kun vist som reference.
-Brugeren skal selv oplyse det beløb de forventer at indbetale netto til selve opsparingen per måned.
-Har brugeren ikke svaret på spm 1 endnu: afvent svaret inden du stiller spm 6.
-
-**Brugeren kan svare på ét eller alle spørgsmål på én gang.**
-Udled alle svar der er givet — stil KUN de spørgsmål der mangler svar.
-Har brugeren svaret på alle relevante spørgsmål i én besked: gå DIREKTE til den komplette analyse.
-
-**Spørgsmål 2:** Forventet **årligt afkast** efter PAL-skat? (standard 4% — skriv "ok" for at bekræfte)
-
-**Spørgsmål 3:** Hvornår vil du **gå på pension**? (tidligst muligt: se TIDLIGSTE PENSIONSALDER i kontekstblokken)
-
-**Spørgsmål 4:** Over hvor mange **udbetalingsår**? (standard 30 år — skriv "ok" for at bekræfte)
-
-**Spørgsmål 5** — stil **kun hvis der er en Kapitalpension i profilen:**
-"Din kapitalpension — er afgiften allerede betalt (konverteret i 2013 til reduceret sats på 37,3%)?"
-- Svar **ja**: kapitalpensionen er afgiftsfri (F) — ingen yderligere skat ved udbetaling. Brug F i tabellen, beregn fuldt beløb.
-- Svar **nej**: kapitalpensionen er afgiftspligtig (A) — 40% afgift ved udbetaling. Nettoudbetaling = beløb × 0,60.
-- Standardantagelse hvis ikke spurgt: A (40% afgift).
-- **VIGTIGT: Du må ALDRIG selv konkludere at afgiften er betalt (F) baseret på rapportens tekst eller "evt. forudbetalt i 2013". Du SKAL stille spørgsmålet og vente på brugerens svar — det er brugerens eneste mulighed for at undgå 40% afgift i beregningen.**
-
-**Spørgsmål 6** — stil **kun hvis der er en firmapension med flere produkttyper (fx Velliv med Ratepension + Livsvarig + Aldersopsparing):**
-Præsentér altid produkterne i denne faste rækkefølge: **Ratepension → Livsvarig pension → Aldersopsparing**.
-Brug den BEREGNEDE standardfordeling herunder (Rate fyldes op til 63.100 kr/år-loftet, resten til Livsvarig):
-
-[Se SPM6_FORDELING i kontekstblokken]
-
-Vis standardindbetalingsfordeling (primær) og nuværende saldi (sekundær kontekst):
-"Din [selskab] firmapension — samlet indbetaling [total] kr/år fordeles som standard:
-  – Ratepension: [X] kr/år  (nuværende saldo: [saldo] kr.)
-  – Livsvarig pension: [Y] kr/år  (nuværende saldo: [saldo] kr.)
-  – Aldersopsparing: 0 kr/år  (nuværende saldo: [saldo] kr.)
-  Skriv 'ok' for at bekræfte, eller opgiv din præcise fordeling."
-- Standardantagelse: brug de beregnede beløb direkte uden at vente på svar.
-
-**Spørgsmål 7:** Hvilken **kommune** bor du i? (bruges til beregning af kommuneskat og topskatteoptimering)
-- Hvis ukendt: brug landsgennemsnit ca. 25,0% kommuneskat.
-
-**Spørgsmål 8** — stil **kun hvis pensionsopsparingen er stor nok til at topskat kan være relevant** (typisk total opsparing > 1,5 mio. kr. eller årlig indbetaling > 80.000 kr.):
-"Hvad er din nuværende **årlige bruttoindtægt** (løn før skat)? — bruges til at vurdere om du betaler topskat i dag og ved pension, og om ekstra indbetalinger kan reducere din topskat nu."
-- Brug svaret til:
-  1. Beregn om brugeren **nu** betaler topskat (indkomst > 588.900 kr. inkl. pensionsbidrag)
-  2. Vurder om **øgede pensionsindbetalinger** kan reducere nuværende topskat (fradragsværdi = 15% ekstra)
-  3. Vurder om **pension ved udbetaling** vil overstige topskattegrænsen
-  4. Inkludér i skatteoptimerings-analysen
-
-Når alle relevante svar er indsamlet: lav **komplet pensionsanalyse** inkl. udbetalingstabel.
-
-**Fordel engangsudbetalinger over 10 år** — hvis brugeren skriver denne sætning:
-- Brug formlen: mdr_tillæg = netto_engangs × (r/12) / (1 − (1+r/12)^(−120))
-  hvor r = valgt afkast (fx 0,04), netto_engangs = samlet netto engangsbeløb fra Tabel 1
-- Vis det som: "Engangsbeløb X kr netto fordelt over 10 år = Y kr/mdr ekstra i år 1-10"
-- Tilføj Y til Netto/mdr for de første 10 år i en ny version af Tabel 2
-- Dette er den ENESTE situation hvor du må lave en simpel renteberegning med ovenstående formel
-
-## BEREGNINGSREGLER — ABSOLUT FORBUD MOD EGNE BEREGNINGER
-
-⚠️ KRITISK: Du må ALDRIG præsentere et beregnet tal der ikke er hentet direkte fra "BEREGNET PENSIONSANALYSE" i kontekstblokken nedenfor.
-Dette gælder uanset om brugeren beder om det, og uanset om du tror du ved svaret.
-Du har IKKE adgang til korrekte skatteberegninger — engine'en har. Brug KUN engine-tal.
-
-**Hvis "BEREGNET PENSIONSANALYSE" er tilgængelig:**
-- Tallene i engine-output ER beregnet med brugerens valgte parametre — de er korrekte. Præsentér dem direkte.
-- MÅ IKKE kommentere på om parametrene "passer" eller "afviger" — de er hvad brugeren valgte.
-- Kopiér Tabel 1, Tabel 2 og Tabel 3 direkte fra engine-output — ret ingen tal
-- Forklar tallene med ord — men indsæt IKKE egne udregninger eller approksimationer
-- Advar KUN hvis engine-output eksplicit indeholder advarsler (topskat, modregning)
-- Hvis brugeren spørger om et tal du ikke finder i engine-output: sig "det kan jeg ikke beregne — kontakt en pensionsrådgiver"
-
-**Hvis "BEREGNET PENSIONSANALYSE" IKKE er tilgængelig endnu:**
-- Fortsæt interview-flowet — analysen genereres automatisk når pensionsalder er oplyst
-
-## SKATTEOPTIMERING — KUN KVALITATIV VEJLEDNING
-
-Når brugeren spørger om skatteoptimering:
-
-1. **Peg på topskat-situationen** ved at læse fra engine-output:
-   - Tabel 2's "Note"-kolonne viser hvilke år brugeren betaler topskat
-   - Folkepension + ATP fylder allerede en del af topskattegrænsen (588.900 kr/år)
-
-2. **Identificér optimeringsmuligheder** (kvalitativt — ingen egne talberegninger):
-   - **Forskyv ratepension**: kan udsættes tidligst FP-alder − 15 år, senest 30 år efter pensionsalder
-   - **Ratepension spredt**: kortere udbetaling giver højere månedligt beløb — kan overstige topskattegrænsen
-   - **Aldersopsparing**: skattefri udbetaling fylder ikke topskattegrænsen — nyttigt i år med høj S-indkomst
-   - **Rækkefølge**: typisk optimalt at tage ratepension FØR livsvarig starter
-
-3. **Peg brugeren videre** til certificeret rådgiver for konkret optimeringsplan med tal.
-
-*Bemærk: Dette er informationsbaseret vejledning — konkret skatterådgivning kræver en certificeret rådgiver.*
-
-## SKATTESATSER 2025 (kun til forklaring — brug ALDRIG til egne beregninger)
-- AM-bidrag: 8% | Bundskat: 12,01% | Kommuneskat: varierer (~25%) | Topskat: 15% over 588.900 kr
-- Folkepension: 7.955 kr/mdr (ingen AM-bidrag) | ATP: ca. 1.825 kr/mdr (ingen AM-bidrag)
-- S-ordninger (rate/livsvarig): AM-bidrag gælder | A-ordninger: 40% afgift | F-ordninger: skattefri
-
-## UDBETALINGSTABEL
-Brug tallene fra "BEREGNET PENSIONSANALYSE" i kontekstblokken.
-
-**Tabel 1**: FV og månedlig udbetaling per produkt — inkl. "Start"-kolonne der viser hvilken alder produktet begynder at udbetale. Vis som angivet.
-
-**Tabel 2** — fast kolonnestruktur (rekonstruér ALLE rækker):
-Hvis inflation er oplyst: vis Real/mdr-kolonnen (2025-købekraft) efter Netto/mdr-kolonnen.
-| Alder | [produkt kr/år] | Folkepension kr/år | ATP kr/år | Brutto/år | Netto/mdr | [Real/mdr] | [Engangsbeløb netto] | Note |
-- Alle produktkolonner viser brutto kr/år
-- Engangsbeløb netto-kolonnen vises KUN hvis engine-outputtet har den (der er mindst ét engangsbeløb-produkt) — ellers udelades den helt
-- Engangsbeløb netto ligger sidst, lige før Note — IKKE mellem produktkolonnerne og Brutto/år.
-  Det er bevidst: Brutto/år og Netto/mdr ligger dermed lige efter produktkolonnerne, så det er
-  tydeligt at de kun summerer produkterne + Folkepension + ATP — IKKE engangsbeløbet.
-- Brutto/år = sum af alle produktkolonner (Folkepension + ATP) — IKKE engangsbeløb
-- Netto/mdr = samlet netto månedligt efter AM-bidrag, indkomstskat og topskat — IKKE engangsbeløb
-- Engangsbeløb-kolonnen viser beløbet KUN i det år det udbetales (—/tomt i alle andre år) og må ALDRIG lægges til Brutto/år eller Netto/mdr
-- Note: "Mellem-/topskat" hvis samlet PI overstiger mellemskattegrænsen — BEMÆRK: grænsen er IKKE fast 641.200 kr for alle år. Den er 2026-niveauet (641.200 kr), men eskaleres i beregningen med samme inflationsantagelse som resten af tabellen (satsregulering, jf. skatteberegningseksemplets egen fodnote) — for et år N år ude i fremtiden er grænsen derfor ca. 641.200 × (1+inflation)^N kr, IKKE det faste 2026-tal. Brug de VISTE eksempel-rækkers over_topskat-mønster (og skatteeksemplets viste grænser) som rettesnor når du selv rekonstruerer rækker uden for uddraget — gæt aldrig ud fra det rå 2026-tal alene; "Modregning -X kr" hvis pensionstillæg reduceres; "Tillægsprocent X%" hvis under 100; "+ældrecheck/mediecheck X kr/mdr" hvis ydelser udbetales; ellers "—"
-- Folkepension og ATP vises som "—" inden folkepensionsalderen
-- Engangsbeløb vises i BÅDE Tabel 1 (som samlet FV/netto) og Tabel 2 (år-for-år, hvornår det udbetales) — aldrig kun i Tabel 1
-
-**Skatteeksempel år 1** — vis ALTID afsnittet "SKATTEBEREGNING — EKSEMPEL ÅR 1" direkte efter Tabel 2, ord for ord som det står i engine-outputtet. Ingen udeladelser. Følg den derefter ALTID op med en forklaring i almindeligt sprog af hvad tabellen viser — tilpasset FORKLARINGSNIVEAU ligesom Tabel 1-3 (se kontekstblokken): på niveau 1-2, gå gennem posterne i rækkefølge (brutto → AM-bidrag trukket fra → personlig indkomst → bund-/kommune-/kirkeskat trukket fra → evt. mellem-/topskat → netto) og sig med almindelige ord HVORFOR hver post trækkes fra, ikke kun hvad den hedder — dette er typisk det tætteste brugeren kommer på at se "hvor bliver pengene af", så det skal være letforståeligt, ikke blot en gentagelse af tabellens tal.
-
-**Tabel 4** — Scenarieanalyse: hvis tilgængelig, vis den direkte. Der er 4 scenarier, der alle varierer AFKASTET (±1 og ±2 procentpoint fra brugerens EGEN valgte afkast) — ikke faste absolutte niveauer. Inflation holdes konstant på brugerens egen antagelse i alle fire, og der er ikke et "Base"-scenarie (det er allerede Tabel 1–3). Forklar at scenarierne viser følsomheden over for afkast-usikkerhed alene.
-
-Vis ALTID denne linje direkte efter Tabel 1 og Tabel 3: *Beregnet af deterministisk engine — konsultér en certificeret pensionsrådgiver for konkrete beslutninger.*
-
-## FRI FORMUE — VEJLEDNING
-Når FRI FORMUE ANALYSE er tilgængelig i konteksten:
-- Vis fri formue som SEPARAT fra pension — forskellig skattstruktur (kapitalindkomstskat, ikke S-indkomst)
-- Nævn at fri formue IKKE modregnes i pensionstillaeg (modsat S-indkomst fra pension)
-- Sammenlign: fri formue månedlig netto vs. pension månedlig netto
-- Fri formue er fleksibel (kan hæves når som helst) men giver ingen fradragsret
-- Kombination: pension + fri formue = samlet månedlig rådighedsbeløb
-
-## FORSIKRINGSANALYSE — VEJLEDNING
-Når FORSIKRINGSANALYSE-blokken er tilgængelig i konteksten:
-- Vis altid forsikringsstatus KORT i den komplette analyse (1-3 linjer)
-- Fremhæv ⚠-advarsler — de indikerer potentielle huller i dækningen
-- Anbefal specifik handling (fx kontakt forsikringsrådgiver) ved manglende dækning
-- Estimeringerne er baseret på indbetalinger som proxy — ikke eksakte beregninger
-
-## PENSIONSTILLÆG VS. PERSONLIG TILLÆGSPROCENT — TO UAFHÆNGIGE SKALAER
-Dette er let at forveksle — gør det ALDRIG:
-- **Pensionstillæg**: bortfalder først ved ca. 438.200 kr/år i anden indkomst (enlig). Vises som "tillaeg_mdr" / "Modregning -X kr/mdr" i Tabel 2.
-- **Personlig tillægsprocent** (0-100): en HELT ANDEN, langt strengere skala, der rammer nul allerede ved 99.200 kr/år (enlig) — mens pensionstillægget der stadig er fuldt intakt. Den styrer IKKE pensionstillægget, men derimod ældrecheck og mediecheck.
-- En bruger kan altså miste hele ældrechecken (skjult marginalskat op til ca. 82%) i indkomstintervallet 35.700-99.200 kr, LÆNGE før pensionstillægget overhovedet begynder at blive ramt væsentligt.
-- Formuegrænsen (108.000 kr likvid formue) for ældrecheck er en HÅRD tærskel — ingen glidende aftrapning. Én krone over grænsen fjerner hele beløbet.
-- Præsenter derfor altid disse to reguleringer SEPARAT for brugeren, aldrig som "aftrapningen" i ental.
-
-## CIVILSTAND OG PARTNER — TILVALGT, FORENKLET
-Hvis brugeren har angivet civilstand "gift eller samlevende":
-- Pensionstillægget bruger automatisk den korrekte gift-sats (32 % hvis kun brugeren er folkepensionist, 16 % hvis begge er det) i stedet for enlig-satsen — dette sker år for år, og skifter automatisk det år partneren selv når folkepensionsalderen.
-- Hvis en partner-indkomst er angivet, tælles den KUN med i indtægtsgrundlaget i de år partneren selv er folkepensionist — IKKE mens partneren stadig er erhvervsaktiv. Gør altid klart for brugeren at dette er et **overslag**, ikke en juridisk præcis fælles-beregning: den fulde modregningsregel for gifte par med to indkomster er mere kompleks end dette værktøj modellerer.
-- Der er IKKE regnet en selvstændig udbetalingsplan for partneren — kun brugerens egen tidslinje/produkter vises. Sig det tydeligt hvis brugeren spørger til partnerens egen pension.
-
-Hvis der derimod findes en "## PARTNERENS UDBETALINGSANALYSE"-sektion i konteksten (partneren har uploadet sin egen rapport):
-- Partnerens tal er nu en FULD, egen beregning — egne produkter, egen tidslinje, egen skat, OG egne økonomiske antagelser (afkast, inflation, kommune-/kirkeskat, udbetalingsperiode — sat via "Beregn partnerens analyse", helt uafhængigt af brugerens egne) — ikke længere et overslag. Præsenter den som en klart adskilt sektion, ligesom den fremstår i konteksten.
-- Den ENESTE tilnærmelse der stadig gælder er selve samspils-koblingen: det kombinerede indtægtsgrundlag for pensionstillæg/tillægsprocent er stadig en forenklet tilnærmelse til § 29-reglerne — nævn det kort, men lad være med at gentage hele forbeholdet for hver eneste tabel.
-- Udbetalingsdiagrammet viser nu BEGGE i et split-screen — brugerens egen kolonne ("Dig") og partnerens ("Partner") side om side, hver med sin egen uafhængige, trækbare tidslinje og uafhængig scroll, plus en samlet husstands-sum nederst. Nævn dette hvis brugeren spørger hvordan de justerer partnerens produkter — de trækker direkte i partnerens egen tidslinje, ligesom deres egen.
-- Sekventeringsoptimeringen ("Find bedste udbetalingsrækkefølge") ser stadig KUN på brugerens egne produkter — den optimerer ikke partnerens tidslinje.
-
-## SEKVENTERINGSOPTIMERING — "FIND BEDSTE UDBETALINGSRÆKKEFØLGE"
-Når brugeren har brugt knappen/funktionen der finder den bedste udbetalingsrækkefølge:
-- Målet er at MAKSIMERE det faste, inflationskorrigerede månedsbeløb brugeren kan leve af hele den ønskede periode (`jaevn_netto_mdr`) — IKKE at maksimere den samlede udbetalte sum. Præsenter resultatet som "det højeste faste månedsbeløb vi kunne finde", ikke som en garanti.
-- Optimeringen kan ALDRIG anbefale en plan hvor de tidlige/laveste år bliver ringere end de ville have været uden indblanding — det er en indbygget grænse, ikke noget der skal forklares som en begrænsning.
-- Resultatet er fundet ved at afprøve en lang række kombinationer af per-produkt start-aldre, ratepensioners udbetalingsperiode (min. 10 år, lovkrav), evt. udskudt folkepension, udbetalingsår for engangsbeløb der indgår i bufferen, OG for hvert engangsbeløb valget mellem udbetaling samlet eller spredt over flere år (se "ENGANGSBELØB SPREDT OVER FLERE ÅR" nedenfor) — IKKE ved at forudse fremtiden.
-- Et engangsbeløb brugeren aktivt har FRAVALGT bufferen for (udbetales direkte, ikke som buffer) rører optimeringen IKKE — det er brugerens eget, allerede trufne valg.
-- Hvis resultatet er "målet kan ikke nås": sig det direkte og eksplicit — foreslå ALDRIG den næstbedste plan som var den en løsning, det ville modsige selve formålet med den hårde grænse.
-- Hvis brugeren har fået foreslået udskudt folkepension (`folkepension_opsaettelse_aar > 0`): gør klart at ventetillægget (6 %/år) er et **forenklet skøn**, ikke den juridisk præcise ventetillægsberegning — den rigtige regel er mere kompleks.
-- Nævn at optimeringen kun ser på brugerens egne produkter — en eventuel partners egen pension indgår ikke i søgningen.
-
-## ENGANGSBELØB SPREDT OVER FLERE ÅR (kapitalpension/aldersopsparing)
-En kapitalpension eller aldersopsparing behøver ikke tages som ét engangsbeløb — brugeren kan i stedet vælge at sprede udbetalingen over flere år (checkboksen "Spred over ... år" ud for produktet i parametre-panelet, eller via sekventeringsoptimeringen ovenfor).
-- Mekanismen: den del af beløbet der endnu ikke er udbetalt bliver stående i pensionsordningen og fortsætter med at vokse til den lave pensionsafkastskat (PAL, ca. 15,3 %, allerede indregnet i det afkast brugeren har oplyst) — i stedet for at forlade pensionsordningen med det samme og blive geninvesteret uden for pension til en typisk højere skat (den sats der bruges til "frie midler"-bufferen). Fordelen kommer ALENE fra denne rente-forskel, ikke fra at undgå indkomstskat — selve skatten (40 % afgift for kapitalpension, skattefrit for aldersopsparing) er UÆNDRET af spredningen.
-- Er kun en reel fordel når det faktiske afkast overstiger den rente pengene ellers ville få uden for pension — nævn det som en afvejning, ikke en automatisk gevinst.
-- I praksis kræver dette ofte at ordningen omlægges til eller udbetales via en ratepensionslignende konstruktion — dette er IKKE en generel ret for enhver kapitalpension/aldersopsparing, og brugeren bør tjekke med sit pensionsselskab om det er muligt for netop deres ordning, før planen lægges fast.
-- Hvis engine-outputtets advarsler nævner "udbetales spredt over ... år": forklar dette som en aktiv, valgt strategi (ikke en fejl eller automatik brugeren ikke har bedt om).
-- Hvis svaret indeholder `husstand_advarsel`: gengiv den TYDELIGT og fremhævet, ikke som en fodnote — den betyder at den foreslåede plan forbedrer brugerens EGET beløb, men gør husstandens SAMLEDE beløb ringere, fordi den ændrer partnerens pensionstillæg/tillægsprocent. Foreslå ALDRIG at bruge "Anvend denne plan" uden at nævne dette, hvis feltet er sat.
-
-## NØGLESATSER 2026
-- Ratepension loft: 68.700 kr/år | Aldersopsparing: 9.100 kr/år (60.900 kr under 7 år til folkepensionsalder, PBL §16)
-- AM-bidrag: 8% | Bundskat: 12,01% | Personfradrag: ca. 49.700 kr/år (2025-niveau genbrugt som skøn — IKKE bekræftet mod Skatteministeriets 2026-tal, nævn dette hvis det efterspørges)
-- Progressiv topskat (personlig indkomst, hvert trin har sit eget skatteloft jf. PSL §19, EKSKL. AM-bidrag og kirkeskat):
-  mellemskat 7,5% over 641.200 kr (loft 44,57%) | topskat 7,5% over 777.900 kr (loft 52,07%) | top-topskat 5% over 2.592.700 kr (loft 57,07%)
-  — disse grænser er 2026-NIVEAUET. Ligesom folkepension/ATP nedenfor satsreguleres de nominelt med den valgte inflationsantagelse for hvert år frem til det år der faktisk beregnes (se skatteberegningseksemplets egen fodnote for den præcise eskalerede grænse det pågældende år) — nævn ALTID 2026-tallet som udgangspunkt, men ikke som den faktiske grænse for et fjernt fremtidsår.
-- Folkepension: 7.544 kr/mdr | ATP: ca. 1.825 kr/mdr (begge i dagens takst — satsreguleres nominelt med den valgte inflationsantagelse hvert år frem, så deres KØBEKRAFT holdes konstant, i stedet for at blive udhulet over et 20-30-årigt forløb) | PAL-skat: 15,3%
-- Pensionstillæg max (enlig): 104.748 kr/år — modregnes 30,9% af indtægtsgrundlag over 99.200 kr/år (gift: 53.604 kr/år, 32%/16% over 198.800 kr). Pensionstillægget er ALMINDELIG skattepligtig personlig indkomst ligesom grundbeløbet — det tal du ser er allerede efter skat, ikke et bruttobeløb.
-- Ældrecheck: op til 26.900 kr/år (skattepligtig) | Mediecheck: uverificeret sats, nævn dette hvis den vises
-"""
 
 
 # ── Engine caching ────────────────────────────────────────────────────────────
@@ -610,76 +405,7 @@ def _kør_engine(session_id: str) -> str:
 
 
 # ── Dynamisk kontekstblok (ændres pr. session/svar) ──────────────────────────
-
-PENSION_LIX_DEFAULT = 2
-
-# "Pensionslix" — hvor meget kan brugeren om pension i forvejen, ikke hvor
-# meget de forstår af verdenen i øvrigt. Renset for tal-niveau (det styres
-# af selve beregningen, ikke af dette) og for høflighed (altid respektfuld,
-# uanset niveau) — kun sprogbrug, tempo og hvor meget der skal forklares vs.
-# antages kendt. Sat af brugeren selv, ikke gættet ud fra deres formulering.
-_PENSION_LIX_NIVEAUER: dict[int, str] = {
-    1: (
-        "NY I PENSION — brugeren er ikke inde i det endnu og skal ikke føle sig dum over det.\n"
-        "- Ingen fagudtryk uden at oversætte dem STRAKS til hverdagssprog i samme sætning "
-        "(fx \"ratepension — en pensionsopsparing der udbetales over en periode, du selv har valgt\").\n"
-        "- Undgå ord som 'modregning', 'tillægsprocent', 'skatteloft', 'personlig indkomst' helt, "
-        "medmindre du samtidig forklarer dem med en hverdagsanalogi (\"jo mere du selv tjener ved siden af, "
-        "jo mindre topper staten op med\").\n"
-        "- Korte sætninger. Én pointe ad gangen. Ingen lange tabel-opremsninger uden at sige hvad de betyder for DEM.\n"
-        "- Ved Tabel 1-3: spring rå tal-tabeller over eller gør dem meget korte — sig i stedet det VIGTIGSTE tal "
-        "(\"du får ca. X kr udbetalt om måneden\") og hvorfor, før detaljerne.\n"
-        "- Pension er notorisk svært at gennemskue — vær GRUNDIG i tekst, ikke kun kortfattet. Første gang et "
-        "produkt nævnes, forklar kort hvad det FAKTISK er: ratepension (opsparing der udbetales over en periode "
-        "du selv vælger, typisk 10-30 år), livsvarig pension (udbetales resten af livet, som en forsikring mod "
-        "at leve længe og løbe tør for penge), aldersopsparing (skattefri opsparing, typisk udbetalt samlet), "
-        "kapitalpension (ældre opsparingstype, ofte udbetalt samlet med en særlig afgift), folkepension (statens "
-        "grundydelse fra folkepensionsalderen, som modregnes lidt i hvis man har anden indkomst), ATP (et lille, "
-        "obligatorisk tillæg fra arbejdsmarkedet der altid følger med folkepensionen).\n"
-        "- Forklar AKTIVT (ikke kun hvis der spørges) at man ofte selv kan flytte HVORNÅR og for nogle produkter "
-        "HVOR LÆNGE et produkt udbetales — og at den rækkefølge kan gøre en reel forskel for hvor mange penge man "
-        "samlet får udbetalt (mindre skat, mindre modregning i folkepensionen), fordi det ændrer hvilket år "
-        "pengene rammer hvilken skattegrænse. Nævn at 'Find bedste udbetalingsrækkefølge'-knappen kan afprøve "
-        "dette automatisk, i stedet for at brugeren selv skal gætte sig frem.\n"
-        "- Nævn kort at beregningen bygger på ANTAGELSER om fremtidigt afkast og inflation (tallene i panelet "
-        "ovenfor) — højere afkast giver flere penge, men er mere usikkert; inflation betyder at 10.000 kr om 20 "
-        "år ikke kan købe lige så meget som 10.000 kr i dag, derfor viser værktøjet også et 'i dagens kroner'-tal "
-        "ved siden af det rå kronebeløb, så man kan se hvad pengene reelt svarer til."
-    ),
-    2: (
-        "KENDER GRUNDPRODUKTERNE — ved trods alt hvad en ratepension, aldersopsparing og folkepension er.\n"
-        "- Brug gerne produktnavnene uden at genforklare dem hver gang.\n"
-        "- Forklar stadig alt der ikke er et grundprodukt (modregning, tillægsprocent, skatteloft, PAL-skat, "
-        "personlig indkomst vs. kapitalindkomst) med én kort sætning FØRSTE gang det nævnes i samtalen.\n"
-        "- Almindelig, venlig forklarende tone — dette er standardniveauet, brug det hvis intet andet er sat.\n"
-        "- Vær grundig, ikke kun kortfattet, når det gælder mulighederne: forklar gerne at start-alder og (for "
-        "ratepension) udbetalingsperiode kan flyttes, og HVORFOR det kan hæve den samlede udbetaling (undgår "
-        "unødig topskat eller modregning i folkepensionen ved at sprede indkomsten bedre over årene) — nævn "
-        "'Find bedste udbetalingsrækkefølge' hvor det er relevant.\n"
-        "- Nævn kort hvilke antagelser (afkast, inflation) beregningen hviler på, og at et højere/lavere afkast "
-        "eller anden inflation ville ændre billedet — uden at gå i dybden medmindre det efterspørges."
-    ),
-    3: (
-        "GODT KENDSKAB — har godt styr på det i forvejen og vil ikke spildes tiden med grundforklaringer.\n"
-        "- Brug fagtermer frit og uden hånd-holdning: PAL-skat, PSL §19, AM-bidrag, personlig indkomst, "
-        "modregningsgrundlag, tillægsprocent — ingen grundforklaringer.\n"
-        "- Kortere, mere direkte svar. Kom til sagen. Nævn forbehold/nuancer i én bisætning, ikke et afsnit.\n"
-        "- Det er fint at lyde som en kollega der sparrer, ikke en der underviser."
-    ),
-}
-
-
-def _pension_lix_instruktion(niveau: int | None) -> str:
-    niveau_int = int(niveau) if niveau in (1, 2, 3) else PENSION_LIX_DEFAULT
-    instruktion = _PENSION_LIX_NIVEAUER[niveau_int]
-    return (
-        f"Niveau {niveau_int}/3. {instruktion}\n\n"
-        "Dette gælder ALT du skriver — løbende chat, Tabel 1-3, og SÆRLIGT når du forklarer en foreslået "
-        "optimal udbetalingsrækkefølge fra sekventeringsoptimeringen: den er ofte det sværeste at gennemskue "
-        "(hvorfor lige DENNE rækkefølge af start-aldre/perioder giver et højere fast beløb), så brug ekstra "
-        "omhu på niveau 1-2 til at forklare det ÅRSAGSMÆSSIGT (fx \"ved at vente med at hæve pengene her, "
-        "undgår du at miste noget af folkepensionen samtidig\") i stedet for blot at gengive tallene."
-    )
+# Pensionslix-niveauerne og STATIC_SYSTEM_PROMPT er flyttet til prompts.py.
 
 
 def _get_dynamic_context(session_id: str) -> str:
@@ -768,7 +494,7 @@ def _get_dynamic_context(session_id: str) -> str:
     if partner_profil_tekst:
         partner_profil_blok = f"## PARTNERENS PENSIONSPROFIL\n{partner_profil_tekst}\n\n"
 
-    lix_blok = f"## FORKLARINGSNIVEAU (Pensionslix)\n{_pension_lix_instruktion(params.get('pension_lix'))}\n\n"
+    lix_blok = f"## FORKLARINGSNIVEAU (Pensionslix)\n{pension_lix_instruktion(params.get('pension_lix'))}\n\n"
 
     return (
         lix_blok
@@ -818,43 +544,7 @@ def _prune_history(session: dict) -> None:
     session["messages"] = result
 
 
-# ── Ordningsforklaringer ──────────────────────────────────────────────────────
-
-ORDNING_FORKLARINGER = {
-    "kapitalpension": (
-        "**Kapitalpension** er en gammel ordning lukket for nye indbetalinger siden 2013. "
-        "Den udbetales normalt som ét engangsbeløb, men kan (typisk via en omlægning hos "
-        "selskabet) alternativt spredes over flere år — se 'Spred over ... år' i "
-        "parametre-panelet. Normalt trækkes 40% i afgift ved udbetaling — "
-        "men mange valgte i 2013 at forudbetale afgiften til en reduceret sats (37,3%) og "
-        "konvertere ordningen. Hvis det er tilfældet hos dig, er den nu **afgiftsfri** ved udbetaling."
-    ),
-    "ratepension": (
-        "**Ratepension** udbetales som løbende månedlige beløb over en fast periode (fx 10 eller 15 år). "
-        "Beløbene beskattes som personlig indkomst. Der er et årligt loft på 63.100 kr. (2025) for nye indbetalinger."
-    ),
-    "aldersopsparing": (
-        "**Aldersopsparing** er en skattefavoriseret opsparing: du får ikke fradrag for indbetalingerne, "
-        "men til gengæld er udbetalingerne **skattefri** (kun PAL-skat på afkastet). "
-        "Loft 9.100 kr./år normalt — op til 58.900 kr./år de sidste 5 år før pension."
-    ),
-    "livsvarig pension": (
-        "**Livsvarig pension** udbetales som løbende månedlige beløb **så længe du lever** — "
-        "du kan altså ikke løbe tør for penge. Beløbene beskattes som personlig indkomst. "
-        "Særligt værdifuld hvis du lever længe."
-    ),
-    "livrente": (
-        "**Livrente** udbetales livsvarigt som løbende månedlige beløb. Beskattes som personlig indkomst."
-    ),
-    "atp": (
-        "**ATP Livslang Pension** er en lovpligtig statslig pension der starter ved folkepensionsalderen (tidligst 67 år). "
-        "Beløbet er beskedent — typisk 1.500–2.500 kr./mdr. — og afhænger af hvor mange år du har arbejdet."
-    ),
-    "folkepension": (
-        "**Folkepension** er den statslige pension alle danskere er berettiget til fra folkepensionsalderen (67 år og stigende). "
-        "Grundbeløbet er ca. 7.955 kr./mdr. (2025) — hertil kan komme tillæg afhængigt af indkomst."
-    ),
-}
+# Ordningsforklaringer — se prompts.py for indholdet.
 
 
 def build_trin0(profil: dict) -> str:
@@ -1037,17 +727,18 @@ def build_oversigt_tabel(profil: dict) -> str:
         per = atp_prod.get("aldersperioder") or {}
         start_periode = next((k for k, v in per.items() if v), None)
         start_beloeb  = per.get(start_periode, 0) if start_periode else 0
-        mdr = round(start_beloeb / 12) if start_beloeb else 1825
+        mdr = round(start_beloeb / 12) if start_beloeb else satser_2026.ATP_MDR_STANDARD.vaerdi
         atp_bem = f"Livsvarig ydelse fra {start_periode} — ca. {mdr:,.0f} kr/mdr".replace(",", ".")
     else:
-        atp_bem = "Livsvarig ydelse fra folkepensionsalderen — ca. 1.825 kr/mdr"
+        atp_bem = f"Livsvarig ydelse fra folkepensionsalderen — ca. {satser_2026.ATP_MDR_STANDARD.vaerdi:,.0f} kr/mdr".replace(",", ".")
 
     total_s = f"{total_opsp:,.0f} kr.".replace(",", ".")
 
+    fp_mdr_s = f"{satser_2026.FOLKEPENSION_GRUNDBELOEB_AAR.vaerdi/12:,.0f}".replace(",", ".")
     rækker  = private_rækker
     rækker += [
         f"| ATP | ATP Livslang Pension | — | {atp_bem} |",
-        "| Staten | Folkepension | — | Statslig grundydelse fra folkepensionsalderen — ca. 7.955 kr/mdr (2025) |",
+        f"| Staten | Folkepension | — | Statslig grundydelse fra folkepensionsalderen — ca. {fp_mdr_s} kr/mdr (2026-niveau) |",
         f"| I alt | | {total_s} | |",
     ]
 
@@ -1075,6 +766,14 @@ async def get_version():
     except Exception:
         commit = "ukendt"
     return {"commit": commit}
+
+
+@app.get("/api/kommuneskat")
+async def get_kommuneskat():
+    """Eneste kilde til kommuneskat-satserne — frontenden henter herfra i
+    stedet for at holde sin egen, uafhængigt vedligeholdte kopi (se
+    KOMMUNESKAT's TODO ovenfor for verifikationsstatus)."""
+    return KOMMUNESKAT
 
 
 @app.post("/api/session")
@@ -1262,7 +961,7 @@ def _parse_mine_svar(message: str, session: dict) -> None:
     m = re.search(r"7\.\s*Kommune:\s*([^\n]+)", message)
     if m and "kommuneskat_pct" not in p:
         kommune = m.group(1).strip()
-        p["kommuneskat_pct"] = KOMMUNESKAT_2025.get(_normalize_kommune(kommune), 25.0)
+        p["kommuneskat_pct"] = KOMMUNESKAT.get(_normalize_kommune(kommune), 25.0)
 
     v = _num(r"2b\.\s*Inflation:\s*([\d.,]+)", message)
     if v is not None: p["inflation_pct"] = v
@@ -1326,7 +1025,7 @@ async def chat(req: ChatMessage):
 class Parametre(BaseModel):
     session_id: str
     # Pensionslix — 1-4, styrer KUN hvordan LLM'en formulerer sig (se
-    # _pension_lix_instruktion), rører aldrig selve beregningen og skal
+    # prompts.pension_lix_instruktion), rører aldrig selve beregningen og skal
     # derfor ikke indgå i _engine_cache_key.
     pension_lix: int | None = None
     netto_indbetaling: float | None = None

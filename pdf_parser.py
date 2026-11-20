@@ -33,6 +33,12 @@ def _extract_pages(pdf_path: str) -> list[str]:
     return pages
 
 
+# Hård øvre grænse for teksten der sendes til ekstraktions-modellen — en
+# usædvanligt lang rapport (mange aftaler/"flere oplysninger"-sider) må aldrig
+# give så stort et input at kaldet løber ind i timeout/output-loft.
+MAX_RELEVANT_TEKST_TEGN = 60_000
+
+
 def _filter_relevant_pages(pages: list[str]) -> str:
     """Beholder kun relevante sider — reducerer token-forbrug markant."""
     RELEVANT_KEYWORDS = [
@@ -54,30 +60,50 @@ def _filter_relevant_pages(pages: list[str]) -> str:
         "tidligst hæve",
         "Opsparingsalder",
     ]
-    earliest_age = None
-    AGE_PATTERNS = [
-        r"Hvis du går på pension som (\d+)-årig",
-        r"[Tt]idligst\s+mulig\s+pensionsalder[:\s]+(\d+)",
-        r"[Tt]idligst\s+udbetaling[:\s]+(\d+)",
-        r"[Tt]idligste\s+pensionsalder[:\s]+(\d+)",
-        r"[Dd]u kan tidligst hæve fra (\d+)-årig",
-        r"[Tt]idligst hæve.*?(\d+)\s*år",
-    ]
-    for page in pages:
-        for pat in AGE_PATTERNS:
-            for m in re.finditer(pat, page):
-                age = int(m.group(1))
-                if 55 <= age <= 75:
-                    if earliest_age is None or age < earliest_age:
+    # Prognose-sider ("Hvis du går på pension som 60-årig får du (1 | 2)")
+    # findes ét sæt pr. valgt pensionsalder — i en lang rapport 30+ sider, og
+    # kun ÉT sæt er nødvendigt for at kende saldi/udbetalinger. Det tidligste
+    # sæt udledes ALENE af overskrifterne selv: løs tekst andre steder
+    # ("tidligst hæve fra 60 år") kan stå uden at der findes en 60-års-
+    # prognose, og så ville ALLE prognose-sider ellers blive droppet.
+    scenario_heading = re.compile(r"Hvis du går på pension som (\d+)-årig")
+    scenario_ages = sorted({
+        int(m.group(1))
+        for page in pages
+        for m in scenario_heading.finditer(page)
+        if 40 <= int(m.group(1)) <= 100
+    })
+    earliest_age = scenario_ages[0] if scenario_ages else None
+
+    # Rapportlayouts uden de kendte overskrifter: tekstbaseret udledning.
+    if earliest_age is None:
+        age_patterns = [
+            r"[Tt]idligst\s+mulig\s+pensionsalder[:\s]+(\d+)",
+            r"[Tt]idligst\s+udbetaling[:\s]+(\d+)",
+            r"[Tt]idligste\s+pensionsalder[:\s]+(\d+)",
+            r"[Dd]u kan tidligst hæve fra (\d+)-årig",
+            r"[Tt]idligst hæve.*?(\d+)\s*år",
+        ]
+        for page in pages:
+            for pat in age_patterns:
+                for m in re.finditer(pat, page):
+                    age = int(m.group(1))
+                    if 55 <= age <= 75 and (earliest_age is None or age < earliest_age):
                         earliest_age = age
 
     kept = []
     for i, page in enumerate(pages):
-        if any(kw in page for kw in RELEVANT_KEYWORDS):
+        m = scenario_heading.search(page)
+        if m:
+            # Prognose-side: KUN det tidligste scenarie, uanset om siden
+            # tilfældigt også rammer et søgeord.
+            if int(m.group(1)) == earliest_age:
+                kept.append(f"=== SIDE {i+1} ===\n{page}")
+        elif any(kw in page for kw in RELEVANT_KEYWORDS):
             kept.append(f"=== SIDE {i+1} ===\n{page}")
         elif earliest_age and f"som {earliest_age}-årig" in page:
             kept.append(f"=== SIDE {i+1} ===\n{page}")
-    return "\n\n".join(kept)
+    return "\n\n".join(kept)[:MAX_RELEVANT_TEKST_TEGN]
 
 
 # Et enkelt ekstraktions-kald har i praksis taget alt fra ~10 til ~70+
@@ -104,13 +130,21 @@ async def _extract_with_llm(text: str) -> dict:
         try:
             msg = await client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=8000,
+                max_tokens=16000,
                 messages=[{
                     "role": "user",
                     "content": f"{EXTRACTION_PROMPT}\n\nREPORT TEXT:\n{text}",
                 }],
                 timeout=LLM_PER_FORSOEG_TIMEOUT_SEK,
             )
+            if msg.stop_reason == "max_tokens":
+                # Svaret blev afkortet midt i JSON'en (typisk en rapport med
+                # usædvanligt mange aftaler/produkter) — json.loads ville ellers
+                # fejle med en kryptisk "Unterminated string"-besked.
+                raise ValueError(
+                    "Rapporten indeholder så mange aftaler at udtrækket blev afkortet — "
+                    "prøv en rapport med færre aftaler, eller kontakt support."
+                )
             raw = msg.content[0].text.strip()
             raw = re.sub(r"^```(?:json)?\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
